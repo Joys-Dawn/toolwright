@@ -1,0 +1,12 @@
+{
+  "name": "wrightward",
+  "version": "1.0.0",
+  "description": "Multi-agent awareness — gives Claude Code agents context about what other agents are doing before they write",
+  "author": {
+    "name": "yiann"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["multi-agent", "collaboration", "awareness"],
+  "hooks": "./hooks/hooks.json",
+  "commands": "./commands/"
+}

@@ -1,0 +1,31 @@
+{
+  "name": "Joy's Dawn-plugins",
+  "owner": {
+    "name": "Joy's Dawn Solutions LLC"
+  },
+  "metadata": {
+    "description": "Local marketplace for Claude Code plugins"
+  },
+  "plugins": [
+    {
+      "name": "wrightward",
+      "source": "./wrightward",
+      "description": "Multi-agent awareness for Claude Code",
+      "author": {
+        "name": "Joy's Dawn Solutions LLC"
+      },
+      "category": "developer-tools",
+      "tags": ["multi-agent", "collaboration", "hooks"]
+    },
+    {
+      "name": "agentwright",
+      "source": "./agentwright",
+      "description": "Chained audit pipelines with a spawned auditor and in-session verification/fixes",
+      "author": {
+        "name": "Joy's Dawn Solutions LLC"
+      },
+      "category": "developer-tools",
+      "tags": ["audit", "automation", "pipeline", "code-review"]
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "pipelines": {
+    "default": ["correctness", "security", "best-practices"],
+    "full": [
+      "correctness",
+      "security",
+      "best-practices",
+      ["migration", "ui"],
+      "tests-migration",
+      "tests-edge",
+      "tests-frontend"
+    ]
+  },
+  "customStages": {
+    "perf": {
+      "type": "skill",
+      "skillId": "performance-investigation"
+    }
+  },
+  "retention": {
+    "keepCompletedRuns": 20,
+    "deleteCompletedLogs": true,
+    "deleteCompletedFindings": false,
+    "maxRunAgeDays": 14
+  }
+}

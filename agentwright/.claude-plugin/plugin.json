@@ -1,0 +1,11 @@
+{
+  "name": "agentwright",
+  "version": "0.1.0",
+  "description": "Runs chained audit pipelines with a spawned auditor and in-session verification/fixes.",
+  "author": {
+    "name": "yiann"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["audit", "claude-code", "mcp", "automation", "plugin"],
+  "commands": "./commands/"
+}

@@ -1,0 +1,6 @@
+AI Engineering Plugins
+Copyright 2026 Joy's Dawn Solutions LLC
+
+This product includes the following independently distributable components:
+  - agentwright: Automated code auditing plugin for Claude Code
+  - wrightward: Multi-agent coordination plugin for Claude Code
