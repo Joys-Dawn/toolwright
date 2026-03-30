@@ -9,6 +9,8 @@ const AGENTS_FILE = 'agents.json';
 const LOCK_STALE_MS = 5000;
 const LOCK_MAX_ATTEMPTS = 20;
 const LOCK_RETRY_MS = 50;
+const SLEEP_BUFFER = new SharedArrayBuffer(4);
+const SLEEP_VIEW = new Int32Array(SLEEP_BUFFER);
 
 function agentsPath(collabDir) {
   return path.join(collabDir, AGENTS_FILE);
@@ -31,6 +33,9 @@ function withAgentsLock(collabDir, fn) {
       fs.writeSync(fd, String(process.pid));
       fs.closeSync(fd);
     } catch (e) {
+      if (e.code !== 'EEXIST') {
+        throw e;
+      }
       // Lock exists — check if stale
       try {
         const stat = fs.statSync(lock);
@@ -43,8 +48,7 @@ function withAgentsLock(collabDir, fn) {
       } catch (_) {}
 
       if (attempt < LOCK_MAX_ATTEMPTS - 1) {
-        const waitUntil = Date.now() + LOCK_RETRY_MS + Math.random() * LOCK_RETRY_MS;
-        while (Date.now() < waitUntil) {} // spin-wait (hooks are short-lived)
+        Atomics.wait(SLEEP_VIEW, 0, 0, LOCK_RETRY_MS + Math.floor(Math.random() * LOCK_RETRY_MS));
         continue;
       }
       // Give up — fail loudly so the caller knows the lock was not acquired
@@ -59,9 +63,6 @@ function withAgentsLock(collabDir, fn) {
   }
 }
 
-/**
- * Reads agents.json. Returns {} if missing or corrupt.
- */
 function readAgents(collabDir) {
   try {
     return JSON.parse(fs.readFileSync(agentsPath(collabDir), 'utf8'));
@@ -70,16 +71,10 @@ function readAgents(collabDir) {
   }
 }
 
-/**
- * Atomic write: write to temp file then rename.
- */
 function writeAgents(collabDir, agents) {
   atomicWriteJson(agentsPath(collabDir), agents);
 }
 
-/**
- * Registers an agent with current timestamps.
- */
 function registerAgent(collabDir, sessionId) {
   withAgentsLock(collabDir, () => {
     const agents = readAgents(collabDir);
@@ -92,9 +87,6 @@ function registerAgent(collabDir, sessionId) {
   });
 }
 
-/**
- * Updates last_active timestamp for an agent.
- */
 function updateHeartbeat(collabDir, sessionId) {
   withAgentsLock(collabDir, () => {
     const agents = readAgents(collabDir);
@@ -110,9 +102,6 @@ function updateHeartbeat(collabDir, sessionId) {
   });
 }
 
-/**
- * Removes an agent from agents.json.
- */
 function removeAgent(collabDir, sessionId) {
   withAgentsLock(collabDir, () => {
     const agents = readAgents(collabDir);
@@ -121,10 +110,6 @@ function removeAgent(collabDir, sessionId) {
   });
 }
 
-/**
- * Returns agent entries whose last_active is within maxAgeMs of now.
- * Returns { sessionId: agentData, ... }
- */
 function getActiveAgents(collabDir, maxAgeMs) {
   const agents = readAgents(collabDir);
   const cutoff = Date.now() - maxAgeMs;

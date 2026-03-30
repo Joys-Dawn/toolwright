@@ -6,6 +6,7 @@ const path = require('path');
 const os = require('os');
 const { ensureCollabDir } = require('../lib/collab-dir');
 const { registerAgent } = require('../lib/agents');
+const { validateSessionId } = require('../lib/constants');
 
 function shellQuote(value) {
   return '\'' + String(value).replace(/'/g, '\'\\\'\'') + '\'';
@@ -35,6 +36,7 @@ async function main() {
   if (!session_id || !cwd) {
     process.exit(0);
   }
+  validateSessionId(session_id);
 
   // Don't register agents inside agentwright snapshot directories — they are
   // ephemeral, read-only workspaces that should not grow .collab/ state.

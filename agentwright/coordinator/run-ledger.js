@@ -106,7 +106,8 @@ function mutateRun(cwd, runId, callback) {
     if (!run) {
       throw new Error(`Unknown run ID: ${runId}`);
     }
-    const nextRun = callback(run) || run;
+    const result = callback(run);
+    const nextRun = result === undefined ? run : result;
     nextRun.updatedAt = new Date().toISOString();
     writeJson(runFile(cwd, runId), nextRun);
     return nextRun;

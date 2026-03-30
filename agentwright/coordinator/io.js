@@ -13,7 +13,12 @@ function writeJson(filePath, value) {
   fs.mkdirSync(dir, { recursive: true });
   const tmpPath = filePath + '.' + process.pid + '.tmp';
   fs.writeFileSync(tmpPath, JSON.stringify(value, null, 2), 'utf8');
-  fs.renameSync(tmpPath, filePath);
+  try {
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    try { fs.unlinkSync(tmpPath); } catch (_) {}
+    throw err;
+  }
 }
 
 function appendJsonLine(filePath, value) {
@@ -43,6 +48,7 @@ function readJsonLines(filePath, fallback = []) {
     throw error;
   }
   const results = [];
+  let skipped = 0;
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -51,9 +57,10 @@ function readJsonLines(filePath, fallback = []) {
     try {
       results.push(JSON.parse(trimmed));
     } catch (error) {
-      // Skip malformed lines
+      skipped++;
     }
   }
+  results.skipped = skipped;
   return results;
 }
 

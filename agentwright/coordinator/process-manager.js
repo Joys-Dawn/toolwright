@@ -22,10 +22,6 @@ function buildAllowedTools() {
   ];
 }
 
-function appendChunk(stream, chunk) {
-  stream.write(chunk);
-}
-
 function createJsonLineReader(readable, onLine) {
   let buffer = '';
   readable.on('data', chunk => {
@@ -123,8 +119,8 @@ function spawnAuditor({ cwd, pluginRoot, prompt, logsDir, runId, stageName, onEv
     cwd,
     stdio: ['ignore', 'pipe', 'pipe']
   });
-  child.stdout.on('data', chunk => appendChunk(stdoutLog, chunk));
-  child.stderr.on('data', chunk => appendChunk(stderrLog, chunk));
+  child.stdout.pipe(stdoutLog, { end: false });
+  child.stderr.pipe(stderrLog, { end: false });
   createJsonLineReader(child.stdout, line => {
     try {
       const event = JSON.parse(line);

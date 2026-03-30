@@ -7,7 +7,8 @@ const { getActiveAgents, readAgents } = require('../lib/agents');
 const { readContext } = require('../lib/context');
 const { getLastSeenHash, setLastSeenHash } = require('../lib/last-seen');
 const { hashString } = require('../lib/hash');
-const { INACTIVE_THRESHOLD_MS } = require('../lib/constants');
+const { INACTIVE_THRESHOLD_MS, validateSessionId } = require('../lib/constants');
+const { toPosixPath, matchesGlob } = require('../lib/glob');
 // scavenging is handled by heartbeat.js — guard only reads state
 
 function stripPrefix(filePath) {
@@ -17,77 +18,9 @@ function stripPrefix(filePath) {
   return filePath.replace(/^[+~-]/, '');
 }
 
-function toPosixPath(filePath) {
-  return filePath.split(path.sep).join('/');
-}
-
-function globToRegExp(glob) {
-  let pattern = '';
-  for (let i = 0; i < glob.length; i++) {
-    const char = glob[i];
-    const next = glob[i + 1];
-    if (char === '*') {
-      if (next === '*') {
-        const afterNext = glob[i + 2];
-        if (afterNext === '/') {
-          pattern += '(?:.*/)?';
-          i += 2;
-        } else {
-          pattern += '.*';
-          i += 1;
-        }
-      } else {
-        pattern += '[^/]*';
-      }
-    } else if (char === '?') {
-      pattern += '[^/]';
-    } else if (char === '{') {
-      // Find the matching closing brace, accounting for nesting
-      let depth = 1;
-      let close = i + 1;
-      while (close < glob.length && depth > 0) {
-        if (glob[close] === '{') depth++;
-        else if (glob[close] === '}') depth--;
-        close++;
-      }
-      if (depth === 0) {
-        close--; // points to the matching }
-        const alternatives = glob.slice(i + 1, close).split(',').map(
-          alt => globToRegExp(alt).source.slice(1, -1) // strip ^...$
-        );
-        pattern += '(' + alternatives.join('|') + ')';
-        i = close;
-      } else {
-        pattern += '\\{';
-      }
-    } else if (char === '[') {
-      const close = glob.indexOf(']', i);
-      if (close !== -1) {
-        let charClass = glob.slice(i, close + 1);
-        if (charClass.length > 2 && charClass[1] === '!') {
-          charClass = '[^' + charClass.slice(2);
-        }
-        pattern += charClass;
-        i = close;
-      } else {
-        pattern += '\\[';
-      }
-    } else if ('\\^$+?.()|}'.includes(char)) {
-      pattern += '\\' + char;
-    } else {
-      pattern += char;
-    }
-  }
-  return new RegExp('^' + pattern + '$');
-}
-
 function isPathWithin(basePath, targetPath) {
   const relative = path.relative(basePath, targetPath);
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-function matchesGlob(relativePath, pattern) {
-  return globToRegExp(toPosixPath(pattern || '**/*')).test(toPosixPath(relativePath));
 }
 
 function getTrackedFiles(otherContexts, cwd) {
@@ -211,6 +144,7 @@ async function main() {
   if (!session_id || !cwd || !toolName) {
     process.exit(0);
   }
+  validateSessionId(session_id);
 
   const collabDir = path.join(cwd, '.collab');
 

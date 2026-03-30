@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { removeSessionState } = require('../lib/session-state');
+const { validateSessionId } = require('../lib/constants');
 
 async function main() {
   let input = '';
@@ -15,6 +16,7 @@ async function main() {
   if (!session_id || !cwd) {
     process.exit(0);
   }
+  validateSessionId(session_id);
 
   const collabDir = path.join(cwd, '.collab');
 

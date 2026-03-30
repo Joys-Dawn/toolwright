@@ -3,15 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { atomicWriteJson } = require('./atomic-write');
-
-const SESSION_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
-
-function validateSessionId(sessionId) {
-  if (!sessionId || !SESSION_ID_PATTERN.test(sessionId)) {
-    throw new Error(`Invalid session ID: ${sessionId}`);
-  }
-  return sessionId;
-}
+const { validateSessionId } = require('./constants');
 
 function contextPath(collabDir, sessionId) {
   validateSessionId(sessionId);

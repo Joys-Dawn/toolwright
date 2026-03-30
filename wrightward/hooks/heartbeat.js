@@ -6,6 +6,7 @@ const path = require('path');
 const { updateHeartbeat, withAgentsLock } = require('../lib/agents');
 const { readContext, writeContext } = require('../lib/context');
 const { scavengeExpiredSessions } = require('../lib/session-state');
+const { validateSessionId } = require('../lib/constants');
 
 const HARD_SCAVENGE_MS = 60 * 60 * 1000;
 
@@ -19,6 +20,7 @@ async function main() {
   if (!session_id || !cwd) {
     process.exit(0);
   }
+  validateSessionId(session_id);
 
   const collabDir = path.join(cwd, '.collab');
 

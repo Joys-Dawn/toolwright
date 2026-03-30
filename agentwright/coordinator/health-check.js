@@ -25,8 +25,12 @@ function markDeadStageWorkers(cwd, run) {
     try {
       validateStageName(stageName);
       const info = auditor[stageName];
-      if (!info || isPidAlive(info.workerPid) || isPidAlive(info.pid)) {
+      if (!info || isPidAlive(info.workerPid)) {
         continue;
+      }
+      // Worker is dead — kill orphaned auditor if still running
+      if (info.pid && isPidAlive(info.pid)) {
+        try { process.kill(Number(info.pid)); } catch (_) {}
       }
       const stageMetaPath = stageMetaFile(cwd, run.runId, stageName);
       const stageMeta = readJson(stageMetaPath, {});
