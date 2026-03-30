@@ -1,8 +1,9 @@
 ---
 name: verifier
-model: default
 description: Validates that completed work matches what was claimed. Use after the main agent marks tasks done — checks that implementations exist and work, and that no unstated changes were made.
-readonly: true
+disallowedTools: ["Edit", "Write", "NotebookEdit"]
+permissionMode: dontAsk
+effort: high
 ---
 
 # Verifier

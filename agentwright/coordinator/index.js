@@ -20,6 +20,7 @@ const {
 } = require('./paths');
 const { markDeadStageWorkers } = require('./health-check');
 const { launchCurrentGroup, completeStage, nextStage } = require('./lifecycle');
+const { cleanupOrphanedSnapshots } = require('./snapshot-manager');
 
 function printHelp() {
   process.stdout.write(
@@ -42,9 +43,12 @@ async function startRun(argumentString) {
   requireClaudeCli();
   const config = loadUserConfig(cwd);
   pruneCompletedRuns(cwd, config.retention);
+  cleanupOrphanedSnapshots(cwd, listRuns);
   const resolved = resolveCommandArgs(argumentString, cwd, config);
   const run = createRun(cwd, resolved);
+  activeCleanup = () => cleanupOrphanedSnapshots(cwd, listRuns);
   const result = await launchCurrentGroup(cwd, run);
+  activeCleanup = null;
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
 }
 
@@ -64,13 +68,16 @@ async function startSingleStage(argumentString) {
   }
   const scope = tokens.slice(1).join(' ').trim() || '--diff';
   pruneCompletedRuns(cwd, config.retention);
+  cleanupOrphanedSnapshots(cwd, listRuns);
   const run = createRun(cwd, {
     pipelineName: null,
     groups: [[stageName]],
     stages: [stageName],
     scope
   });
+  activeCleanup = () => cleanupOrphanedSnapshots(cwd, listRuns);
   const result = await launchCurrentGroup(cwd, run);
+  activeCleanup = null;
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
 }
 
@@ -138,6 +145,18 @@ function cleanRuns(flags) {
     removedRuns
   }, null, 2) + '\n');
 }
+
+let activeCleanup = null;
+
+function onTermSignal(signal) {
+  if (activeCleanup) {
+    try { activeCleanup(); } catch (_) {}
+  }
+  process.exit(signal === 'SIGINT' ? 130 : 143);
+}
+
+process.on('SIGINT', () => onTermSignal('SIGINT'));
+process.on('SIGTERM', () => onTermSignal('SIGTERM'));
 
 async function main() {
   const argv = process.argv.slice(2);

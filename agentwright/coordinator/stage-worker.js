@@ -21,19 +21,28 @@ const { parseFlags } = require('./cli-utils');
 
 const SKILL_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/i;
 
-function buildAuditorPrompt({ pluginRoot, stageName, stageDef, scope }) {
+function resolveSkillPath({ pluginRoot, cwd, stageName, stageDef }) {
+  // Custom stages can specify a project-relative skillPath
+  if (stageDef.skillPath) {
+    const resolved = path.resolve(cwd, stageDef.skillPath);
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`Custom skill file not found for stage ${stageName}: ${resolved}`);
+    }
+    return resolved;
+  }
+  // Builtin stages use skillId to look up in the plugin's skills/ directory
   if (typeof stageDef.skillId !== 'string' || !SKILL_ID_PATTERN.test(stageDef.skillId)) {
     throw new Error(`Invalid skill ID for stage ${stageName}: ${stageDef.skillId}`);
   }
-  const skillPath = path.join(
-    pluginRoot,
-    'skills',
-    stageDef.skillId,
-    'SKILL.md'
-  );
+  const skillPath = path.join(pluginRoot, 'skills', stageDef.skillId, 'SKILL.md');
   if (!fs.existsSync(skillPath)) {
     throw new Error(`Vendored skill not found for stage ${stageName}: ${stageDef.skillId}`);
   }
+  return skillPath;
+}
+
+function buildAuditorPrompt({ pluginRoot, cwd, stageName, stageDef, scope }) {
+  const skillPath = resolveSkillPath({ pluginRoot, cwd, stageName, stageDef });
   const skillContent = fs.readFileSync(skillPath, 'utf8');
   const sanitizedScope = String(scope || '')
     .replace(/[\r\n]+/g, ' ')
@@ -143,6 +152,7 @@ async function main() {
     pluginRoot,
     prompt: buildAuditorPrompt({
       pluginRoot,
+      cwd,
       stageName,
       stageDef,
       scope: run.scope

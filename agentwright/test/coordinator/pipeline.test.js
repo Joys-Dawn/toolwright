@@ -33,7 +33,8 @@ describe('pipeline', () => {
     it('has all expected stages', () => {
       const expected = [
         'correctness', 'security', 'best-practices',
-        'migration', 'ui', 'tests-migration', 'tests-edge', 'tests-frontend'
+        'migration', 'ui', 'test-coverage',
+        'tests-migration', 'tests-edge', 'tests-frontend'
       ];
       for (const name of expected) {
         assert.ok(BUILTIN_STAGES[name], `Missing builtin stage: ${name}`);
@@ -88,6 +89,31 @@ describe('pipeline', () => {
       assert.deepEqual(config.customStages, { custom: { type: 'skill', skillId: 'custom-audit' } });
       assert.equal(config.retention.keepCompletedRuns, 5);
       assert.equal(config.retention.deleteCompletedLogs, true);
+    });
+
+    it('loads custom stage with skillPath instead of skillId', () => {
+      const skillFile = path.join(tmpDir, 'my-audit', 'SKILL.md');
+      fs.mkdirSync(path.dirname(skillFile), { recursive: true });
+      fs.writeFileSync(skillFile, '# My Audit', 'utf8');
+      fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), JSON.stringify({
+        customStages: { custom: { type: 'skill', skillPath: 'my-audit/SKILL.md' } }
+      }), 'utf8');
+      const config = loadUserConfig(tmpDir);
+      assert.equal(config.customStages.custom.skillPath, 'my-audit/SKILL.md');
+    });
+
+    it('rejects custom stage with neither skillId nor skillPath', () => {
+      fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), JSON.stringify({
+        customStages: { bad: { type: 'skill' } }
+      }), 'utf8');
+      assert.throws(() => loadUserConfig(tmpDir), /skillId.*skillPath|skillPath.*skillId/);
+    });
+
+    it('rejects custom stage with both skillId and skillPath', () => {
+      fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), JSON.stringify({
+        customStages: { ambig: { type: 'skill', skillId: 'foo', skillPath: 'bar/SKILL.md' } }
+      }), 'utf8');
+      assert.throws(() => loadUserConfig(tmpDir), /not both/);
     });
 
     it('handles config with missing optional fields', () => {

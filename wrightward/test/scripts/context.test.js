@@ -90,7 +90,7 @@ describe('context script', () => {
     });
 
     assert.equal(result.exitCode, 0);
-    assert.equal(result.stdout.includes('Cleared ColLab state'), true);
+    assert.equal(result.stdout.includes('Cleared collab state'), true);
     assert.equal(fs.existsSync(path.join(tmpDir, '.collab', 'context', 'sess-1.json')), false);
   });
 
@@ -360,6 +360,6 @@ describe('context script', () => {
     });
 
     assert.equal(result.exitCode, 1);
-    assert.ok(result.stderr.includes('No existing ColLab context'));
+    assert.ok(result.stderr.includes('No existing collab context'));
   });
 });

@@ -34,7 +34,47 @@ Do NOT skip clarification. A plan built on wrong assumptions wastes more time th
 - **API/tech stack verification**: If the feature involves specific APIs, SDKs, or third-party services, look up the official documentation directly before designing anything. Check if available MCP tools (Supabase, Vercel, etc.) can accelerate this lookup. Never assume correct API usage from training knowledge alone — docs may have changed and wrong API usage produces security holes, not just bugs.
 - Output: A brief summary of the current system context relevant to this feature.
 
-### 2. Clarify Requirements
+### 2. Change Impact Analysis
+
+Before designing anything, map the blast radius of the proposed feature — everything it will touch, depend on, or implicitly affect. This step prevents designing in a vacuum and surfaces coupling risks early.
+
+Using Glob, Grep, and Read (all available in plan mode):
+
+#### 2a. Direct Dependencies
+- Identify the files, modules, and functions the feature will modify or extend.
+- For each, trace its **importers**: what other files import or call it? Use `Grep` on the export names, class names, and function names.
+- Build a list of directly affected files and their role (consumer, provider, shared utility).
+
+#### 2b. Implicit Contracts
+- For each affected module, identify what callers actually depend on beyond the type signature:
+  - **Return shape assumptions**: Do consumers destructure specific fields, rely on array ordering, or assume non-null values that aren't enforced by types?
+  - **Timing assumptions**: Do callers assume synchronous behavior, specific response times, or ordering guarantees?
+  - **Side effect assumptions**: Do callers rely on this code mutating shared state, writing to a cache, or emitting events as a side effect?
+- Read the actual call sites — don't infer from the type signature alone.
+
+#### 2c. Data Flow Downstream
+- If the feature changes a data model, API response shape, or state structure, trace downstream:
+  - What reads this data? (UI components, other services, exported APIs, cron jobs)
+  - What transforms or passes it through? (middleware, serializers, caches)
+  - What persists or caches a snapshot of it? (localStorage, CDN, derived tables)
+- Flag any consumer that would silently break (no type error, but wrong behavior at runtime).
+
+#### 2d. Test Coverage Gaps
+- For each affected file, check if tests exist (`Glob` for `*.test.*`, `*.spec.*` alongside the file).
+- For affected functions, `Grep` for their names in test files to see if they have direct test coverage.
+- Flag areas where the feature touches code with no tests — these are where regressions will hide.
+
+#### 2e. Output
+Produce a **Change Impact Map** summarizing:
+- **Files directly modified** by the feature
+- **Files indirectly affected** (consumers, importers, downstream readers)
+- **Implicit contracts at risk** (specific assumptions that may break)
+- **Untested zones** (affected code with no test coverage)
+- **Coupling hotspots** (files that appear in multiple dependency chains — high fan-in)
+
+This map feeds directly into the Design and Quality Analysis steps. If the blast radius is unexpectedly large, surface it as a risk and consider whether the scope should be narrowed.
+
+### 3. Clarify Requirements
 
 - If any of the following are unclear, ask before continuing:
   - **Functional requirements**: What exactly should the feature do? What are the inputs, outputs, and user flows?
@@ -43,120 +83,64 @@ Do NOT skip clarification. A plan built on wrong assumptions wastes more time th
   - **Dependencies**: Does this require new APIs, services, migrations, or third-party integrations?
 - Output: A clear, numbered list of confirmed requirements.
 
-### 3. Design the Feature
+### 4. Design the Feature
 
 Produce a plan that covers each of the following sections. Skip a section only if it genuinely does not apply.
 
-#### 3a. User-Facing Behavior
+#### 4a. User-Facing Behavior
 - Describe the feature from the user's perspective: what they see, what they do, what happens.
 - Cover the happy path end-to-end.
 - Define error states and what the user sees when things go wrong (invalid input, network failure, permission denied, etc.).
 
-#### 3b. Data Model Changes
+#### 4b. Data Model Changes
 - New types, interfaces, database tables, or schema changes.
 - Migrations needed and their reversibility.
 - Impact on existing data (backwards compatibility, data backfill).
 
-#### 3c. Architecture & Module Design
+#### 4c. Architecture & Module Design
 - Which files/modules will be created or modified.
 - How the feature integrates with the existing architecture (state management, routing, API layer, etc.).
 - Clear responsibility boundaries: what each new module/function owns.
 
-#### 3d. API & Integration Points
+#### 4d. API & Integration Points
 - New endpoints, webhooks, or external service calls.
 - Request/response shapes.
 - Authentication and authorization requirements.
 
-#### 3e. State Management
+#### 4e. State Management
 - What state the feature introduces (local, global, persisted, cached).
 - State transitions and lifecycle.
 - How state syncs across components or with the backend.
 
-#### 3f. Implementation Steps
+#### 4f. Testing Strategy
+- Identify what needs to be tested and at which layer (unit, integration, E2E).
+- For each layer, note the appropriate test writing skill:
+  - **Database tests** (RLS policies, RPCs, triggers, migrations): `test-pgtap`
+  - **Edge function tests** (Supabase/Deno HTTP integration tests): `test-deno`
+  - **Frontend tests** (React components, hooks, user interactions): `test-frontend`
+  - **All other tests** (backend logic, utilities, APIs, CLI, libraries): `test-writing`
+- Call out specific behaviors that must be tested (e.g., "RLS: user A cannot read user B's data", "API: returns 400 on malformed input").
+- Note any tests that should be written *before* implementation (test-first for complex logic or regression-prone areas).
+
+#### 4g. Implementation Steps
 - An ordered sequence of concrete implementation steps.
 - Each step should be small enough to be a single commit.
 - Note dependencies between steps (what must come before what).
 - Identify which steps can be done in parallel.
+- **Include test steps** — writing tests is not a separate phase; test steps should be interleaved with the implementation steps they verify.
 
-### 4. Analyze Quality Dimensions
+### 5. Identify Risks
 
-Proactively evaluate the proposed design against each of these dimensions. For each, explicitly state what risks exist and how the design addresses them. If a dimension does not apply, say so briefly. See [REFERENCE.md](REFERENCE.md) for named standards, plan quality criteria, templates, and anti-patterns.
+Evaluate the design against the quality dimensions below. **Only surface actual risks** — do not write a section for a dimension that has no findings. See [REFERENCE.md](REFERENCE.md) for detailed checklists and anti-patterns.
 
-#### Bugs & Correctness
-*(Applies `correctness-audit` — Dimensions 1–9: Logic Bugs through Concurrency & Shared State)*
+Dimensions to check (skip any that don't apply):
+- **Correctness**: logic bugs, null/undefined gaps, async pitfalls, concurrency/TOCTOU — per `correctness-audit` dimensions 1–9
+- **Edge cases**: empty states, boundary values, network failures, reentrant usage, unvalidated external data
+- **Security**: map new design elements to `security-audit` domains (auth, authorization, input validation, RLS, rate limiting, SSRF, data privacy)
+- **Scalability**: unbounded queries, N+1 patterns, in-memory coordination that breaks at scale
+- **Design**: SOLID violations, circular dependencies, unnecessary abstraction, YAGNI
 
-Review the design against the `correctness-audit` dimensions. State which are highest-risk for this feature:
-- **Logic bugs**: off-by-one errors, boolean inversions, wrong operators in proposed conditional logic
-- **Null / undefined**: fields that can be absent — are they guarded? Do nullable DB columns match their TypeScript types?
-- **Async & Promise**: are concurrent async paths safe? Is there risk of fire-and-forget on critical writes?
-- **Concurrency / TOCTOU**: can concurrent requests (multiple users, tabs, or duplicate submissions) corrupt shared state? Does any step read-check-act on data another operation could change between check and act?
-
-#### Edge Cases
-*(Applies `correctness-audit` — Dimensions 7 & 8: Edge Case Inputs, External Data & Network)*
-
-- **Empty state**: what does the user see before any data exists for this feature?
-- **Boundary values**: max field lengths, max collection sizes, numeric overflow — are they defined and enforced at both the API and database layers?
-- **Network failures**: if an operation fails mid-way, what state is the system left in? Is partial completion visible to the user?
-- **Reentrant / concurrent usage**: double-submit, multiple tabs, back-button navigation mid-flow.
-- **External data**: any third-party API or webhook payload — is it validated as `unknown` before use, not cast directly to a typed shape?
-
-#### Design Quality
-*(SOLID — Robert C. Martin; Clean Architecture — Robert C. Martin & Martin Fowler)*
-
-- **SRP**: does each new module have one clearly stated reason to change?
-- **OCP**: can new behavior be added by extension without modifying existing modules?
-- **DIP**: do high-level modules depend on abstractions, not concrete implementations?
-- **Dependency direction**: do dependencies point inward (domain ← application ← infrastructure)? No domain module should depend on a framework or I/O layer.
-- Does the design follow existing project patterns, or introduce a new one? If new, is the justification explicitly stated?
-
-#### Maintainability
-*(Clean Code — Robert C. Martin; The Pragmatic Programmer — Hunt & Thomas)*
-
-- Will a developer unfamiliar with this feature understand it from the plan alone, without asking the author?
-- Are proposed module and function names self-documenting?
-- Are non-obvious design decisions explained in the plan's rationale, not left as tribal knowledge?
-- Are implicit contracts between modules made explicit (typed interfaces, documented invariants)?
-
-#### Modularity
-*(SOLID — SRP, ISP, DIP; UNIX philosophy)*
-
-- Can each new component be unit-tested in isolation, without the full stack?
-- Are new module dependencies unidirectional? Does the design introduce any circular imports?
-- Could any new module be replaced or reused independently of the others?
-
-#### Simplicity
-*(KISS — Clarence Johnson, 1960; YAGNI — Extreme Programming, Kent Beck & Ron Jeffries)*
-
-- **KISS**: is this the simplest design that satisfies the stated requirements?
-- **YAGNI**: are there components designed for hypothetical future requirements not in scope for this iteration?
-- Does the language or framework already provide something the design is building from scratch?
-- Is there unnecessary indirection — interfaces, factories, registries — with only one concrete implementation?
-
-#### Scalability
-*(Applies `correctness-audit` — Dimensions 10–12: Algorithmic Complexity, Database & I/O, Memory & Throughput)*
-
-- Will this design function correctly at 10× the current data volume without architectural changes?
-- Are there unbounded database queries (no `LIMIT`) or full-collection loads into memory?
-- Are there N+1 query patterns that will emerge as data grows?
-- Is any coordination state stored in-memory in a way that breaks under horizontal scale-out?
-
-#### Security
-*(Applies `security-audit` — use the relevant domains for each new design element)*
-
-Map each new element of the design to the applicable security-audit domains:
-- **New API endpoint** → §2 Authorization, §5 Input Validation, §6 API Security, §8 Rate Limiting
-- **New database table or function** → §7 Database Security (RLS, REVOKE, CHECK constraints)
-- **New auth flow or session handling** → §1 Authentication & Session Management
-- **New external service call or webhook** → §6 API7 SSRF, §10 webhook deduplication & signature
-- **New financial operation** → §10 Financial & Transaction Integrity, §9 Concurrency & Race Conditions
-- **New user data stored or transmitted** → §13 Data Privacy & Retention, §4 Cryptography & Secrets
-
-### 5. Identify Risks & Open Questions
-
-- List anything that could go wrong or that you're uncertain about.
-- Flag technical risks (performance cliffs, migration dangers, dependency on unstable APIs).
-- Flag product risks (user confusion, feature conflicts, scope creep).
-- For each risk, suggest a mitigation or note that it needs a decision.
+For each risk found, state: what the risk is, which dimension it falls under, and how to mitigate it. Also flag open questions, product risks, and unconfirmed assumptions here.
 
 ## Output Format
 
@@ -171,6 +155,13 @@ Write the plan to the plan file with this structure:
 ## Requirements
 1. [Confirmed requirement]
 2. ...
+
+## Change Impact Map
+- **Files directly modified**: [list]
+- **Files indirectly affected**: [consumers, importers, downstream readers]
+- **Implicit contracts at risk**: [specific assumptions that may break]
+- **Untested zones**: [affected code with no test coverage]
+- **Coupling hotspots**: [high fan-in files]
 
 ## Design
 
@@ -189,38 +180,15 @@ Write the plan to the plan file with this structure:
 ### State Management
 [State shape, transitions, sync]
 
+### Testing Strategy
+[What to test, at which layer, which test skill applies, specific behaviors to verify]
+
 ### Implementation Steps
-1. [Step with description]
+1. [Step with description, including interleaved test steps]
 2. ...
 
-## Quality Analysis
-
-### Bugs & Correctness
-[Risks and mitigations]
-
-### Edge Cases
-[Identified edge cases and how they're handled]
-
-### Design Quality
-[Assessment]
-
-### Maintainability
-[Assessment]
-
-### Modularity
-[Assessment]
-
-### Simplicity
-[Assessment]
-
-### Scalability
-[Assessment]
-
-### Security
-[Assessment]
-
-## Risks & Open Questions
-- [Risk/question with proposed mitigation or decision needed]
+## Risks
+- [Risk: what could go wrong, which quality dimension it falls under, and proposed mitigation]
 
 ## Out of Scope
 - [What this plan explicitly does not cover]

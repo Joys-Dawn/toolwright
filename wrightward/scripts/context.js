@@ -71,11 +71,11 @@ async function main() {
   if (markDone) {
     const existing = readContext(collabDir, sessionId);
     if (!existing) {
-      throw new Error('No existing ColLab context found for this session. Run /wrightward:collab-context first.');
+      throw new Error('No existing collab context found for this session. Use /wrightward:collab-context first.');
     }
 
     removeSessionState(collabDir, sessionId);
-    process.stdout.write('Cleared ColLab state for the current session.\n');
+    process.stdout.write('Cleared collab state for the current session.\n');
     return;
   }
 
@@ -108,7 +108,7 @@ async function main() {
   if (stripped.length > 0) {
     process.stderr.write(`Removed files already claimed by other agents: ${stripped.join(', ')}\n`);
   }
-  process.stdout.write('Updated ColLab context for the current session.\n');
+  process.stdout.write('Updated collab context for the current session.\n');
 }
 
 main().catch(error => {

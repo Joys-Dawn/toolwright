@@ -1,8 +1,9 @@
 ---
 name: deep-research
-model: default
 description: Deep research and literature review. Use when the user asks for deep research, literature review, or to thoroughly investigate a topic. Searches the web, consults reputable sources, and synthesizes an answer with pros/cons and comparisons when relevant.
-readonly: true
+disallowedTools: ["Edit", "Write", "NotebookEdit", "Bash"]
+permissionMode: dontAsk
+effort: high
 ---
 
 # Deep Research

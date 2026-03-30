@@ -161,7 +161,7 @@ async function main() {
     if (!selfContext) {
       allowWithAdditionalContext(
         'Your session was inactive and your collaboration context was cleared. ' +
-        'Run /wrightward:collab-context to re-declare what you are working on so other agents can see your files.'
+        'Use /wrightward:collab-context to re-declare what you are working on so other agents can see your files.'
       );
       return;
     }
@@ -222,7 +222,7 @@ function handleWriteTool(toolName, toolInput, trackedFiles, cwd, collabDir, sess
         hookSpecificOutput: {
           reason: 'no_context_declared',
           message: 'Another agent is working on files that overlap with this edit. ' +
-            'Run /wrightward:collab-context to declare what you\'re working on first.',
+            'Use /wrightward:collab-context to declare what you are working on first.',
           overlappingAgents: overlaps
         }
       }));

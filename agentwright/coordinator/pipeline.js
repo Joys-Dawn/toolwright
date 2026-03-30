@@ -9,6 +9,7 @@ const BUILTIN_STAGES = {
   'best-practices': { type: 'skill', skillId: 'best-practices-audit' },
   migration: { type: 'skill', skillId: 'migration-audit' },
   ui: { type: 'skill', skillId: 'ui-audit' },
+  'test-coverage': { type: 'skill', skillId: 'test-coverage-audit' },
   'tests-migration': { type: 'skill', skillId: 'test-pgtap' },
   'tests-edge': { type: 'skill', skillId: 'test-deno' },
   'tests-frontend': { type: 'skill', skillId: 'test-frontend' }
@@ -50,8 +51,16 @@ function validateUserConfig(parsed, configPath) {
       throw new Error(`Invalid config ${configPath}: "customStages" must be an object.`);
     }
     for (const [name, value] of Object.entries(parsed.customStages)) {
-      if (!value || typeof value !== 'object' || typeof value.type !== 'string' || typeof value.skillId !== 'string') {
-        throw new Error(`Invalid config ${configPath}: customStage "${name}" must have { type: string, skillId: string }.`);
+      if (!value || typeof value !== 'object' || typeof value.type !== 'string') {
+        throw new Error(`Invalid config ${configPath}: customStage "${name}" must have { type: string }.`);
+      }
+      const hasSkillId = typeof value.skillId === 'string';
+      const hasSkillPath = typeof value.skillPath === 'string';
+      if (!hasSkillId && !hasSkillPath) {
+        throw new Error(`Invalid config ${configPath}: customStage "${name}" must have either "skillId" (builtin) or "skillPath" (project-relative path to a SKILL.md file).`);
+      }
+      if (hasSkillId && hasSkillPath) {
+        throw new Error(`Invalid config ${configPath}: customStage "${name}" must have either "skillId" or "skillPath", not both.`);
       }
     }
   }

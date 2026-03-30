@@ -115,6 +115,46 @@ describe('stage-worker', () => {
     fs.rmSync(snapshotPath, { recursive: true, force: true });
   });
 
+  it('writes failure meta when custom skillPath does not exist', () => {
+    fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), JSON.stringify({
+      customStages: {
+        pathstage: { type: 'skill', skillPath: 'nonexistent/SKILL.md' }
+      }
+    }), 'utf8');
+
+    const run = createRun(tmpDir, {
+      pipelineName: null,
+      groups: [['pathstage']],
+      stages: ['pathstage'],
+      scope: '--diff'
+    });
+    updateStageStatus(tmpDir, run.runId, 'pathstage', 'auditing');
+
+    const snapshotPath = expectedGroupSnapshotPath(run.runId, 0);
+    fs.mkdirSync(snapshotPath, { recursive: true });
+    writeJson(groupSnapshotFile(tmpDir, run.runId, 0), {
+      type: 'temp-copy',
+      path: snapshotPath,
+      createdAt: new Date().toISOString()
+    });
+
+    const result = runWorker([
+      '--run', run.runId,
+      '--stage', 'pathstage',
+      '--group-index', '0'
+    ], tmpDir);
+
+    assert.equal(result.exitCode, 1);
+
+    const meta = readJson(stageMetaFile(tmpDir, run.runId, 'pathstage'));
+    assert.ok(meta);
+    assert.equal(meta.auditDone, true);
+    assert.equal(meta.auditSucceeded, false);
+    assert.ok(meta.summary.includes('Custom skill file not found'));
+
+    fs.rmSync(snapshotPath, { recursive: true, force: true });
+  });
+
   describe('prompt building validation', () => {
     it('rejects invalid skill IDs via worker error path', () => {
       // Create a config with a stage that has an invalid skillId

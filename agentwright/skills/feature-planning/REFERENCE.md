@@ -43,7 +43,38 @@ For features that significantly affect multiple teams or carry high design risk,
 
 ---
 
-## 2. Plan Quality Criteria
+## 2. Change Impact Analysis
+
+### What to Trace
+
+The change impact analysis maps the blast radius of the proposed feature — everything it will touch, depend on, or implicitly affect. The goal is to surface coupling risks and hidden dependencies before designing anything.
+
+**Direct dependencies** are straightforward: files modified or extended, and their importers. **Implicit contracts** are harder and more valuable — these are assumptions callers make that go beyond what types enforce:
+
+| Contract Type | Example | How to Detect |
+|---------------|---------|---------------|
+| Return shape | Callers destructure `.fullName` but type only guarantees `.name` | Grep for field access patterns on the return value |
+| Timing | Frontend waterfall assumes endpoint responds in <50ms | Read call sites for sequential await chains |
+| Side effects | Caller expects function to populate a cache as a side effect | Read function body for mutations beyond the return value |
+| Ordering | Consumer assumes array is sorted by `created_at` | Grep for usages that index into the result without sorting |
+| Nullability | TypeScript says `string` but DB column is nullable | Compare type definitions against schema/migration files |
+
+### Common Blind Spots
+
+- **Serialization boundaries**: JSON.stringify drops `undefined` fields, Date objects become strings, BigInt throws. Any data that crosses a serialization boundary (API response, localStorage, postMessage) can silently change shape.
+- **Cache consumers**: If the feature changes data that is cached (Redis, localStorage, CDN, React Query), stale cache entries will serve the old shape until they expire or are invalidated.
+- **Derived state**: Computed values, database views, materialized aggregations, or frontend selectors that derive from the changed data — these won't show up in a simple import trace.
+- **Config and environment**: Feature flags, environment variables, and build-time constants that gate behavior around the affected code.
+
+### Impact Map Quality Criteria
+
+- [ ] Every file listed as "directly modified" actually exists in the codebase (verified with Glob).
+- [ ] Indirectly affected files were found by tracing real imports/call sites (Grep), not guessed from names.
+- [ ] Implicit contracts cite the specific line or pattern in the caller, not just "callers assume X."
+- [ ] Untested zones name the specific file and function, not just "some code lacks tests."
+- [ ] If the blast radius is larger than expected, this is flagged as a risk with a recommendation (narrow scope, add tests first, or split the feature).
+
+## 3. Plan Quality Criteria
 
 A plan section is "done" when it meets these criteria. Self-check before calling `ExitPlanMode`.
 
@@ -88,7 +119,7 @@ A plan section is "done" when it meets these criteria. Self-check before calling
 
 ---
 
-## 3. Plan Section Templates
+## 4. Plan Section Templates
 
 ### Data Model Changes
 
@@ -114,17 +145,19 @@ A plan section is "done" when it meets these criteria. Self-check before calling
 
 ### Implementation Steps
 
-**Bad** (too vague):
+**Bad** (too vague, tests deferred to the end):
 > 1. Build the backend.
 > 2. Build the frontend.
 > 3. Add tests.
 
-**Good** (specific):
+**Good** (specific, tests interleaved with implementation):
 > 1. **[Migration]** Add `notifications` table and RLS policy. Non-destructive; safe to ship independently.
-> 2. **[Edge Function]** `POST /notifications/mark-read` — Zod-validated body, updates `read_at`, returns 204. Blocked by step 1.
-> 3. **[React hook]** `useNotifications()` — Realtime subscription scoped to `auth.uid()`. Can be built in parallel with step 2.
-> 4. **[UI]** `<NotificationBell>` — badge count, dropdown list, "mark all read" action. Blocked by step 3.
-> 5. **[Test]** Integration test: verify user A cannot read user B's notifications (RLS enforcement). Blocked by step 1.
+> 2. **[Test — `test-pgtap`]** RLS enforcement: verify user A cannot read user B's notifications. Blocked by step 1.
+> 3. **[Edge Function]** `POST /notifications/mark-read` — Zod-validated body, updates `read_at`, returns 204. Blocked by step 1.
+> 4. **[Test — `test-deno`]** Integration test: mark-read returns 204, missing auth returns 401, invalid body returns 400. Blocked by step 3.
+> 5. **[React hook]** `useNotifications()` — Realtime subscription scoped to `auth.uid()`. Can be built in parallel with steps 3-4.
+> 6. **[UI]** `<NotificationBell>` — badge count, dropdown list, "mark all read" action. Blocked by step 5.
+> 7. **[Test — `test-frontend`]** NotificationBell renders badge, clicking "mark all read" clears unread state. Blocked by step 6.
 
 ---
 
@@ -149,7 +182,7 @@ A plan section is "done" when it meets these criteria. Self-check before calling
 
 ---
 
-## 4. Common Planning Anti-Patterns
+## 5. Common Planning Anti-Patterns
 
 ### Premature Generalization
 *(YAGNI — Extreme Programming, Kent Beck & Ron Jeffries)*

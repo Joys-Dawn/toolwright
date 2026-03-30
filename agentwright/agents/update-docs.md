@@ -1,7 +1,12 @@
 ---
 name: update-docs
-model: default
 description: Updates project documentation to match the code. Main focus is docs (architecture, how the project is built, setup, deploy, contributing, README). Use when the user asks to update docs or after code changes; update README, docs folder, docstrings, and comments so they reflect current behavior.
+disallowedTools: ["Bash", "NotebookEdit"]
+permissionMode: acceptEdits
+hooks:
+  PreToolUse:
+    - matcher: Edit|Write
+      command: node ${CLAUDE_PLUGIN_ROOT}/hooks/md-only-edit.js
 ---
 
 # Update Docs
@@ -85,3 +90,4 @@ Keep to bullets. If nothing needed updating, say so in one sentence.
 - If the code is unclear and you can't document it confidently, note that and suggest a code comment or refactor instead of guessing.
 - Don't duplicate large chunks of code in docs. Reference the source or keep examples short and runnable.
 - Don't add documentation for the sake of it. Every section should serve a reader who actually needs it.
+- **You may ONLY edit `.md` files.** If a non-markdown file needs changes (e.g., docstrings in `.py`, JSDoc in `.ts`), report what needs changing but do not edit it.

@@ -2,11 +2,19 @@
 
 Claude Code plugin that coordinates multiple agents working on the same codebase. Prevents conflicting edits by blocking writes to files another agent has claimed, and injects awareness context so agents know what others are doing.
 
+## Installation
+
+```
+/install-plugin https://github.com/Joys-Dawn/toolwright/tree/master/wrightward
+```
+
 ## Workflow
 
 ### Setup
 
-When a user starts a new agent session that will work alongside other agents, they run `/wrightward:collab-context`. This prompts the agent to declare what it's working on — task description, files it plans to touch, and functions it will modify. The declaration is written to `.collab/` in the project root.
+When a session starts alongside other agents, run `/wrightward:collab-context` (user or agent can invoke this). This declares what the agent is working on — task description, files it plans to touch, and functions it will modify. The declaration is written to `.collab/` in the project root.
+
+Best used after a plan has been made (e.g., after using plan mode or agentwright's feature planning skill), since the agent will have a clear picture of which files and functions it will touch. Only declare files you are certain you will touch — files edited via Edit/Write are automatically added to your context while other agents are active.
 
 ### What happens automatically
 
@@ -25,14 +33,16 @@ Once context is declared, three hooks run on every tool call with no user interv
 
 ### Teardown
 
-When finished, the user runs `/wrightward:collab-done` to remove the session from coordination state. If they don't, the session expires automatically (ignored after 6 minutes of inactivity, hard-scavenged after 60 minutes).
+When finished, run `/wrightward:collab-done` to remove the session from coordination state. If not called, the session expires automatically (ignored after 6 minutes of inactivity, hard-scavenged after 60 minutes).
 
-## Commands
+## Skills
 
-| Command | Description |
-|---------|-------------|
-| `/wrightward:collab-context` | User runs this to declare (or update) the current task, files, and functions |
-| `/wrightward:collab-done` | User runs this to clear the session from coordination state |
+Both skills can be invoked by the user or by the agent itself.
+
+| Skill | Description |
+|-------|-------------|
+| `/wrightward:collab-context` | Declare (or update) the current task, files, and functions |
+| `/wrightward:collab-done` | Clear the session from coordination state, releasing file claims |
 
 ## Context schema
 
