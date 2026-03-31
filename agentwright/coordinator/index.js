@@ -11,17 +11,20 @@ const {
   pruneTerminalRuns,
   listRuns,
   cleanupCompletedStageArtifacts,
+  cleanupCompletedGroupArtifacts,
   TERMINAL_STATUSES
 } = require('./run-ledger');
 const {
   validateRunId,
   validateStageName,
   stageFindingsQueueFile,
-  stageLogsDir
+  stageLogsDir,
+  runDir
 } = require('./paths');
 const { markDeadStageWorkers } = require('./health-check');
 const { launchCurrentGroup, completeStage, nextStage, stopRun } = require('./lifecycle');
 const { cleanupOrphanedSnapshots } = require('./snapshot-manager');
+const { removePath } = require('./io');
 const { nextFinding, recordDecision, requireFlag } = require('./verification');
 
 function printHelp() {
@@ -116,8 +119,24 @@ function cleanRuns(flags) {
   const terminalRuns = listRuns(cwd).filter(entry => TERMINAL_STATUSES.has(entry.run.status));
   let logsRemoved = 0;
   let findingsRemoved = 0;
+  const removedDeadRuns = [];
 
   for (const entry of terminalRuns) {
+    // Cancelled/failed runs are dead — delete the entire run directory
+    if (entry.run.status === 'cancelled' || entry.run.status === 'failed') {
+      if (!flags['logs-only']) {
+        try {
+          for (const group of entry.run.groups || []) {
+            try { cleanupCompletedGroupArtifacts(cwd, entry.runId, group.index); } catch (_) {}
+          }
+          removePath(runDir(cwd, entry.runId));
+          removedDeadRuns.push(entry.runId);
+        } catch (err) {
+          process.stderr.write(`Warning: could not remove run ${entry.runId}: ${err.message}\n`);
+        }
+      }
+      continue;
+    }
     for (const stage of entry.run.stages) {
       const logsPath = stageLogsDir(cwd, entry.runId, stage.name);
       if (flags['logs-only'] || retention.deleteCompletedLogs) {
@@ -142,12 +161,12 @@ function cleanRuns(flags) {
     }
   }
 
-  const removedRuns = flags['logs-only'] ? [] : pruneTerminalRuns(cwd, retention);
+  const prunedRuns = flags['logs-only'] ? [] : pruneTerminalRuns(cwd, retention);
   process.stdout.write(JSON.stringify({
     ok: true,
     logsRemoved,
     findingsRemoved,
-    removedRuns
+    removedRuns: [...removedDeadRuns, ...prunedRuns]
   }, null, 2) + '\n');
 }
 

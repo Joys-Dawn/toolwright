@@ -1,6 +1,6 @@
 {
   "name": "agentwright",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Runs chained audit pipelines with a spawned auditor and in-session verification/fixes.",
   "author": {
     "name": "yiann"

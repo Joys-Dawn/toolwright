@@ -353,6 +353,51 @@ describe('coordinator CLI', () => {
       assert.ok(parsed.logsRemoved >= 1);
     });
 
+    it('deletes entire run directory for cancelled runs', () => {
+      const created = createRun(tmpDir, { pipelineName: null, groups: [['correctness']], stages: ['correctness'], scope: '--diff' });
+      const data = readJson(runFile(tmpDir, created.runId));
+      data.status = 'cancelled';
+      for (const s of data.stages) s.status = 'cancelled';
+      for (const g of data.groups) g.status = 'cancelled';
+      writeJson(runFile(tmpDir, created.runId), data);
+      const logsPath = stageLogsDir(tmpDir, created.runId, 'correctness');
+      fs.mkdirSync(logsPath, { recursive: true });
+      fs.writeFileSync(path.join(logsPath, 'test.log'), 'log data', 'utf8');
+
+      const result = run(['clean'], tmpDir);
+      const parsed = JSON.parse(result.stdout);
+      assert.ok(parsed.ok);
+      assert.ok(parsed.removedRuns.includes(created.runId));
+      const { runDir } = require('../../coordinator/paths');
+      assert.equal(fs.existsSync(runDir(tmpDir, created.runId)), false);
+    });
+
+    it('deletes entire run directory for failed runs', () => {
+      const created = createRun(tmpDir, { pipelineName: null, groups: [['correctness']], stages: ['correctness'], scope: '--diff' });
+      const data = readJson(runFile(tmpDir, created.runId));
+      data.status = 'failed';
+      writeJson(runFile(tmpDir, created.runId), data);
+
+      const result = run(['clean'], tmpDir);
+      const parsed = JSON.parse(result.stdout);
+      assert.ok(parsed.ok);
+      assert.ok(parsed.removedRuns.includes(created.runId));
+    });
+
+    it('does not delete cancelled runs with --logs-only', () => {
+      const created = createRun(tmpDir, { pipelineName: null, groups: [['correctness']], stages: ['correctness'], scope: '--diff' });
+      const data = readJson(runFile(tmpDir, created.runId));
+      data.status = 'cancelled';
+      writeJson(runFile(tmpDir, created.runId), data);
+
+      const result = run(['clean', '--logs-only'], tmpDir);
+      const parsed = JSON.parse(result.stdout);
+      assert.ok(parsed.ok);
+      assert.deepEqual(parsed.removedRuns, []);
+      const { runDir } = require('../../coordinator/paths');
+      assert.equal(fs.existsSync(runDir(tmpDir, created.runId)), true);
+    });
+
     it('respects --logs-only flag', () => {
       const created = createRun(tmpDir, { pipelineName: null, groups: [['correctness']], stages: ['correctness'], scope: '--diff' });
       const data = readJson(runFile(tmpDir, created.runId));
