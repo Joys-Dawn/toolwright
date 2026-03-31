@@ -1,43 +1,45 @@
 {
-  "SessionStart": [
-    {
-      "hooks": [
-        {
-          "type": "command",
-          "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/register.js\""
-        }
-      ]
-    }
-  ],
-  "PostToolUse": [
-    {
-      "hooks": [
-        {
-          "type": "command",
-          "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/heartbeat.js\""
-        }
-      ]
-    }
-  ],
-  "PreToolUse": [
-    {
-      "matcher": "Edit|Write|Read|Glob|Grep",
-      "hooks": [
-        {
-          "type": "command",
-          "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.js\""
-        }
-      ]
-    }
-  ],
-  "SessionEnd": [
-    {
-      "hooks": [
-        {
-          "type": "command",
-          "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/cleanup.js\""
-        }
-      ]
-    }
-  ]
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/register.js\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/heartbeat.js\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|Read|Glob|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.js\""
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/cleanup.js\""
+          }
+        ]
+      }
+    ]
+  }
 }
