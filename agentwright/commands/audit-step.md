@@ -1,22 +1,30 @@
 ---
 description: Run a single audit stage
 argument-hint: [stage] [scope]
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash(node:*), Bash(git:*), Bash(npx:*), Bash(npm:*), Bash(ruff:*)
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash(node *), Bash(git *), Bash(npx *), Bash(npm *), Bash(ruff *)
 ---
 
 Run a one-stage audit pipeline using the provided stage and scope.
 
 Interpret the first token of `$ARGUMENTS` as the stage and the remaining text as the scope. If the scope is missing, use `--diff`.
 
-Equivalent coordinator call shape:
+1. Start the stage:
 !`node "${CLAUDE_PLUGIN_ROOT}/coordinator/index.js" start-stage "$ARGUMENTS"`
+Note the `runId` from the JSON output.
 
-Then follow the same streamed verifier/fixer workflow used by `audit-run` for that single stage only:
-- consume `findingsQueueFile` incrementally
-- verify each finding against the live repo as it arrives
-- apply objectively correct fixes immediately (see `audit-run` rules for fix vs. defer criteria and file contention handling)
-- mark subjective, debatable, or broad findings as `valid_needs_approval`
-- wait for `metaFile.auditDone`, `metaFile.auditSucceeded`, and full finding coverage before `complete-stage`
-- after completion, if any fixes were applied, dispatch the `agentwright:verifier` subagent with a summary of applied fixes (see `audit-run` step 14). Do not blindly accept the verifier's claims — re-read cited code yourself and independently confirm any reported issue is real before acting on it.
-- present the final summary as a concise per-finding table (see `audit-run` step 15 for format)
-- if any findings were deferred, present them to the user and wait for explicit approval before implementing
+2. Follow the same poll loop as `audit-run`:
+   - Call `next-finding --run "<runId>"` to get findings one at a time
+   - Re-read cited code in the live repo, verify, fix if valid
+   - Call `record-decision` for each finding
+   - Repeat until `"done"`
+
+3. Apply the same fix vs. defer rules as `audit-run`:
+   - **Fix immediately** when objectively correct
+   - **Mark `valid_needs_approval`** for judgment calls or large refactors
+   - Skip file-contention-blocked findings (they reappear on next poll)
+
+4. After completion, if any fixes were applied, dispatch the `agentwright:verifier` subagent. Do not blindly accept verifier claims.
+
+5. Present a concise per-finding summary table (see `audit-run` for format).
+
+6. If any findings were deferred, present them to the user and wait for explicit approval.

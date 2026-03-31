@@ -104,7 +104,8 @@ async function launchCurrentGroup(cwd, run) {
       ], {
         cwd,
         detached: true,
-        stdio: 'ignore'
+        stdio: 'ignore',
+        windowsHide: true
       });
     } catch (spawnError) {
       for (const prev of spawnedWorkers) {
@@ -224,7 +225,7 @@ function completeStage(runId, stageName, result) {
   };
 }
 
-function nextStage(runId) {
+async function nextStage(runId) {
   const cwd = process.cwd();
   validateRunId(runId);
   let run = loadRun(cwd, runId);

@@ -18,7 +18,7 @@ const {
   runFile,
   summaryFile,
   groupSnapshotFile,
-  stageFindingsFile,
+  stageDir,
   stageFindingsQueueFile,
   stageDecisionsFile,
   stageMetaFile,
@@ -189,12 +189,8 @@ function createRun(cwd, spec) {
       groupIndex: spec.groups.findIndex(group => group.includes(name)),
       name,
       status: 'pending',
-      findingsFile: path.basename(stageFindingsFile(cwd, runId, name)),
-      findingsQueueFile: path.basename(stageFindingsQueueFile(cwd, runId, name)),
-      metaFile: path.basename(stageMetaFile(cwd, runId, name)),
-      verifierFile: path.basename(stageVerifierFile(cwd, runId, name)),
-      snapshotFile: path.basename(groupSnapshotFile(cwd, runId, spec.groups.findIndex(group => group.includes(name)))),
-      decisionsFile: path.basename(stageDecisionsFile(cwd, runId, name))
+      stageDir: path.relative(runDir(cwd, runId), stageDir(cwd, runId, name)),
+      snapshotFile: path.basename(groupSnapshotFile(cwd, runId, spec.groups.findIndex(group => group.includes(name))))
     })),
     currentGroupIndex: 0,
     activeStages: spec.groups[0] ? spec.groups[0].slice() : [],
@@ -276,7 +272,6 @@ function cleanupCompletedStageArtifacts(cwd, runId, stageName, retention) {
     removePath(stageLogsDir(cwd, runId, stageName));
   }
   if (retention.deleteCompletedFindings) {
-    removePath(stageFindingsFile(cwd, runId, stageName));
     removePath(stageFindingsQueueFile(cwd, runId, stageName));
   }
 }

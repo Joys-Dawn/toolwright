@@ -117,7 +117,8 @@ function spawnAuditor({ cwd, pluginRoot, prompt, logsDir, runId, stageName, onEv
   ];
   const child = spawn('claude', args, {
     cwd,
-    stdio: ['ignore', 'pipe', 'pipe']
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true
   });
   child.stdout.pipe(stdoutLog, { end: false });
   child.stderr.pipe(stderrLog, { end: false });

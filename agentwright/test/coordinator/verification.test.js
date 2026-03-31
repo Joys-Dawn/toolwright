@@ -1,0 +1,397 @@
+'use strict';
+
+const { describe, it, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { execFileSync } = require('child_process');
+
+const { nextFinding, recordDecision } = require('../../coordinator/verification');
+const {
+  createRun,
+  updateStageStatus,
+  updateGroupStatus,
+  loadRun
+} = require('../../coordinator/run-ledger');
+const {
+  stageMetaFile,
+  stageFindingsQueueFile,
+  stageDecisionsFile,
+  stageVerifierFile,
+  groupSnapshotFile,
+  expectedGroupSnapshotPath
+} = require('../../coordinator/paths');
+const { writeJson, readJson, appendJsonLine } = require('../../coordinator/io');
+
+const COORDINATOR = path.join(__dirname, '..', '..', 'coordinator', 'index.js');
+
+function makeFinding(stageName, index) {
+  return {
+    type: 'finding',
+    finding: {
+      id: `${stageName}-${index}`,
+      severity: 'medium',
+      title: `Test finding ${index}`,
+      file: `src/file${index}.js`,
+      problem: 'Test problem',
+      fix: 'Test fix',
+      evidence: 'Test evidence'
+    }
+  };
+}
+
+function setupStageFiles(tmpDir, runId, stageName, findingCount, opts = {}) {
+  const stageStatus = opts.stageStatus || 'awaiting_verification_completion';
+  updateStageStatus(tmpDir, runId, stageName, stageStatus, {
+    auditorExitCode: 0,
+    findingsCount: findingCount
+  });
+
+  const auditDone = opts.auditDone !== undefined ? opts.auditDone : true;
+  writeJson(stageMetaFile(tmpDir, runId, stageName), {
+    stage: stageName,
+    status: auditDone ? 'done' : 'auditing',
+    auditDone,
+    auditSucceeded: auditDone ? true : undefined,
+    emittedCount: findingCount,
+    auditorExitCode: auditDone ? 0 : undefined,
+    updatedAt: new Date().toISOString()
+  });
+
+  const queuePath = stageFindingsQueueFile(tmpDir, runId, stageName);
+  fs.mkdirSync(path.dirname(queuePath), { recursive: true });
+  fs.writeFileSync(queuePath, '', 'utf8');
+  for (let i = 1; i <= findingCount; i++) {
+    appendJsonLine(queuePath, makeFinding(stageName, i));
+  }
+
+  writeJson(stageVerifierFile(tmpDir, runId, stageName), {
+    stage: stageName,
+    lastConsumedIndex: 0,
+    processedFindingIds: [],
+    fixedCount: 0,
+    invalidCount: 0,
+    deferredCount: 0,
+    updatedAt: new Date().toISOString()
+  });
+
+  writeJson(stageDecisionsFile(tmpDir, runId, stageName), {
+    stage: stageName,
+    decisions: []
+  });
+}
+
+function setupRunWithFindings(tmpDir, stageName, findingCount, opts = {}) {
+  const spec = {
+    pipelineName: null,
+    groups: opts.groups || [[stageName]],
+    stages: opts.stages || [stageName],
+    scope: '--diff'
+  };
+  const created = createRun(tmpDir, spec);
+  const runId = created.runId;
+
+  updateGroupStatus(tmpDir, runId, 0, 'auditing');
+  setupStageFiles(tmpDir, runId, stageName, findingCount, opts);
+
+  const snapshotPath = expectedGroupSnapshotPath(runId, 0);
+  fs.mkdirSync(snapshotPath, { recursive: true });
+  writeJson(groupSnapshotFile(tmpDir, runId, 0), {
+    type: 'temp-copy',
+    path: snapshotPath,
+    createdAt: new Date().toISOString()
+  });
+
+  return { runId, created };
+}
+
+function runCli(args, cwd) {
+  try {
+    const stdout = execFileSync(process.execPath, [COORDINATOR, ...args], {
+      cwd,
+      encoding: 'utf8',
+      timeout: 15000,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    return { exitCode: 0, stdout, stderr: '' };
+  } catch (e) {
+    return { exitCode: e.status, stdout: e.stdout || '', stderr: e.stderr || '' };
+  }
+}
+
+let tmpDir;
+let origCwd;
+
+beforeEach(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verification-test-'));
+  origCwd = process.cwd();
+  process.chdir(tmpDir);
+});
+
+afterEach(() => {
+  process.chdir(origCwd);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+describe('nextFinding', () => {
+  it('returns finding when unprocessed findings exist', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 2);
+    const result = await nextFinding(runId);
+    assert.equal(result.status, 'finding');
+    assert.equal(result.stage, 'correctness');
+    assert.equal(result.finding.id, 'correctness-1');
+    assert.equal(result.progress.processed, 0);
+    assert.equal(result.progress.total, 2);
+  });
+
+  it('skips already-processed findings', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 2);
+    const verifier = readJson(stageVerifierFile(tmpDir, runId, 'correctness'));
+    verifier.processedFindingIds.push('correctness-1');
+    verifier.lastConsumedIndex = 1;
+    writeJson(stageVerifierFile(tmpDir, runId, 'correctness'), verifier);
+
+    const result = await nextFinding(runId);
+    assert.equal(result.status, 'finding');
+    assert.equal(result.finding.id, 'correctness-2');
+    assert.equal(result.progress.processed, 1);
+  });
+
+  it('returns waiting when auditor running and no new findings', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 0, {
+      auditDone: false,
+      stageStatus: 'auditing'
+    });
+    const result = await nextFinding(runId);
+    assert.equal(result.status, 'waiting');
+    assert.equal(result.stage, 'correctness');
+    assert.equal(result.progress.auditDone, false);
+  });
+
+  it('returns done when pipeline completed', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 0);
+    const { mutateRun } = require('../../coordinator/run-ledger');
+    mutateRun(tmpDir, runId, run => {
+      run.status = 'completed';
+      for (const stage of run.stages) stage.status = 'completed';
+      for (const group of run.groups) group.status = 'completed';
+      return run;
+    });
+    const result = await nextFinding(runId);
+    assert.equal(result.status, 'done');
+  });
+
+  it('returns error for audit_failed stage', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 0, {
+      stageStatus: 'audit_failed',
+      auditDone: true
+    });
+    writeJson(stageMetaFile(tmpDir, runId, 'correctness'), {
+      stage: 'correctness',
+      status: 'failed',
+      auditDone: true,
+      auditSucceeded: false,
+      error: 'auditor crashed',
+      auditorExitCode: 1
+    });
+    updateStageStatus(tmpDir, runId, 'correctness', 'audit_failed');
+
+    const result = await nextFinding(runId);
+    assert.equal(result.status, 'error');
+    assert.equal(result.stage, 'correctness');
+  });
+
+  it('skips completed stages and returns finding from next active stage', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1, {
+      groups: [['correctness', 'security']],
+      stages: ['correctness', 'security']
+    });
+    setupStageFiles(tmpDir, runId, 'security', 1);
+    updateStageStatus(tmpDir, runId, 'correctness', 'completed');
+
+    const result = await nextFinding(runId);
+    assert.equal(result.status, 'finding');
+    assert.equal(result.stage, 'security');
+    assert.equal(result.finding.id, 'security-1');
+  });
+
+  it('auto-completes stage when all decided and auditDone', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1);
+    writeJson(stageDecisionsFile(tmpDir, runId, 'correctness'), {
+      stage: 'correctness',
+      decisions: [{ findingId: 'correctness-1', decision: 'valid', action: 'fixed', rationale: 'test' }]
+    });
+    const verifier = readJson(stageVerifierFile(tmpDir, runId, 'correctness'));
+    verifier.processedFindingIds.push('correctness-1');
+    writeJson(stageVerifierFile(tmpDir, runId, 'correctness'), verifier);
+
+    const result = await nextFinding(runId);
+    assert.equal(result.status, 'done');
+  });
+
+  it('handles empty audit (0 findings, auditDone)', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 0);
+    const result = await nextFinding(runId);
+    assert.equal(result.status, 'done');
+  });
+});
+
+describe('recordDecision', () => {
+  it('records a decision and updates verifier file', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 2);
+    const result = await recordDecision(runId, 'correctness', 'correctness-1', {
+      decision: 'valid',
+      action: 'fixed',
+      rationale: 'confirmed bug',
+      filesChanged: ['src/file1.js'],
+      evidence: 'checked line 42'
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.findingId, 'correctness-1');
+    assert.equal(result.decision, 'valid');
+    assert.equal(result.stageComplete, false);
+
+    const decisions = readJson(stageDecisionsFile(tmpDir, runId, 'correctness'));
+    assert.equal(decisions.decisions.length, 1);
+    assert.equal(decisions.decisions[0].findingId, 'correctness-1');
+
+    const verifier = readJson(stageVerifierFile(tmpDir, runId, 'correctness'));
+    assert.ok(verifier.processedFindingIds.includes('correctness-1'));
+    assert.equal(verifier.fixedCount, 1);
+  });
+
+  it('rejects duplicate findingId', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 2);
+    await recordDecision(runId, 'correctness', 'correctness-1', { decision: 'valid', action: 'fixed' });
+    await assert.rejects(
+      () => recordDecision(runId, 'correctness', 'correctness-1', { decision: 'valid' }),
+      /Duplicate decision/
+    );
+  });
+
+  it('increments fixedCount for valid+fixed', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 2);
+    await recordDecision(runId, 'correctness', 'correctness-1', { decision: 'valid', action: 'fixed' });
+    const verifier = readJson(stageVerifierFile(tmpDir, runId, 'correctness'));
+    assert.equal(verifier.fixedCount, 1);
+    assert.equal(verifier.invalidCount, 0);
+    assert.equal(verifier.deferredCount, 0);
+  });
+
+  it('increments invalidCount for invalid', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 2);
+    await recordDecision(runId, 'correctness', 'correctness-1', { decision: 'invalid' });
+    const verifier = readJson(stageVerifierFile(tmpDir, runId, 'correctness'));
+    assert.equal(verifier.invalidCount, 1);
+  });
+
+  it('increments deferredCount for valid_needs_approval', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 2);
+    await recordDecision(runId, 'correctness', 'correctness-1', { decision: 'valid_needs_approval' });
+    const verifier = readJson(stageVerifierFile(tmpDir, runId, 'correctness'));
+    assert.equal(verifier.deferredCount, 1);
+  });
+
+  it('auto-completes stage when all findings decided and auditDone', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 2);
+    await recordDecision(runId, 'correctness', 'correctness-1', { decision: 'valid', action: 'fixed' });
+    const result = await recordDecision(runId, 'correctness', 'correctness-2', { decision: 'invalid' });
+    assert.equal(result.stageComplete, true);
+    assert.equal(result.pipelineComplete, true);
+  });
+
+  it('does not auto-complete when auditDone is false', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1, {
+      auditDone: false,
+      stageStatus: 'auditing'
+    });
+    const result = await recordDecision(runId, 'correctness', 'correctness-1', { decision: 'valid', action: 'fixed' });
+    assert.equal(result.stageComplete, false);
+  });
+
+  it('does not auto-complete when stage status is not awaiting_verification_completion', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1, {
+      stageStatus: 'auditing'
+    });
+    const result = await recordDecision(runId, 'correctness', 'correctness-1', { decision: 'valid', action: 'fixed' });
+    assert.equal(result.stageComplete, false);
+  });
+
+  it('derives result approval when any decision is valid_needs_approval', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 2);
+    await recordDecision(runId, 'correctness', 'correctness-1', { decision: 'valid', action: 'fixed' });
+    const result = await recordDecision(runId, 'correctness', 'correctness-2', { decision: 'valid_needs_approval' });
+    assert.equal(result.stageComplete, true);
+    const run = loadRun(tmpDir, runId);
+    const stage = run.stages.find(s => s.name === 'correctness');
+    assert.equal(stage.verificationResult, 'approval');
+  });
+
+  it('derives result rejected when all decisions are invalid', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 2);
+    await recordDecision(runId, 'correctness', 'correctness-1', { decision: 'invalid' });
+    const result = await recordDecision(runId, 'correctness', 'correctness-2', { decision: 'invalid' });
+    assert.equal(result.stageComplete, true);
+    const run = loadRun(tmpDir, runId);
+    const stage = run.stages.find(s => s.name === 'correctness');
+    assert.equal(stage.verificationResult, 'rejected');
+  });
+
+  it('derives result accepted for mixed valid/invalid', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 2);
+    await recordDecision(runId, 'correctness', 'correctness-1', { decision: 'valid', action: 'fixed' });
+    const result = await recordDecision(runId, 'correctness', 'correctness-2', { decision: 'invalid' });
+    assert.equal(result.stageComplete, true);
+    const run = loadRun(tmpDir, runId);
+    const stage = run.stages.find(s => s.name === 'correctness');
+    assert.equal(stage.verificationResult, 'accepted');
+  });
+
+  it('validates decision is one of allowed values', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1);
+    await assert.rejects(
+      () => recordDecision(runId, 'correctness', 'correctness-1', { decision: 'bogus' }),
+      /Invalid decision/
+    );
+  });
+
+  it('validates findingId is non-empty', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1);
+    await assert.rejects(
+      () => recordDecision(runId, 'correctness', '', { decision: 'valid' }),
+      /non-empty string/
+    );
+  });
+});
+
+describe('CLI integration', () => {
+  it('next-finding via CLI', () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1);
+    const { exitCode, stdout } = runCli(['next-finding', '--run', runId], tmpDir);
+    assert.equal(exitCode, 0);
+    const result = JSON.parse(stdout);
+    assert.equal(result.status, 'finding');
+    assert.equal(result.finding.id, 'correctness-1');
+  });
+
+  it('record-decision via CLI', () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 2);
+    const { exitCode, stdout } = runCli([
+      'record-decision',
+      '--run', runId,
+      '--stage', 'correctness',
+      '--finding', 'correctness-1',
+      '--decision', 'valid',
+      '--action', 'fixed',
+      '--rationale', 'test fix',
+      '--files-changed', 'a.js,b.js',
+      '--evidence', 'checked it'
+    ], tmpDir);
+    assert.equal(exitCode, 0);
+    const result = JSON.parse(stdout);
+    assert.equal(result.ok, true);
+    assert.equal(result.findingId, 'correctness-1');
+  });
+});
+

@@ -140,6 +140,18 @@ Orphaned snapshots (from crashed processes) are automatically cleaned up on the 
 
 Snapshots are stored under `<tmpdir>/agentwright-snapshots/` and removed after each group completes.
 
+## Verification CLI
+
+The coordinator exposes two CLI commands (via `verification.js`) that the verifier/fixer workflow uses to process findings:
+
+- **`next-finding --run <runId>`** — Polls for the next unprocessed finding across all active stages in the current group. Returns one of:
+  - `"waiting"` — audit is still running, no new findings yet
+  - `"finding"` — a finding to verify (includes the finding object and progress)
+  - `"error"` — the auditor failed
+  - `"done"` — all stages complete, pipeline finished
+
+- **`record-decision --run <runId> --stage <name> --finding <id> --decision <valid|invalid|valid_needs_approval> [--action fixed|none] [--rationale "..."] [--files-changed "a.js,b.js"] [--evidence "..."]`** — Records a decision for a finding. When all findings in a stage are decided, the stage auto-completes and the pipeline auto-advances to the next group.
+
 ## State
 
 Run state is stored under `.claude/audit-runs/<run-id>/`:
@@ -149,12 +161,11 @@ Run state is stored under `.claude/audit-runs/<run-id>/`:
 | `run.json` | Run metadata, stage statuses, group state |
 | `summary.json` | Completed stages, rejected findings, pending approvals |
 | `group-<N>-snapshot.json` | Snapshot metadata for parallel group N |
-| `stage-<name>-findings.json` | Final findings after audit completes |
-| `stage-<name>-findings.jsonl` | Streamed findings (append-only during audit) |
-| `stage-<name>-decisions.json` | Verifier decisions for each finding |
-| `stage-<name>-meta.json` | Live audit progress (emitted count, status) |
-| `stage-<name>-verifier.json` | Verifier progress tracking |
-| `stage-<name>-logs/` | Raw auditor stdout/stderr/parse-errors |
+| `stages/<name>/findings.jsonl` | Streamed findings (append-only during audit) |
+| `stages/<name>/decisions.json` | Verifier decisions for each finding |
+| `stages/<name>/meta.json` | Live audit progress (emitted count, status) |
+| `stages/<name>/verifier.json` | Verifier progress tracking |
+| `stages/<name>/logs/` | Raw auditor stdout/stderr/parse-errors |
 
 Retention defaults: keep 20 completed runs, prune after 14 days, delete logs after verification, keep findings.
 

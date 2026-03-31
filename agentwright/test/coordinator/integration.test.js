@@ -11,7 +11,6 @@ const { createRun, loadRun, updateStageStatus, updateGroupStatus, mutateRun } = 
 const {
   groupSnapshotFile,
   stageMetaFile,
-  stageFindingsFile,
   stageFindingsQueueFile,
   stageDecisionsFile,
   stageVerifierFile,
@@ -128,13 +127,6 @@ describe('integration: real auditor', () => {
     assert.equal(meta.auditDone, true, 'Audit should be marked done');
     assert.ok(typeof meta.emittedCount === 'number');
     assert.ok(meta.summary, 'Summary should be present');
-
-    // Findings file should exist and be valid JSON
-    const findings = readJson(stageFindingsFile(tmpDir, run.runId, 'correctness'));
-    assert.ok(findings, 'Findings file should exist');
-    assert.equal(findings.auditType, 'correctness');
-    assert.ok(Array.isArray(findings.findings));
-    assert.equal(findings.findings.length, meta.emittedCount);
 
     // Queue file should have been written with JSONL entries
     const queueLines = readJsonLines(stageFindingsQueueFile(tmpDir, run.runId, 'correctness'));

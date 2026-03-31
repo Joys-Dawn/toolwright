@@ -62,28 +62,28 @@ function groupSnapshotFile(cwd, runId, groupIndex) {
   return path.join(runDir(cwd, runId), `group-${groupIndex}-snapshot.json`);
 }
 
-function stageFindingsFile(cwd, runId, stageName) {
-  return path.join(runDir(cwd, runId), `stage-${validateStageName(stageName)}-findings.json`);
+function stageDir(cwd, runId, stageName) {
+  return path.join(runDir(cwd, runId), 'stages', validateStageName(stageName));
 }
 
 function stageFindingsQueueFile(cwd, runId, stageName) {
-  return path.join(runDir(cwd, runId), `stage-${validateStageName(stageName)}-findings.jsonl`);
+  return path.join(stageDir(cwd, runId, stageName), 'findings.jsonl');
 }
 
 function stageDecisionsFile(cwd, runId, stageName) {
-  return path.join(runDir(cwd, runId), `stage-${validateStageName(stageName)}-decisions.json`);
+  return path.join(stageDir(cwd, runId, stageName), 'decisions.json');
 }
 
 function stageMetaFile(cwd, runId, stageName) {
-  return path.join(runDir(cwd, runId), `stage-${validateStageName(stageName)}-meta.json`);
+  return path.join(stageDir(cwd, runId, stageName), 'meta.json');
 }
 
 function stageVerifierFile(cwd, runId, stageName) {
-  return path.join(runDir(cwd, runId), `stage-${validateStageName(stageName)}-verifier.json`);
+  return path.join(stageDir(cwd, runId, stageName), 'verifier.json');
 }
 
 function stageLogsDir(cwd, runId, stageName) {
-  return path.join(runDir(cwd, runId), `stage-${validateStageName(stageName)}-logs`);
+  return path.join(stageDir(cwd, runId, stageName), 'logs');
 }
 
 module.exports = {
@@ -98,7 +98,7 @@ module.exports = {
   runFile,
   summaryFile,
   groupSnapshotFile,
-  stageFindingsFile,
+  stageDir,
   stageFindingsQueueFile,
   stageDecisionsFile,
   stageMetaFile,

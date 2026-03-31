@@ -1,7 +1,7 @@
 ---
 name: collab-done
 description: Use when you have finished your current task in a multi-agent codebase and need to release your file claims so other agents are unblocked.
-allowed-tools: Bash(node:*)
+allowed-tools: Bash(node *)
 ---
 
 Clear the current session from collab coordination state.

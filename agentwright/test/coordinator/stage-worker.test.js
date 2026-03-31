@@ -11,7 +11,6 @@ const { createRun, updateStageStatus, updateGroupStatus, mutateRun } = require('
 const {
   groupSnapshotFile,
   stageMetaFile,
-  stageFindingsFile,
   stageFindingsQueueFile,
   stageLogsDir,
   getManagedSnapshotRoot,

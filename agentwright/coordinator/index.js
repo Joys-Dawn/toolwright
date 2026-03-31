@@ -15,12 +15,13 @@ const {
 const {
   validateRunId,
   validateStageName,
-  stageFindingsFile,
+  stageFindingsQueueFile,
   stageLogsDir
 } = require('./paths');
 const { markDeadStageWorkers } = require('./health-check');
 const { launchCurrentGroup, completeStage, nextStage } = require('./lifecycle');
 const { cleanupOrphanedSnapshots } = require('./snapshot-manager');
+const { nextFinding, recordDecision, requireFlag } = require('./verification');
 
 function printHelp() {
   process.stdout.write(
@@ -31,6 +32,8 @@ function printHelp() {
       '  node coordinator/index.js status [runId]',
       '  node coordinator/index.js complete-stage --run <runId> --stage <name> [--result accepted|rejected|approval]',
       '  node coordinator/index.js next --run <runId>',
+      '  node coordinator/index.js next-finding --run <runId>',
+      '  node coordinator/index.js record-decision --run <runId> --stage <name> --finding <id> --decision <valid|invalid|valid_needs_approval> [--action fixed|none] [--rationale "..."] [--files-changed "a.js,b.js"] [--evidence "..."]',
       '  node coordinator/index.js clean [--logs-only]',
       '  node coordinator/index.js --help'
     ].join('\n') + '\n'
@@ -125,7 +128,7 @@ function cleanRuns(flags) {
         }
       }
       if (!flags['logs-only'] && retention.deleteCompletedFindings) {
-        const findingsPath = stageFindingsFile(cwd, entry.runId, stage.name);
+        const findingsPath = stageFindingsQueueFile(cwd, entry.runId, stage.name);
         if (fs.existsSync(findingsPath)) {
           cleanupCompletedStageArtifacts(cwd, entry.runId, stage.name, {
             deleteCompletedLogs: false,
@@ -183,6 +186,30 @@ async function main() {
   }
   if (command === 'next') {
     const result = await nextStage(flags.run || positional[0]);
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+    return;
+  }
+  if (command === 'next-finding') {
+    const runId = requireFlag(flags, 'run');
+    const result = await nextFinding(runId);
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+    return;
+  }
+  if (command === 'record-decision') {
+    const runId = requireFlag(flags, 'run');
+    const stage = requireFlag(flags, 'stage');
+    const finding = requireFlag(flags, 'finding');
+    const decision = requireFlag(flags, 'decision');
+    const filesChanged = flags['files-changed']
+      ? flags['files-changed'].split(',').map(f => f.trim()).filter(Boolean)
+      : [];
+    const result = await recordDecision(runId, stage, finding, {
+      decision,
+      action: flags.action || 'none',
+      rationale: flags.rationale || '',
+      filesChanged,
+      evidence: flags.evidence || ''
+    });
     process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     return;
   }

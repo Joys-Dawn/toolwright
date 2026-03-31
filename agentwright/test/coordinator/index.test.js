@@ -11,7 +11,6 @@ const { createRun, loadRun, updateStageStatus, updateGroupStatus, mutateRun } = 
 const {
   runFile,
   stageMetaFile,
-  stageFindingsFile,
   stageFindingsQueueFile,
   stageDecisionsFile,
   stageVerifierFile,

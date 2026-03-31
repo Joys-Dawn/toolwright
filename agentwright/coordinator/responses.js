@@ -4,7 +4,6 @@ const fs = require('fs');
 const path = require('path');
 const {
   groupSnapshotFile,
-  stageFindingsFile,
   stageFindingsQueueFile,
   stageDecisionsFile,
   stageMetaFile,
@@ -20,7 +19,6 @@ function buildStageResponse(cwd, run, currentStage, extra = {}) {
     currentStage: currentStage.name,
     scope: run.scope,
     status: currentStage.status,
-    findingsFile: stageFindingsFile(cwd, run.runId, currentStage.name),
     findingsQueueFile: stageFindingsQueueFile(cwd, run.runId, currentStage.name),
     decisionsFile: stageDecisionsFile(cwd, run.runId, currentStage.name),
     metaFile: stageMetaFile(cwd, run.runId, currentStage.name),
@@ -57,11 +55,6 @@ function initializeStageFiles(cwd, run, stageName, groupIndex) {
   const queuePath = stageFindingsQueueFile(cwd, run.runId, stageName);
   fs.mkdirSync(path.dirname(queuePath), { recursive: true });
   fs.writeFileSync(queuePath, '', 'utf8');
-  writeJson(stageFindingsFile(cwd, run.runId, stageName), {
-    auditType: stageName,
-    summary: '',
-    findings: []
-  });
   writeJson(stageMetaFile(cwd, run.runId, stageName), {
     stage: stageName,
     status: 'preparing_snapshot',

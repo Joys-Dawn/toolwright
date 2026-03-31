@@ -9,7 +9,6 @@ const {
   expectedGroupSnapshotPath,
   getManagedSnapshotRoot,
   groupSnapshotFile,
-  stageFindingsFile,
   stageFindingsQueueFile,
   stageMetaFile,
   stageLogsDir
@@ -103,7 +102,6 @@ async function main() {
     throw new Error(`Stage ${stageName} is not configured as a skill stage.`);
   }
 
-  const findingsPath = stageFindingsFile(cwd, runId, stageName);
   const findingsQueuePath = stageFindingsQueueFile(cwd, runId, stageName);
   const metaPath = stageMetaFile(cwd, runId, stageName);
   const logsDir = stageLogsDir(cwd, runId, stageName);
@@ -217,11 +215,6 @@ async function main() {
     };
   }
 
-  writeJson(findingsPath, {
-    auditType: stageName,
-    summary: doneMarker.summary || '',
-    findings
-  });
   const stageFailed = !sawDoneMarker || Boolean(doneMarker.error) || exitCode !== 0;
   saveStageMeta({
     status: stageFailed ? 'failed' : 'done',

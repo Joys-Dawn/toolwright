@@ -1,7 +1,7 @@
 ---
 name: collab-context
 description: Use when working in a multi-agent codebase and you need to declare or update what files and functions you are working on so other agents can see your claims and avoid conflicts.
-allowed-tools: Bash(node:*)
+allowed-tools: Bash(node *)
 ---
 
 Declare or update what you're currently working on for multi-agent awareness.

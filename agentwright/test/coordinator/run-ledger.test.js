@@ -32,7 +32,6 @@ const {
   runFile,
   summaryFile,
   groupSnapshotFile,
-  stageFindingsFile,
   stageFindingsQueueFile,
   stageDecisionsFile,
   stageMetaFile,
@@ -207,17 +206,19 @@ describe('run-ledger', () => {
       assert.ok(groupSnapshotFile(tmpDir, runId, 0).includes('group-0-snapshot.json'));
     });
 
-    it('stage file builders include stage name', () => {
-      assert.ok(stageFindingsFile(tmpDir, runId, 'correctness').includes('stage-correctness-findings.json'));
-      assert.ok(stageFindingsQueueFile(tmpDir, runId, 'correctness').includes('stage-correctness-findings.jsonl'));
-      assert.ok(stageDecisionsFile(tmpDir, runId, 'correctness').includes('stage-correctness-decisions.json'));
-      assert.ok(stageMetaFile(tmpDir, runId, 'correctness').includes('stage-correctness-meta.json'));
-      assert.ok(stageVerifierFile(tmpDir, runId, 'correctness').includes('stage-correctness-verifier.json'));
-      assert.ok(stageLogsDir(tmpDir, runId, 'correctness').includes('stage-correctness-logs'));
+    it('stage file builders use per-stage subdirectories', () => {
+      const sep = path.sep === '\\' ? '\\\\' : '/';
+      const pattern = new RegExp(`stages${sep}correctness${sep}`);
+      assert.ok(pattern.test(stageFindingsQueueFile(tmpDir, runId, 'correctness')));
+      assert.ok(stageFindingsQueueFile(tmpDir, runId, 'correctness').endsWith('findings.jsonl'));
+      assert.ok(stageDecisionsFile(tmpDir, runId, 'correctness').endsWith('decisions.json'));
+      assert.ok(stageMetaFile(tmpDir, runId, 'correctness').endsWith('meta.json'));
+      assert.ok(stageVerifierFile(tmpDir, runId, 'correctness').endsWith('verifier.json'));
+      assert.ok(stageLogsDir(tmpDir, runId, 'correctness').endsWith('logs'));
     });
 
     it('stage file builders reject invalid stage names', () => {
-      assert.throws(() => stageFindingsFile(tmpDir, runId, '-bad'));
+      assert.throws(() => stageFindingsQueueFile(tmpDir, runId, '-bad'));
       assert.throws(() => stageMetaFile(tmpDir, runId, ''));
     });
   });
@@ -594,12 +595,10 @@ describe('run-ledger', () => {
       assert.ok(!fs.existsSync(logsPath));
     });
 
-    it('deletes findings when retention.deleteCompletedFindings is true', () => {
+    it('deletes findings queue when retention.deleteCompletedFindings is true', () => {
       const run = createRun(tmpDir, { pipelineName: null, groups: [['correctness']], stages: ['correctness'], scope: '--diff' });
-      writeJson(stageFindingsFile(tmpDir, run.runId, 'correctness'), { findings: [] });
       appendJsonLine(stageFindingsQueueFile(tmpDir, run.runId, 'correctness'), { type: 'finding' });
       cleanupCompletedStageArtifacts(tmpDir, run.runId, 'correctness', { deleteCompletedLogs: false, deleteCompletedFindings: true });
-      assert.ok(!fs.existsSync(stageFindingsFile(tmpDir, run.runId, 'correctness')));
       assert.ok(!fs.existsSync(stageFindingsQueueFile(tmpDir, run.runId, 'correctness')));
     });
 
@@ -607,10 +606,10 @@ describe('run-ledger', () => {
       const run = createRun(tmpDir, { pipelineName: null, groups: [['correctness']], stages: ['correctness'], scope: '--diff' });
       const logsPath = stageLogsDir(tmpDir, run.runId, 'correctness');
       fs.mkdirSync(logsPath, { recursive: true });
-      writeJson(stageFindingsFile(tmpDir, run.runId, 'correctness'), { findings: [] });
+      appendJsonLine(stageFindingsQueueFile(tmpDir, run.runId, 'correctness'), { type: 'finding' });
       cleanupCompletedStageArtifacts(tmpDir, run.runId, 'correctness', { deleteCompletedLogs: false, deleteCompletedFindings: false });
       assert.ok(fs.existsSync(logsPath));
-      assert.ok(fs.existsSync(stageFindingsFile(tmpDir, run.runId, 'correctness')));
+      assert.ok(fs.existsSync(stageFindingsQueueFile(tmpDir, run.runId, 'correctness')));
     });
   });
 
