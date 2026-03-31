@@ -7,7 +7,7 @@ allowed-tools: Bash(node *)
 Clear the current session from collab coordination state.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/context.js" --done
+node ${CLAUDE_PLUGIN_ROOT}/scripts/context.js --done
 ```
 
 **Instructions:**

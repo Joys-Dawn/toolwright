@@ -5,14 +5,16 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 
 const { nextFinding, recordDecision } = require('../../coordinator/verification');
+const { stopRun } = require('../../coordinator/lifecycle');
 const {
   createRun,
   updateStageStatus,
   updateGroupStatus,
-  loadRun
+  loadRun,
+  mutateRun
 } = require('../../coordinator/run-ledger');
 const {
   stageMetaFile,
@@ -171,7 +173,6 @@ describe('nextFinding', () => {
 
   it('returns done when pipeline completed', async () => {
     const { runId } = setupRunWithFindings(tmpDir, 'correctness', 0);
-    const { mutateRun } = require('../../coordinator/run-ledger');
     mutateRun(tmpDir, runId, run => {
       run.status = 'completed';
       for (const stage of run.stages) stage.status = 'completed';
@@ -228,6 +229,23 @@ describe('nextFinding', () => {
 
     const result = await nextFinding(runId);
     assert.equal(result.status, 'done');
+  });
+
+  it('returns waiting for transient auditing+auditDone state', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1, {
+      auditDone: true,
+      stageStatus: 'auditing'
+    });
+    // Mark the one finding as processed so there are no unprocessed findings
+    const verifier = readJson(stageVerifierFile(tmpDir, runId, 'correctness'));
+    verifier.processedFindingIds.push('correctness-1');
+    verifier.lastConsumedIndex = 1;
+    writeJson(stageVerifierFile(tmpDir, runId, 'correctness'), verifier);
+
+    const result = await nextFinding(runId);
+    assert.equal(result.status, 'waiting');
+    assert.equal(result.stage, 'correctness');
+    assert.equal(result.progress.auditDone, true);
   });
 
   it('handles empty audit (0 findings, auditDone)', async () => {
@@ -365,6 +383,114 @@ describe('recordDecision', () => {
   });
 });
 
+describe('stopRun', () => {
+  it('cancels a running run and marks stages as cancelled', () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 2);
+    const result = stopRun(runId);
+    assert.equal(result.ok, true);
+    assert.equal(result.status, 'cancelled');
+
+    const run = loadRun(tmpDir, runId);
+    assert.equal(run.status, 'cancelled');
+    const stage = run.stages.find(s => s.name === 'correctness');
+    assert.equal(stage.status, 'cancelled');
+    assert.equal(run.auditor, null);
+  });
+
+  it('preserves completed stages when stopping', () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1, {
+      groups: [['correctness', 'security']],
+      stages: ['correctness', 'security']
+    });
+    setupStageFiles(tmpDir, runId, 'security', 1);
+    updateStageStatus(tmpDir, runId, 'correctness', 'completed');
+
+    const result = stopRun(runId);
+    assert.equal(result.status, 'cancelled');
+
+    const run = loadRun(tmpDir, runId);
+    const correctness = run.stages.find(s => s.name === 'correctness');
+    const security = run.stages.find(s => s.name === 'security');
+    assert.equal(correctness.status, 'completed');
+    assert.equal(security.status, 'cancelled');
+  });
+
+  it('is idempotent on already-cancelled run', () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1);
+    stopRun(runId);
+    const result = stopRun(runId);
+    assert.equal(result.ok, true);
+    assert.equal(result.status, 'cancelled');
+    assert.deepEqual(result.killed, []);
+  });
+
+  it('is idempotent on already-completed run', () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 0);
+    mutateRun(tmpDir, runId, run => {
+      run.status = 'completed';
+      for (const stage of run.stages) stage.status = 'completed';
+      for (const group of run.groups) group.status = 'completed';
+      return run;
+    });
+    const result = stopRun(runId);
+    assert.equal(result.ok, true);
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(result.killed, []);
+  });
+
+  it('kills live worker and auditor processes', () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1);
+    const worker = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    const auditor = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    worker.unref();
+    auditor.unref();
+
+    mutateRun(tmpDir, runId, current => {
+      current.auditor = {
+        correctness: {
+          workerPid: worker.pid,
+          pid: auditor.pid,
+          stage: 'correctness'
+        }
+      };
+      return current;
+    });
+
+    const result = stopRun(runId);
+    assert.equal(result.status, 'cancelled');
+    assert.equal(result.killed.length, 2);
+    assert.ok(result.killed.some(k => k.role === 'worker' && k.pid === worker.pid));
+    assert.ok(result.killed.some(k => k.role === 'auditor' && k.pid === auditor.pid));
+
+    // Verify processes are actually dead
+    let workerAlive = true;
+    try { process.kill(worker.pid, 0); } catch (_) { workerAlive = false; }
+    let auditorAlive = true;
+    try { process.kill(auditor.pid, 0); } catch (_) { auditorAlive = false; }
+    assert.equal(workerAlive, false, 'worker should be dead');
+    assert.equal(auditorAlive, false, 'auditor should be dead');
+  });
+
+  it('clears activeStages on stop', () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1);
+    mutateRun(tmpDir, runId, current => {
+      current.activeStages = ['correctness'];
+      return current;
+    });
+    stopRun(runId);
+    const run = loadRun(tmpDir, runId);
+    assert.deepEqual(run.activeStages, []);
+  });
+});
+
 describe('CLI integration', () => {
   it('next-finding via CLI', () => {
     const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1);
@@ -373,6 +499,15 @@ describe('CLI integration', () => {
     const result = JSON.parse(stdout);
     assert.equal(result.status, 'finding');
     assert.equal(result.finding.id, 'correctness-1');
+  });
+
+  it('stop via CLI', () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1);
+    const { exitCode, stdout } = runCli(['stop', '--run', runId], tmpDir);
+    assert.equal(exitCode, 0);
+    const result = JSON.parse(stdout);
+    assert.equal(result.ok, true);
+    assert.equal(result.status, 'cancelled');
   });
 
   it('record-decision via CLI', () => {

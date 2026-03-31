@@ -29,6 +29,7 @@ Claude Code plugin for running chained audit pipelines. Spawns a headless audito
 | `/audit-resume <run-id>` | Resume an interrupted run from the next incomplete group |
 | `/audit-status [run-id]` | Show audit run status (or list all runs) |
 | `/audit-reset [run-id]` | Guided instructions for discarding a run |
+| `/audit-stop [run-id]` | Stop a running audit and kill its processes |
 | `/audit-clean [--logs-only]` | Clean retained artifacts from completed runs |
 
 Examples:
@@ -151,6 +152,8 @@ The coordinator exposes two CLI commands (via `verification.js`) that the verifi
   - `"done"` — all stages complete, pipeline finished
 
 - **`record-decision --run <runId> --stage <name> --finding <id> --decision <valid|invalid|valid_needs_approval> [--action fixed|none] [--rationale "..."] [--files-changed "a.js,b.js"] [--evidence "..."]`** — Records a decision for a finding. When all findings in a stage are decided, the stage auto-completes and the pipeline auto-advances to the next group.
+
+- **`stop --run <runId>`** — Kills all worker and auditor processes for the run and marks it as cancelled. Stages already completed are preserved. Safe to call if processes have already exited.
 
 ## State
 

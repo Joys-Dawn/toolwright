@@ -18,16 +18,16 @@ Rules:
 Workflow:
 
 1. Start the run:
-!`node "${CLAUDE_PLUGIN_ROOT}/coordinator/index.js" start "$ARGUMENTS"`
+!`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js start "$ARGUMENTS"`
 Note the `runId` from the JSON output.
 
 2. Poll for findings:
-!`node "${CLAUDE_PLUGIN_ROOT}/coordinator/index.js" next-finding --run "<runId>"`
+!`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js next-finding --run "<runId>"`
 
 3. Handle the response:
    - `"waiting"` — auditor is still running. Pause briefly, then repeat step 2.
    - `"finding"` — re-read the cited file in the **live repo** (not the snapshot). If valid and narrowly fixable, apply the fix, then record your decision:
-!`node "${CLAUDE_PLUGIN_ROOT}/coordinator/index.js" record-decision --run "<runId>" --stage "<stage>" --finding "<findingId>" --decision valid --action fixed --rationale "..." --files-changed "file1.js,file2.js"`
+!`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js record-decision --run "<runId>" --stage "<stage>" --finding "<findingId>" --decision valid --action fixed --rationale "..." --files-changed "file1.js,file2.js"`
      For invalid findings: `--decision invalid --action none --rationale "..."`
      For deferred findings: `--decision valid_needs_approval --action none --rationale "..."`
      Then repeat step 2.

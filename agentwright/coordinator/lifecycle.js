@@ -25,7 +25,7 @@ const {
 } = require('./paths');
 const { writeJson, readJson } = require('./io');
 const { createGroupSnapshot } = require('./snapshot-manager');
-const { markDeadStageWorkers } = require('./health-check');
+const { isPidAlive, markDeadStageWorkers } = require('./health-check');
 const { buildGroupResponse, initializeStageFiles } = require('./responses');
 const { validateDecisions, updateSummary } = require('./decisions');
 
@@ -256,10 +256,53 @@ async function nextStage(runId) {
   return launchCurrentGroup(cwd, run);
 }
 
+function stopRun(runId) {
+  const cwd = process.cwd();
+  validateRunId(runId);
+  const killed = [];
+  const finalRun = mutateRun(cwd, runId, current => {
+    if (current.status === 'completed' || current.status === 'cancelled') {
+      return current;
+    }
+    const auditor = current.auditor && typeof current.auditor === 'object' ? current.auditor : {};
+    for (const [stageName, info] of Object.entries(auditor)) {
+      if (info.workerPid && isPidAlive(info.workerPid)) {
+        try {
+          process.kill(Number(info.workerPid));
+          killed.push({ stage: stageName, pid: info.workerPid, role: 'worker' });
+        } catch (_) {}
+      }
+      if (info.pid && isPidAlive(info.pid)) {
+        try {
+          process.kill(Number(info.pid));
+          killed.push({ stage: stageName, pid: info.pid, role: 'auditor' });
+        } catch (_) {}
+      }
+    }
+    for (const stage of current.stages) {
+      if (stage.status !== 'completed') {
+        stage.status = 'cancelled';
+      }
+    }
+    for (const group of current.groups) {
+      if (group.status !== 'completed') {
+        group.status = 'cancelled';
+      }
+    }
+    current.auditor = null;
+    current.activeStages = [];
+    current.status = 'cancelled';
+    current.updatedAt = new Date().toISOString();
+    return current;
+  });
+  return { ok: true, runId, status: finalRun.status, killed };
+}
+
 module.exports = {
   launchCurrentGroup,
   completeStage,
   nextStage,
+  stopRun,
   tryAdvanceGroup,
   validateCompletionResult
 };

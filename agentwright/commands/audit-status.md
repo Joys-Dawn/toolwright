@@ -6,11 +6,8 @@ allowed-tools: Read, Bash(node *)
 
 Show the current state of an `agentwright` audit run.
 
-If a run id is provided, execute:
-!`node "${CLAUDE_PLUGIN_ROOT}/coordinator/index.js" status --run "$ARGUMENTS"`
-
-If no run id is provided, execute:
-!`node "${CLAUDE_PLUGIN_ROOT}/coordinator/index.js" status`
+Execute:
+!`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js status $ARGUMENTS`
 
 Summarize:
 - current group

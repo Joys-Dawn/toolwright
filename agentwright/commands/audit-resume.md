@@ -8,7 +8,7 @@ Resume an existing run by advancing to the next incomplete group.
 
 1. Require a run id.
 2. Advance the pipeline:
-!`node "${CLAUDE_PLUGIN_ROOT}/coordinator/index.js" next --run "$ARGUMENTS"`
+!`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js next --run "$ARGUMENTS"`
 3. If the run is complete, report that clearly.
 4. Otherwise, enter the same poll loop as `audit-run`:
    - Call `next-finding --run "<runId>"` to get findings one at a time
