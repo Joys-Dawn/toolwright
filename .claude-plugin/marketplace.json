@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "wrightward",
-      "source": "../wrightward",
+      "source": "./wrightward",
       "description": "Multi-agent awareness for Claude Code",
       "author": {
         "name": "Joy's Dawn Solutions LLC"
@@ -19,7 +19,7 @@
     },
     {
       "name": "agentwright",
-      "source": "../agentwright",
+      "source": "./agentwright",
       "description": "Chained audit pipelines with a spawned auditor and in-session verification/fixes",
       "author": {
         "name": "Joy's Dawn Solutions LLC"
