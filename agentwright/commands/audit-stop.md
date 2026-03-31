@@ -6,13 +6,10 @@ allowed-tools: Read, Bash(node *)
 
 Stop an active audit run, killing all worker and auditor processes.
 
-If a run id is provided, execute:
-!`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js stop --run $ARGUMENTS`
+Execute:
+!`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js stop $ARGUMENTS`
 
-If no run id is provided:
-1. List runs with `node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js status`
-2. Identify any run with status `running` or `auditing`
-3. Run the stop command for that run
+If no run id is provided, it auto-detects the active run.
 
 Summarize:
 - which processes were killed (stage, role, pid)

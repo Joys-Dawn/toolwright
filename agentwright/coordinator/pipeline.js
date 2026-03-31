@@ -29,10 +29,10 @@ const DEFAULT_PIPELINES = {
 };
 
 const DEFAULT_RETENTION = {
-  keepCompletedRuns: 20,
+  keepCompletedRuns: 2,
   deleteCompletedLogs: true,
   deleteCompletedFindings: false,
-  maxRunAgeDays: 14
+  maxRunAgeDays: 2
 };
 
 function validateUserConfig(parsed, configPath) {

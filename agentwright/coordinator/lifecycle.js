@@ -12,7 +12,7 @@ const {
   updateGroupStatus,
   cleanupCompletedStageArtifacts,
   cleanupCompletedGroupArtifacts,
-  pruneCompletedRuns
+  pruneTerminalRuns
 } = require('./run-ledger');
 const {
   validateRunId,
@@ -213,7 +213,7 @@ function completeStage(runId, stageName, result) {
     cleanupCompletedGroupArtifacts(cwd, runId, completedGroupIndex);
   }
   if (finalRunStatus === 'completed') {
-    pruneCompletedRuns(cwd, retention, { excludeRunIds: [runId] });
+    pruneTerminalRuns(cwd, retention, { excludeRunIds: [runId] });
   }
   return {
     ok: true,

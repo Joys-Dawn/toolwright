@@ -9,11 +9,11 @@ Run a one-stage audit pipeline using the provided stage and scope.
 Interpret the first token of `$ARGUMENTS` as the stage and the remaining text as the scope. If the scope is missing, use `--diff`.
 
 1. Start the stage:
-!`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js start-stage "$ARGUMENTS"`
+!`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js start-stage $ARGUMENTS`
 Note the `runId` from the JSON output.
 
 2. Follow the same poll loop as `audit-run`:
-   - Call `next-finding --run "<runId>"` to get findings one at a time
+   - Call `next-finding --run <runId>` to get findings one at a time
    - Re-read cited code in the live repo, verify, fix if valid
    - Call `record-decision` for each finding
    - Repeat until `"done"`

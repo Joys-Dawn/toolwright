@@ -18,7 +18,7 @@ const {
   updateGroupStatus,
   cleanupCompletedStageArtifacts,
   cleanupCompletedGroupArtifacts,
-  pruneCompletedRuns,
+  pruneTerminalRuns,
   listRuns
 } = require('../../coordinator/run-ledger');
 const {
@@ -613,9 +613,9 @@ describe('run-ledger', () => {
     });
   });
 
-  // --- pruneCompletedRuns ---
+  // --- pruneTerminalRuns ---
 
-  describe('pruneCompletedRuns', () => {
+  describe('pruneTerminalRuns', () => {
     function createCompletedRun(cwd, updatedAt) {
       const run = createRun(cwd, { pipelineName: null, groups: [['correctness']], stages: ['correctness'], scope: '--diff' });
       // Write directly to avoid mutateRun overriding updatedAt
@@ -629,7 +629,7 @@ describe('run-ledger', () => {
 
     it('does not prune running runs', () => {
       createRun(tmpDir, { pipelineName: null, groups: [['correctness']], stages: ['correctness'], scope: '--diff' });
-      const removed = pruneCompletedRuns(tmpDir, { keepCompletedRuns: 0, maxRunAgeDays: 0 });
+      const removed = pruneTerminalRuns(tmpDir, { keepCompletedRuns: 0, maxRunAgeDays: 0 });
       assert.equal(removed.length, 0);
     });
 
@@ -637,7 +637,7 @@ describe('run-ledger', () => {
       createCompletedRun(tmpDir);
       createCompletedRun(tmpDir);
       createCompletedRun(tmpDir);
-      const removed = pruneCompletedRuns(tmpDir, { keepCompletedRuns: 1, maxRunAgeDays: 0 });
+      const removed = pruneTerminalRuns(tmpDir, { keepCompletedRuns: 1, maxRunAgeDays: 0 });
       assert.equal(removed.length, 2);
     });
 
@@ -646,7 +646,7 @@ describe('run-ledger', () => {
       const recentDate = new Date().toISOString();
       createCompletedRun(tmpDir, oldDate);
       createCompletedRun(tmpDir, recentDate);
-      const removed = pruneCompletedRuns(tmpDir, { keepCompletedRuns: 100, maxRunAgeDays: 14 });
+      const removed = pruneTerminalRuns(tmpDir, { keepCompletedRuns: 100, maxRunAgeDays: 14 });
       assert.equal(removed.length, 1);
       // The recent one should survive
       assert.equal(listRuns(tmpDir).filter(r => r.run.status === 'completed').length, 1);
@@ -654,7 +654,7 @@ describe('run-ledger', () => {
 
     it('respects excludeRunIds', () => {
       const run = createCompletedRun(tmpDir);
-      const removed = pruneCompletedRuns(tmpDir, { keepCompletedRuns: 0, maxRunAgeDays: 0 }, { excludeRunIds: [run.runId] });
+      const removed = pruneTerminalRuns(tmpDir, { keepCompletedRuns: 0, maxRunAgeDays: 0 }, { excludeRunIds: [run.runId] });
       assert.equal(removed.length, 0);
     });
 
@@ -662,7 +662,7 @@ describe('run-ledger', () => {
       const run = createCompletedRun(tmpDir);
       const dir = runDir(tmpDir, run.runId);
       assert.ok(fs.existsSync(dir));
-      pruneCompletedRuns(tmpDir, { keepCompletedRuns: 0, maxRunAgeDays: 0 });
+      pruneTerminalRuns(tmpDir, { keepCompletedRuns: 0, maxRunAgeDays: 0 });
       assert.ok(!fs.existsSync(dir));
     });
   });

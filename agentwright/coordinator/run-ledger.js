@@ -26,6 +26,7 @@ const {
   stageLogsDir
 } = require('./paths');
 
+const TERMINAL_STATUSES = new Set(['completed', 'cancelled', 'failed']);
 const LOCK_STALE_MS = 30 * 1000;
 const LOCK_TIMEOUT_MS = 10 * 1000;
 
@@ -281,7 +282,8 @@ function cleanupCompletedGroupArtifacts(cwd, runId, groupIndex) {
 }
 
 /**
- * Removes completed runs that exceed the retention policy (age or count).
+ * Removes terminal runs (completed, cancelled, failed) that exceed the
+ * retention policy (age or count).
  * Snapshots are cleaned up before the run directory is deleted.
  * Individual failures are swallowed so one broken run doesn't block others.
  * @param {string} cwd - Project working directory.
@@ -289,25 +291,25 @@ function cleanupCompletedGroupArtifacts(cwd, runId, groupIndex) {
  * @param {{ excludeRunIds?: string[] }} [options]
  * @returns {string[]} Array of removed run IDs.
  */
-function pruneCompletedRuns(cwd, retention, options = {}) {
+function pruneTerminalRuns(cwd, retention, options = {}) {
   const now = Date.now();
   const maxAgeMs = Number(retention.maxRunAgeDays || 0) * 24 * 60 * 60 * 1000;
   const excludeRunIds = new Set(options.excludeRunIds || []);
-  const completedRuns = listRuns(cwd)
-    .filter(entry => entry.run.status === 'completed')
+  const terminalRuns = listRuns(cwd)
+    .filter(entry => TERMINAL_STATUSES.has(entry.run.status))
     .sort((a, b) => {
       const parse = (d) => { const ms = Date.parse(d); return Number.isFinite(ms) ? ms : 0; };
       return parse(b.run.updatedAt || b.run.createdAt) - parse(a.run.updatedAt || a.run.createdAt);
     });
 
   const keepIds = new Set(
-    completedRuns
+    terminalRuns
       .slice(0, Math.max(0, Number(retention.keepCompletedRuns || 0)))
       .map(entry => entry.runId)
   );
 
   const removed = [];
-  for (const entry of completedRuns) {
+  for (const entry of terminalRuns) {
     if (excludeRunIds.has(entry.runId)) {
       continue;
     }
@@ -368,5 +370,6 @@ module.exports = {
   listRuns,
   cleanupCompletedStageArtifacts,
   cleanupCompletedGroupArtifacts,
-  pruneCompletedRuns
+  pruneTerminalRuns,
+  TERMINAL_STATUSES
 };

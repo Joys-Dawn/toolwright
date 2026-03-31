@@ -7,7 +7,7 @@ allowed-tools: Read, Bash(node *)
 Clean retained artifacts for completed `agentwright` runs under `.claude/`.
 
 Run:
-!`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js clean "$ARGUMENTS"`
+!`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js clean $ARGUMENTS`
 
 Then summarize:
 - how many stage log folders were removed

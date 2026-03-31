@@ -8,9 +8,10 @@ const {
   createRun,
   loadRun,
   loadRunWithLiveStatus,
-  pruneCompletedRuns,
+  pruneTerminalRuns,
   listRuns,
-  cleanupCompletedStageArtifacts
+  cleanupCompletedStageArtifacts,
+  TERMINAL_STATUSES
 } = require('./run-ledger');
 const {
   validateRunId,
@@ -46,7 +47,7 @@ async function startRun(argumentString) {
   const { requireClaudeCli } = require('./process-manager');
   requireClaudeCli();
   const config = loadUserConfig(cwd);
-  pruneCompletedRuns(cwd, config.retention);
+  pruneTerminalRuns(cwd, config.retention);
   cleanupOrphanedSnapshots(cwd, listRuns);
   const resolved = resolveCommandArgs(argumentString, cwd, config);
   const run = createRun(cwd, resolved);
@@ -71,7 +72,7 @@ async function startSingleStage(argumentString) {
     throw new Error(`Unknown stage: ${stageName}`);
   }
   const scope = tokens.slice(1).join(' ').trim() || '--diff';
-  pruneCompletedRuns(cwd, config.retention);
+  pruneTerminalRuns(cwd, config.retention);
   cleanupOrphanedSnapshots(cwd, listRuns);
   const run = createRun(cwd, {
     pipelineName: null,
@@ -112,11 +113,11 @@ function printStatus(runId) {
 function cleanRuns(flags) {
   const cwd = process.cwd();
   const retention = loadUserConfig(cwd).retention;
-  const completedRuns = listRuns(cwd).filter(entry => entry.run.status === 'completed');
+  const terminalRuns = listRuns(cwd).filter(entry => TERMINAL_STATUSES.has(entry.run.status));
   let logsRemoved = 0;
   let findingsRemoved = 0;
 
-  for (const entry of completedRuns) {
+  for (const entry of terminalRuns) {
     for (const stage of entry.run.stages) {
       const logsPath = stageLogsDir(cwd, entry.runId, stage.name);
       if (flags['logs-only'] || retention.deleteCompletedLogs) {
@@ -141,7 +142,7 @@ function cleanRuns(flags) {
     }
   }
 
-  const removedRuns = flags['logs-only'] ? [] : pruneCompletedRuns(cwd, retention);
+  const removedRuns = flags['logs-only'] ? [] : pruneTerminalRuns(cwd, retention);
   process.stdout.write(JSON.stringify({
     ok: true,
     logsRemoved,
@@ -215,7 +216,19 @@ async function main() {
     return;
   }
   if (command === 'stop') {
-    const runId = requireFlag(flags, 'run');
+    let runId = flags.run || positional[0];
+    if (!runId) {
+      const cwd = process.cwd();
+      const active = listRuns(cwd).filter(e => !TERMINAL_STATUSES.has(e.run.status));
+      if (active.length === 0) {
+        process.stdout.write(JSON.stringify({ ok: true, message: 'No active runs to stop.' }, null, 2) + '\n');
+        return;
+      }
+      if (active.length > 1) {
+        throw new Error(`Multiple active runs found. Specify one: ${active.map(e => e.runId).join(', ')}`);
+      }
+      runId = active[0].runId;
+    }
     const result = stopRun(runId);
     process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     return;

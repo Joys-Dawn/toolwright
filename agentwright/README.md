@@ -170,7 +170,7 @@ Run state is stored under `.claude/audit-runs/<run-id>/`:
 | `stages/<name>/verifier.json` | Verifier progress tracking |
 | `stages/<name>/logs/` | Raw auditor stdout/stderr/parse-errors |
 
-Retention defaults: keep 20 completed runs, prune after 14 days, delete logs after verification, keep findings.
+Retention defaults: keep 2 completed runs, prune after 2 days, delete logs after verification, keep findings.
 
 ## Testing
 
