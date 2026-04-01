@@ -89,7 +89,14 @@ function loadUserConfig(cwd) {
 
 function resolveStageDefinition(stageName, cwd, config) {
   const resolved = config || loadUserConfig(cwd);
-  return BUILTIN_STAGES[stageName] || resolved.customStages[stageName] || null;
+  const direct = BUILTIN_STAGES[stageName] || resolved.customStages[stageName];
+  if (direct) return direct;
+  // Support auto-suffixed duplicates (e.g., "correctness-2" → "correctness")
+  const base = stageName.replace(/-\d+$/, '');
+  if (base !== stageName) {
+    return BUILTIN_STAGES[base] || resolved.customStages[base] || null;
+  }
+  return null;
 }
 
 function normalizePipelineGroups(pipeline, cwd, config) {
@@ -97,7 +104,7 @@ function normalizePipelineGroups(pipeline, cwd, config) {
     throw new Error('Pipelines must be non-empty arrays of stages or stage groups.');
   }
   const resolved = config || loadUserConfig(cwd);
-  const seenStages = new Set();
+  const seenStages = new Map(); // stageName → count
   return pipeline.map((entry, index) => {
     const group = Array.isArray(entry) ? entry : [entry];
     if (group.length === 0) {
@@ -107,16 +114,24 @@ function normalizePipelineGroups(pipeline, cwd, config) {
     if (normalizedGroup.length !== group.length) {
       throw new Error(`Pipeline group ${index} contains an empty stage name.`);
     }
-    for (const stageName of normalizedGroup) {
+    return normalizedGroup.map(stageName => {
       if (!resolveStageDefinition(stageName, cwd, resolved)) {
         throw new Error(`Unknown stage in pipeline: ${stageName}`);
       }
-      if (seenStages.has(stageName)) {
-        throw new Error(`Duplicate stage names are not supported in pipelines: ${stageName}`);
+      const count = (seenStages.get(stageName) || 0) + 1;
+      seenStages.set(stageName, count);
+      if (count > 1) {
+        let suffix = count;
+        let suffixed = `${stageName}-${suffix}`;
+        while (BUILTIN_STAGES[suffixed] || resolved.customStages[suffixed]) {
+          suffix++;
+          suffixed = `${stageName}-${suffix}`;
+        }
+        seenStages.set(suffixed, 1);
+        return suffixed;
       }
-      seenStages.add(stageName);
-    }
-    return normalizedGroup;
+      return stageName;
+    });
   });
 }
 

@@ -1,189 +1,155 @@
 # agentwright
 
-Claude Code plugin for running chained audit pipelines. Spawns a headless auditor subprocess against a frozen snapshot while the current session independently verifies findings and applies fixes on the live repo.
+Claude Code plugin for structured code audits, planning, debugging, and testing. Audit skills run as chained pipelines — a headless subprocess audits a frozen snapshot while the current session independently verifies each finding and applies fixes on the live repo. Turns AI slop into beautiful working code.
 
 ## Installation
 
 ```
-/install-plugin https://github.com/Joys-Dawn/toolwright/tree/master/agentwright
+/plugin marketplace add Joys-Dawn/toolwright
+/plugin install agentwright@Joys-Dawn/toolwright
 ```
 
-## How it works
+## How audits work
 
-1. The coordinator creates a frozen snapshot of the codebase (`.gitignore`-aware)
-2. A headless `claude -p` process audits the snapshot using vendored skill definitions
+1. A frozen snapshot of the codebase is created (`.gitignore`-aware)
+2. A headless `claude -p` subprocess audits the snapshot using a vendored or custom skill definition
 3. Findings stream back as newline-delimited JSON
-4. The current session independently verifies each finding against the live repo as it arrives — subagent claims are never blindly accepted
-5. Objectively correct fixes are applied immediately; subjective or broad findings are deferred for user approval
-6. If another agent owns a file (via wrightward), the finding is skipped and revisited later
-7. After all stages complete, the `agentwright:verifier` subagent validates the applied fixes — its claims are also independently verified
-8. A concise per-finding summary table is presented with every finding's disposition
-9. Deferred findings are presented to the user for explicit approval before implementation
+4. The current session independently verifies each finding against the live repo — auditor claims are never blindly accepted
+5. Objectively correct fixes are applied immediately; judgment calls are deferred for user approval
+6. After all stages complete, a verifier subagent validates the applied fixes
+7. A per-finding summary table is presented with every finding's disposition
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/audit-run [pipeline-or-stages] [scope]` | Run the default or named audit pipeline |
+| `/audit-run [pipeline\|stages] [scope]` | Run the default or a named pipeline |
 | `/audit-step <stage> [scope]` | Run a single audit stage |
-| `/audit-resume <run-id>` | Resume an interrupted run from the next incomplete group |
-| `/audit-status [run-id]` | Show audit run status (or list all runs) |
+| `/audit-resume <run-id>` | Resume an interrupted run |
+| `/audit-status [run-id]` | Show run status or list all runs |
+| `/audit-stop [run-id]` | Kill processes and mark cancelled |
 | `/audit-reset [run-id]` | Guided instructions for discarding a run |
-| `/audit-stop [run-id]` | Stop a running audit and kill its processes |
-| `/audit-clean [--logs-only]` | Clean retained artifacts from completed runs |
+| `/audit-clean [--logs-only]` | Clean retained artifacts |
 
-Examples:
+**Examples:**
 
 ```
 /audit-run                              # default pipeline on git diff
-/audit-run src/api/                     # default pipeline on specific directory
-/audit-run full --diff                  # named "full" pipeline on git diff
-/audit-run correctness,security src/    # specific stages on specific directory
+/audit-run src/api/                     # default pipeline on a directory
+/audit-run full --diff                  # named pipeline on git diff
+/audit-run correctness,security src/    # specific stages
 /audit-step security src/auth/          # single stage
 ```
 
 ## Skills
 
-Skills are structured checklists and planning guides. Audit skills define what to look for, how to classify findings, and what evidence to cite. Planning skills produce implementation-ready plans in plan mode.
+14 vendored skills, usable in pipelines or standalone:
 
-| Skill | What it does |
-|-------|-------------|
-| **correctness-audit** | Audits for correctness bugs, uncaught edge cases, and scalability problems — logic errors, null/undefined handling, async race conditions, type coercion, resource leaks, N+1 queries. |
-| **security-audit** | Audits for security vulnerabilities against OWASP Top 10 2025, OWASP API Security Top 10 2023, CWE taxonomy, GDPR, and PCI-DSS. Covers auth, injection, access control, cryptography, API security, and data exposure. |
-| **best-practices-audit** | Audits code quality against DRY, SOLID, KISS, YAGNI, Clean Code, and similar industry standards. Naming, function length, coupling, error handling, and anti-patterns. |
-| **migration-audit** | Audits PL/pgSQL migration files for NULL traps, TOCTOU race conditions, missing constraints, error handling gaps, JSONB pitfalls, volatility mismarks, financial safety, and SECURITY DEFINER issues. |
-| **ui-audit** | Audits React/Tailwind UI for WCAG 2.2 accessibility violations (touch targets, focus, contrast, ARIA patterns) and structural anti-patterns (component duplication, separation of concerns). |
-| **systematic-debugging** | Guides root-cause analysis for hard-to-find bugs: reproduce, isolate, hypothesize, verify, fix. Evidence-based debugging with no random fixes. |
-| **feature-planning** | Plans a feature before coding: context, change impact analysis, requirements, design (behavior, data, API, state), implementation steps, and risk assessment. |
-| **project-planning** | Plans a new project from scratch: stack selection, directory structure, tooling, configuration, scaffolding steps, and risk assessment for greenfield codebases. |
-| **bug-fix-planning** | Plans a bug fix before any code is written — maps root cause, change impact, minimal fix, and regression tests. |
-| **test-coverage-audit** | Identifies untested code by mapping source files against their tests. Produces a risk-prioritized list of coverage gaps. |
-| **test-writing** | General test writing and review across any language or framework. Assertion quality, test isolation, flakiness, over-mocking, naming, and coverage. Defers to framework-specific skills when applicable. |
-| **test-deno** | Deno integration tests for Supabase Edge Functions. Enforces sanitizers, assertions, mocking, HTTP testing, and environment isolation. |
-| **test-frontend** | React tests using Vitest and React Testing Library. Enforces RTL query priority, Vitest mocking, Zustand/TanStack Query testing, and common-mistakes guidance. |
-| **test-pgtap** | pgTAP database tests for Supabase SQL migrations. Transaction isolation, plan counts, assertion selection, RLS verification, privilege testing, and trigger testing. |
+### Audit skills
 
-The default pipeline runs `correctness`, `security`, and `best-practices`. Other skills are available for named pipelines or single-stage runs.
+| Skill | Focus |
+|-------|-------|
+| **correctness-audit** | Logic errors, null handling, async races, type coercion, resource leaks, N+1 queries |
+| **security-audit** | OWASP Top 10 2025, API Security Top 10, CWE, GDPR, PCI-DSS |
+| **best-practices-audit** | DRY, SOLID, KISS, YAGNI, Clean Code, naming, coupling, anti-patterns |
+| **migration-audit** | PL/pgSQL: NULL traps, race conditions, missing constraints, JSONB pitfalls |
+| **ui-audit** | WCAG 2.2 accessibility, WAI-ARIA patterns, component anti-patterns (React/Tailwind) |
+| **test-coverage-audit** | Maps source files against tests, produces risk-prioritized coverage gaps |
+
+### Planning skills
+
+| Skill | Focus |
+|-------|-------|
+| **feature-planning** | Impact analysis, requirements, design, implementation steps, risk assessment |
+| **project-planning** | Stack selection, directory structure, tooling, scaffolding for greenfield projects |
+| **bug-fix-planning** | Root cause mapping, change impact, minimal fix, regression tests |
+
+### Debugging
+
+| Skill | Focus |
+|-------|-------|
+| **systematic-debugging** | Reproduce, isolate, hypothesize, verify — evidence-based root-cause analysis for hard to find bugs |
+
+### Testing skills
+
+| Skill | Focus |
+|-------|-------|
+| **test-writing** | General test quality: assertions, isolation, flakiness, over-mocking (any language) |
+| **test-frontend** | React with Vitest + React Testing Library |
+| **test-deno** | Deno integration tests for Supabase Edge Functions |
+| **test-pgtap** | pgTAP database tests for Supabase SQL migrations |
 
 ## Subagents
 
-Focused agents dispatched as subprocesses for specific tasks.
+| Subagent | What it does | Permissions |
+|----------|-------------|-------------|
+| **verifier** | Validates applied fixes: implementations exist, tests pass, no unstated changes. Dispatched automatically after audit fixes. | Read-only |
+| **deep-research** | Web search and literature review with synthesis | Read-only |
+| **party-pooper** | Adversarial critique of ideas, plans, and proposals | Read-only |
+| **update-docs** | Keeps project docs in sync with code | `.md` files only |
 
-| Subagent | What it does |
-|----------|-------------|
-| **verifier** | Validates that completed work matches what was claimed. Checks that implementations exist and work, flags unstated changes, runs tests, and reports a PASS/FAIL/PARTIAL verdict. Dispatched automatically after audit fixes are applied. Read-only — cannot edit files. |
-| **deep-research** | Deep research and literature review. Searches the web and synthesizes answers with pros/cons and sources. Read-only — cannot edit files or run shell commands. |
-| **update-docs** | Keeps project documentation in sync with the code — architecture docs, setup guides, README. Can only edit `.md` files. |
-| **party-pooper** | Adversarial critique of ideas, plans, claims, or proposals. Stress-tests assumptions and pokes holes. Read-only — cannot edit files or run shell commands. |
+## Fix vs. defer
 
-## Config
+Fixes are applied only when **objectively correct** — any competent reviewer would agree with no meaningful tradeoff. This covers bugs, security flaws, naming, dead code, and clean-code improvements alike.
 
-Create `.claude/agentwright.json` in your project to customize pipelines and add custom stages:
+Judgment calls, style preferences, large refactors, and architectural opinions are marked `valid_needs_approval` and presented to the user after the run. Nothing deferred is implemented without explicit approval.
+
+## Configuration
+
+Create `.claude/agentwright.json` to customize pipelines and retention. All fields are optional — only include what you want to override. See [agentwright.example.json](agentwright.example.json) for a full example.
+
+**Minimal — reorder the default pipeline:**
+
+```json
+{
+  "pipelines": {
+    "default": ["security", "correctness", "best-practices"]
+  }
+}
+```
+
+**With named pipelines, parallel and custom stages:**
 
 ```json
 {
   "pipelines": {
     "default": ["correctness", "security", "best-practices"],
-    "full": [
-      "correctness",
-      "security",
-      "best-practices",
-      ["migration", "ui"],
-      "tests-migration",
-      "tests-edge",
-      "tests-frontend"
-    ]
+    "full": ["correctness", "security", "best-practices", ["migration", "ui", "perf"], "my-checks"]
   },
   "customStages": {
-    "perf": {
-      "type": "skill",
-      "skillId": "performance-investigation"
-    },
-    "my-checks": {
-      "type": "skill",
-      "skillPath": "skills/my-custom-audit/SKILL.md"
-    }
+    "perf": { "type": "skill", "skillId": "performance-investigation" },
+    "my-checks": { "type": "skill", "skillPath": "skills/my-custom-audit/SKILL.md" }
   },
   "retention": {
-    "keepCompletedRuns": 20,
+    "keepCompletedRuns": 2,
     "deleteCompletedLogs": true,
     "deleteCompletedFindings": false,
-    "maxRunAgeDays": 14
+    "maxRunAgeDays": 2
   }
 }
 ```
 
-A copyable template is provided at `agentwright.example.json` in the plugin directory.
+### Pipeline rules
 
-Custom stages can reference either a `skillId` (builtin skill name) or a `skillPath` (project-relative path to a SKILL.md file).
+- String entries run sequentially — each stage must complete before the next starts
+- Nested arrays (`["a", "b"]`) run as a parallel group — all stages audit the same snapshot. Use for completely independent audits (i.e. test coverage and UI)
+- The next group snapshots the newly fixed repo before auditing
+- Duplicate stage names are allowed — the second occurrence is automatically suffixed (e.g., `correctness` -> `correctness-2`)
 
-Pipeline rules:
-- A string entry runs sequentially
-- A nested array runs as one parallel group (all stages audit the same frozen snapshot)
-- The next group snapshots the newly fixed live repo before auditing
-- For sequential stages, all valid findings from the current stage must be fixed before the next stage starts
-- Duplicate stage names are not allowed within a pipeline
+### Custom stages
 
-## Fix vs. defer
+Reference a builtin skill by `skillId` or a project-relative SKILL.md by `skillPath`. Only needed if you define your own audit stages.
 
-The verifier/fixer applies fixes only when they are **objectively correct** — meaning any competent reviewer would agree with no meaningful tradeoff. This applies to all finding types: bugs, security flaws, clean-code improvements, naming, dead code removal.
+### Retention
 
-Findings that involve judgment calls, style preferences, architectural opinions, large refactors, or meaningful tradeoffs are marked `valid_needs_approval` and presented to the user after the run completes. No deferred finding is implemented without explicit user approval.
-
-## Snapshots
-
-Before each audit group, the coordinator creates a frozen snapshot of the codebase:
-
-- **Clean git repo**: Uses `git worktree add --detach` for a fast, lightweight snapshot of HEAD.
-- **Dirty working tree or non-git repo**: Copies the working tree using `git ls-files -co --exclude-standard` to respect `.gitignore`. Falls back to a hardcoded exclusion list for non-git repos.
-
-Orphaned snapshots (from crashed processes) are automatically cleaned up on the next run start. SIGINT/SIGTERM signal handlers also trigger cleanup during active runs.
-
-Snapshots are stored under `<tmpdir>/agentwright-snapshots/` and removed after each group completes.
-
-## Verification CLI
-
-The coordinator exposes two CLI commands (via `verification.js`) that the verifier/fixer workflow uses to process findings:
-
-- **`next-finding --run <runId>`** — Polls for the next unprocessed finding across all active stages in the current group. Returns one of:
-  - `"waiting"` — audit is still running, no new findings yet
-  - `"finding"` — a finding to verify (includes the finding object and progress)
-  - `"error"` — the auditor failed
-  - `"done"` — all stages complete, pipeline finished
-
-- **`record-decision --run <runId> --stage <name> --finding <id> --decision <valid|invalid|valid_needs_approval> [--action fixed|none] [--rationale "..."] [--files-changed "a.js,b.js"] [--evidence "..."]`** — Records a decision for a finding. When all findings in a stage are decided, the stage auto-completes and the pipeline auto-advances to the next group.
-
-- **`stop --run <runId>`** — Kills all worker and auditor processes for the run and marks it as cancelled. Stages already completed are preserved. Safe to call if processes have already exited.
-
-## State
-
-Run state is stored under `.claude/audit-runs/<run-id>/`:
-
-| File | Purpose |
-|------|---------|
-| `run.json` | Run metadata, stage statuses, group state |
-| `summary.json` | Completed stages, rejected findings, pending approvals |
-| `group-<N>-snapshot.json` | Snapshot metadata for parallel group N |
-| `stages/<name>/findings.jsonl` | Streamed findings (append-only during audit) |
-| `stages/<name>/decisions.json` | Verifier decisions for each finding |
-| `stages/<name>/meta.json` | Live audit progress (emitted count, status) |
-| `stages/<name>/verifier.json` | Verifier progress tracking |
-| `stages/<name>/logs/` | Raw auditor stdout/stderr/parse-errors |
-
-Retention defaults: keep 2 completed runs, prune after 2 days, delete logs after verification, keep findings.
-
-## Testing
-
-```bash
-node --test
-```
+Controls cleanup of completed runs. Defaults: keep 2 runs, prune after 2 days, delete logs, keep findings.
 
 ## Requirements
 
 - Node.js >= 18
 - Claude CLI (`claude` on PATH)
 - No external dependencies
-- **Strongly recommended**: a `.gitignore` that excludes large datasets, binary assets, virtual environments, and other non-source files. The auditor snapshots the working tree before each audit group — without a `.gitignore`, large untracked files will be copied into the snapshot, wasting disk space and slowing down snapshot creation.
+- **Recommended**: a `.gitignore` that excludes large non-source files (datasets, binaries, virtual environments). The auditor snapshots the working tree before each group — large untracked files slow this down.
 
 ## License
 

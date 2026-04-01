@@ -205,18 +205,25 @@ describe('pipeline', () => {
       assert.throws(() => normalizePipelineGroups(['nonexistent'], tmpDir), /Unknown stage/);
     });
 
-    it('throws on duplicate stages', () => {
-      assert.throws(
-        () => normalizePipelineGroups(['correctness', 'correctness'], tmpDir),
-        /Duplicate/
-      );
+    it('auto-suffixes duplicate stages', () => {
+      const result = normalizePipelineGroups(['correctness', 'correctness'], tmpDir);
+      assert.deepEqual(result, [['correctness'], ['correctness-2']]);
     });
 
-    it('throws on duplicate stages across groups', () => {
-      assert.throws(
-        () => normalizePipelineGroups(['correctness', ['correctness', 'security']], tmpDir),
-        /Duplicate/
-      );
+    it('auto-suffixes duplicate stages across groups', () => {
+      const result = normalizePipelineGroups(['correctness', ['correctness', 'security']], tmpDir);
+      assert.deepEqual(result, [['correctness'], ['correctness-2', 'security']]);
+    });
+
+    it('handles triple duplicates', () => {
+      const result = normalizePipelineGroups(['correctness', 'correctness', 'correctness'], tmpDir);
+      assert.deepEqual(result, [['correctness'], ['correctness-2'], ['correctness-3']]);
+    });
+
+    it('resolves suffixed stage definitions', () => {
+      const def = resolveStageDefinition('correctness-2', tmpDir);
+      assert.ok(def);
+      assert.equal(def.type, 'skill');
     });
   });
 

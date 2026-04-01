@@ -8,7 +8,8 @@
       ["migration", "ui"],
       "tests-migration",
       "tests-edge",
-      "tests-frontend"
+      "tests-frontend",
+      "test-coverage-audit"
     ]
   },
   "customStages": {
