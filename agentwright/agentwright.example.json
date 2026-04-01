@@ -9,7 +9,7 @@
       "tests-migration",
       "tests-edge",
       "tests-frontend",
-      "test-coverage-audit"
+      "test-coverage"
     ]
   },
   "customStages": {

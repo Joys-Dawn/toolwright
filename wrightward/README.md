@@ -12,19 +12,20 @@ Claude Code plugin that coordinates multiple agents working on the same codebase
 ## Quick start
 
 1. Start two or more Claude Code sessions in the same repo
-2. In each session, run `/wrightward:collab-context` to declare what the agent is working on. This is best done after a Plan session or an agentwright:feature-planning skill call.
+2. In each session, run `/wrightward:collab-context` to declare what the agent is working on. This is best done after a Plan session or an agentwright:feature-planning skill call. The agent is told to declare their context when exiting plan mode automatically.
 3. Writes to files claimed by another agent are automatically blocked
 4. When done, run `/wrightward:collab-done` to release file claims (or let them expire after 6 minutes of inactivity)
 
 ## How it works
 
-Three hooks run automatically on every tool call — no user intervention needed after initial setup:
+Four hooks run automatically — no user intervention needed after initial setup:
 
 | Hook | Trigger | Behavior |
 |------|---------|----------|
 | `register.js` | Session start | Registers the agent in `.claude/collab/agents.json` |
 | `heartbeat.js` | After every tool call | Updates heartbeat; auto-tracks files touched by Edit/Write |
 | `guard.js` | Before every tool call | Blocks writes on claimed files; injects context on reads and non-overlapping writes |
+| `plan-exit.js` | After exiting plan mode | Reminds the agent to declare file claims via `/wrightward:collab-context` (only when other agents are active) |
 
 ### Write behavior
 
