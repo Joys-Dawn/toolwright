@@ -50,24 +50,28 @@ Detailed definitions, exact requirements, and source citations for each check in
 - **Material Design**: https://m2.material.io/develop/web/supporting/touch-target
   - Touch targets should be at least 48x48 dp with 8dp spacing
 
-### Why 44px for this project
-WCAG AA requires only 24px, but this project targets mobile (future native app). Apple HIG (44pt) and Material Design (48dp) both enforce larger targets. We use 44px as the minimum — satisfying Apple HIG, WCAG AAA, and being close to Material Design's 48dp.
+### Which threshold to use
+- **Mobile apps** (React Native, Capacitor, Expo, etc.): Enforce **44x44px** — Apple HIG (44pt) and Material Design (48dp) both require large touch targets. Use 44px as the minimum.
+- **Web apps**: Enforce **24x24px** (WCAG 2.5.8 AA). The 44px mobile threshold does not apply to desktop web interfaces.
+
+Determine the platform by checking the project's dependencies and build config before auditing.
 
 ### Tailwind mapping
-- `min-h-11` = 2.75rem = 44px (at 16px root)
-- `h-6` (24px), `h-8` (32px), `h-10` (40px) are all below 44px
-- `h-11` (44px) is the target
+- `min-h-6` = 1.5rem = 24px — web app minimum
+- `min-h-11` = 2.75rem = 44px — mobile app minimum
+- `h-6` (24px), `h-8` (32px), `h-10` (40px), `h-11` (44px)
 
 Padding on small text (`text-sm`/`text-xs`, ~20px line-height):
-- `py-0.5` (2px * 2) → ~24px total height
+- `py-0.5` (2px * 2) → ~24px total height — meets web minimum only
 - `py-1` (4px * 2) → ~28px total height
 - `py-1.5` (6px * 2) → ~32px total height
 - `py-2` (8px * 2) → ~36px total height
-- `py-2.5` (10px * 2) → ~40px total height — still under 44px; use `py-3` or add `min-h-11`
+- `py-2.5` (10px * 2) → ~40px total height
+- `py-3` (12px * 2) → ~44px total height — meets mobile minimum
 
 ### Common undersized patterns
-- Toggle/switch components: the clickable area (not just the visual track) must be 44x44px
-- Close buttons (especially bare `x` character): must have padding to reach 44x44px
+- Toggle/switch components: the clickable area (not just the visual track) must meet the platform minimum
+- Close buttons (especially bare `x` character): must have padding to reach the platform minimum
 
 ### Exceptions (WCAG 2.5.5)
 1. **Inline**: target is in a sentence or constrained by line-height of surrounding text

@@ -19,6 +19,10 @@ Determine what to audit based on context:
 
 Read all in-scope code before producing findings.
 
+## Platform Context
+
+Before auditing, determine whether the project is a **web app** or a **mobile app** (React Native, Capacitor, Expo, etc.). Check the project's dependencies, entry points, and build config. This affects which standards and thresholds apply — several checks below have different requirements for web vs mobile. When in doubt, assume web.
+
 ## Part 1 — Accessibility
 
 Evaluate against each check. Skip checks with no findings.
@@ -27,7 +31,8 @@ Evaluate against each check. Skip checks with no findings.
 
 **Standards**: WCAG 2.5.5 (AAA) — 44x44 CSS px; WCAG 2.5.8 (AA) — 24x24 CSS px; Apple HIG — 44x44 pt; Material Design — 48x48 dp
 
-This project targets mobile (future native app). Enforce **44x44px minimum** (Tailwind `min-h-11` = 2.75rem = 44px at 16px root).
+**Mobile apps**: Enforce **44x44px minimum** (Apple HIG / Material Design). Tailwind `min-h-11` = 2.75rem = 44px at 16px root.
+**Web apps**: Enforce **24x24px minimum** (WCAG 2.5.8 AA). The 44px mobile threshold does not apply to desktop web interfaces.
 
 **What to check**:
 - Every `<button>`, `<a>`, `<input>`, `<select>`, clickable `<div>`/`<li>`, and icon button must produce a tap target of at least 44x44px
@@ -164,7 +169,7 @@ This project targets mobile (future native app). Enforce **44x44px minimum** (Ta
 **Best practice** (Apple HIG, Material Design, general UX):
 - Body text: 16px recommended
 - Secondary/caption text: 12px practical minimum
-- Text below 12px (`text-[10px]`, `text-[9px]`) is a readability concern, especially on mobile
+- Text below 12px (`text-[10px]`, `text-[9px]`) is a readability concern, particularly on mobile where screen DPI and viewing distance vary
 
 **Severity**: Warning (best practice), never Critical. Always note this is NOT a WCAG requirement.
 
@@ -297,11 +302,13 @@ SRP heuristic: a component's purpose should be describable in one sentence witho
 **Source**: Web Interface Guidelines — Touch & Interaction
 
 **What to check**:
-- `touch-action: manipulation` on interactive areas (prevents 300ms double-tap zoom delay)
 - `overscroll-behavior: contain` in modals, drawers, sheets (prevents background scroll)
 - During drag operations: disable text selection, use `inert` on dragged elements
-- `autoFocus` sparingly — desktop only, single primary input; avoid on mobile (causes viewport scroll to input)
-- `-webkit-tap-highlight-color` set intentionally (transparent or themed, not browser default)
+- `autoFocus` sparingly — single primary input only; on mobile it causes viewport scroll to the input, so avoid it there
+
+**Touch devices only** (mobile apps and desktop touchscreens; skip for mouse-only web apps):
+- `touch-action: manipulation` on interactive areas (prevents 300ms double-tap zoom delay; note: modern Chrome already removes this delay when a proper `<meta name="viewport" content="width=device-width">` tag is present)
+- `-webkit-tap-highlight-color` set intentionally (transparent or themed, not browser default) — supported in Chrome on all platforms but only triggers on touch events
 
 ### 23. Navigation & URL State
 
