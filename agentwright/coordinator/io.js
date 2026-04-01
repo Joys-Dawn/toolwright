@@ -8,17 +8,29 @@
 const fs = require('fs');
 const path = require('path');
 
+const waitBuf = new Int32Array(new SharedArrayBuffer(4));
+
 function writeJson(filePath, value) {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
   const tmpPath = filePath + '.' + process.pid + '.tmp';
   fs.writeFileSync(tmpPath, JSON.stringify(value, null, 2), 'utf8');
-  try {
-    fs.renameSync(tmpPath, filePath);
-  } catch (err) {
-    try { fs.unlinkSync(tmpPath); } catch (_) {}
-    throw err;
+  // On Windows, renameSync fails with EPERM when another process has the
+  // target file open (e.g., the main agent reading meta.json while the
+  // stage-worker writes it). Retry a few times with a short delay.
+  let lastErr;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      fs.renameSync(tmpPath, filePath);
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (err.code !== 'EPERM' && err.code !== 'EACCES') break;
+      Atomics.wait(waitBuf, 0, 0, 20 * (attempt + 1));
+    }
   }
+  try { fs.unlinkSync(tmpPath); } catch (_) {}
+  throw lastErr;
 }
 
 function appendJsonLine(filePath, value) {

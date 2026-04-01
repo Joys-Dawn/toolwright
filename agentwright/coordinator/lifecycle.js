@@ -210,7 +210,7 @@ function completeStage(runId, stageName, result) {
   });
   cleanupCompletedStageArtifacts(cwd, runId, stageName, retention);
   if (groupCompleted && completedGroupIndex !== null) {
-    cleanupCompletedGroupArtifacts(cwd, runId, completedGroupIndex);
+    cleanupCompletedGroupArtifacts(cwd, runId, completedGroupIndex, { keepFirst: true });
   }
   if (finalRunStatus === 'completed') {
     pruneTerminalRuns(cwd, retention, { excludeRunIds: [runId] });

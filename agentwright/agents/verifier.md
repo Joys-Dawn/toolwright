@@ -25,7 +25,8 @@ Flag anything that was claimed but is missing, incomplete, or broken. Be specifi
 
 ### 2. No unstated changes
 
-- Use `git diff` (staged and unstaged) to see exactly what changed versus what was discussed.
+- If a snapshot directory path is provided, compare the changed files against the snapshot to isolate only the changes made during the task. Use `diff <snapshot-path>/<file> <live-path>/<file>` for each changed file. This is preferred over `git diff` when the working tree has pre-existing unstaged changes unrelated to the task.
+- Otherwise, use `git diff` (staged and unstaged) to see exactly what changed versus what was discussed.
 - Look for edits the main agent made but did not mention: new files, modified files, refactors, "cleanups," dependency changes, or behavior changes that weren't part of the request.
 - Report any changes that go beyond what was claimed or requested.
 

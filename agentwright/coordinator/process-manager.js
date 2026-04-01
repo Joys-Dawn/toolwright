@@ -69,7 +69,7 @@ function createTextDeltaLineReader(onLine) {
   return handleDelta;
 }
 
-const AUDITOR_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const AUDITOR_TIMEOUT_MS = 45 * 60 * 1000; // 45 minutes
 
 function spawnAuditor({ cwd, pluginRoot, prompt, logsDir, runId, stageName, onEvent }) {
   requireClaudeCli();

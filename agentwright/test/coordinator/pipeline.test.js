@@ -63,10 +63,10 @@ describe('pipeline', () => {
 
   describe('DEFAULT_RETENTION', () => {
     it('has expected defaults', () => {
-      assert.equal(DEFAULT_RETENTION.keepCompletedRuns, 20);
+      assert.equal(DEFAULT_RETENTION.keepCompletedRuns, 2);
       assert.equal(DEFAULT_RETENTION.deleteCompletedLogs, true);
       assert.equal(DEFAULT_RETENTION.deleteCompletedFindings, false);
-      assert.equal(DEFAULT_RETENTION.maxRunAgeDays, 14);
+      assert.equal(DEFAULT_RETENTION.maxRunAgeDays, 2);
     });
   });
 

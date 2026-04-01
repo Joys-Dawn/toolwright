@@ -12,6 +12,7 @@ const {
   listRuns,
   cleanupCompletedStageArtifacts,
   cleanupCompletedGroupArtifacts,
+  removeGroupSnapshot,
   TERMINAL_STATUSES
 } = require('./run-ledger');
 const {
@@ -19,7 +20,8 @@ const {
   validateStageName,
   stageFindingsQueueFile,
   stageLogsDir,
-  runDir
+  runDir,
+  groupSnapshotFile
 } = require('./paths');
 const { markDeadStageWorkers } = require('./health-check');
 const { launchCurrentGroup, completeStage, nextStage, stopRun } = require('./lifecycle');
@@ -39,6 +41,7 @@ function printHelp() {
       '  node coordinator/index.js next-finding --run <runId>',
       '  node coordinator/index.js record-decision --run <runId> --stage <name> --finding <id> --decision <valid|invalid|valid_needs_approval> [--action fixed|none] [--rationale "..."] [--files-changed "a.js,b.js"] [--evidence "..."]',
       '  node coordinator/index.js stop --run <runId>',
+      '  node coordinator/index.js cleanup-snapshot --run <runId> --group <index>',
       '  node coordinator/index.js clean [--logs-only]',
       '  node coordinator/index.js --help'
     ].join('\n') + '\n'
@@ -250,6 +253,22 @@ async function main() {
     }
     const result = stopRun(runId);
     process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+    return;
+  }
+  if (command === 'cleanup-snapshot') {
+    const runId = validateRunId(requireFlag(flags, 'run'));
+    const groupIndex = Number(requireFlag(flags, 'group'));
+    if (!Number.isInteger(groupIndex) || groupIndex < 0) {
+      throw new Error('--group must be a non-negative integer.');
+    }
+    const cwd = process.cwd();
+    const snapshotPath = groupSnapshotFile(cwd, runId, groupIndex);
+    if (!fs.existsSync(snapshotPath)) {
+      process.stdout.write(JSON.stringify({ ok: true, runId, groupIndex, removed: false }, null, 2) + '\n');
+      return;
+    }
+    removeGroupSnapshot(cwd, runId, groupIndex);
+    process.stdout.write(JSON.stringify({ ok: true, runId, groupIndex, removed: true }, null, 2) + '\n');
     return;
   }
   if (command === 'clean') {

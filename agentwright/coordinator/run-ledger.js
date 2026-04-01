@@ -140,20 +140,17 @@ function removeSnapshotFromFile(cwd, snapshotFilePath) {
         throw new Error(`Failed to remove git worktree at ${snapshot.path}: ${msg}`);
       }
     }
-    return;
-  }
-  if (snapshot?.path) {
+  } else if (snapshot?.path) {
     assertPathWithin(managedRoot, snapshot.path, 'Snapshot path');
     if (expectedPath && path.resolve(snapshot.path) !== path.resolve(expectedPath)) {
       throw new Error('Snapshot path did not match the expected run/group location.');
     }
     removePath(snapshot.path);
-    return;
-  }
-  if (expectedPath && fs.existsSync(expectedPath)) {
+  } else if (expectedPath && fs.existsSync(expectedPath)) {
     assertPathWithin(managedRoot, expectedPath, 'Snapshot path');
     removePath(expectedPath);
   }
+  try { fs.unlinkSync(snapshotFilePath); } catch (e) { if (e.code !== 'ENOENT') throw e; }
 }
 
 function removeGroupSnapshot(cwd, runId, groupIndex) {
@@ -277,7 +274,8 @@ function cleanupCompletedStageArtifacts(cwd, runId, stageName, retention) {
   }
 }
 
-function cleanupCompletedGroupArtifacts(cwd, runId, groupIndex) {
+function cleanupCompletedGroupArtifacts(cwd, runId, groupIndex, { keepFirst = false } = {}) {
+  if (keepFirst && groupIndex === 0) return;
   removeGroupSnapshot(cwd, runId, groupIndex);
 }
 
@@ -370,6 +368,7 @@ module.exports = {
   listRuns,
   cleanupCompletedStageArtifacts,
   cleanupCompletedGroupArtifacts,
+  removeGroupSnapshot,
   pruneTerminalRuns,
   TERMINAL_STATUSES
 };

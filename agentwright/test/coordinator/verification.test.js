@@ -133,7 +133,16 @@ beforeEach(() => {
 
 afterEach(() => {
   process.chdir(origCwd);
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  for (let i = 0; i < 5; i++) {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      if (err.code !== 'EPERM' && err.code !== 'EACCES') throw err;
+      if (i === 4) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  }
 });
 
 describe('nextFinding', () => {
