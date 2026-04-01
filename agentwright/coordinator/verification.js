@@ -147,12 +147,6 @@ async function tryAdvanceGroup(cwd, runId) {
   const group = getCurrentGroup(run);
   if (!group) return false;
 
-  const allCompleted = group.stages.every(name => {
-    const s = run.stages.find(st => st.name === name);
-    return s && s.status === 'completed';
-  });
-  if (!allCompleted) return false;
-
   try {
     const next = await nextStage(runId);
     return next.status !== 'completed' && next.activeStages;
@@ -277,7 +271,13 @@ async function recordDecision(runId, stageName, findingId, opts) {
     writeJson(verifierPath, verifier);
   });
 
-  const auto = await tryAutoComplete(cwd, runId, stageName, decisionsData.decisions);
+  let auto;
+  try {
+    auto = await tryAutoComplete(cwd, runId, stageName, decisionsData.decisions);
+  } catch (err) {
+    process.stderr.write(`Warning: auto-complete failed after recording decision: ${err.message}\n`);
+    auto = { stageComplete: false };
+  }
 
   return {
     ok: true,

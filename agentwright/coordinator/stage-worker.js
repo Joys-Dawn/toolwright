@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const { loadRun, mutateRun, updateStageStatus } = require('./run-ledger');
 const {
   assertPathWithin,
@@ -145,6 +146,30 @@ async function main() {
     findingsCount: 0
   });
 
+  // When the snapshot is a temp-copy (dirty tree or non-git), there's no .git
+  // inside the snapshot, so --diff scope can't work. Resolve the diff file list
+  // from the live repo and pass those paths as scope instead.
+  let effectiveScope = run.scope;
+  if (snapshot.type === 'temp-copy' && /^--diff\b/.test(String(run.scope || '').trim())) {
+    const diffResult = spawnSync('git', ['diff', '--name-only', 'HEAD'], {
+      cwd,
+      encoding: 'utf8'
+    });
+    const stagedResult = spawnSync('git', ['diff', '--name-only', '--cached'], {
+      cwd,
+      encoding: 'utf8'
+    });
+    const diffFiles = new Set([
+      ...(diffResult.stdout || '').split('\n').map(f => f.trim()).filter(Boolean),
+      ...(stagedResult.stdout || '').split('\n').map(f => f.trim()).filter(Boolean)
+    ]);
+    if (diffFiles.size > 0) {
+      effectiveScope = [...diffFiles].join(' ');
+    } else {
+      effectiveScope = '--diff';
+    }
+  }
+
   const worker = spawnAuditor({
     cwd: snapshot.path,
     pluginRoot,
@@ -153,7 +178,7 @@ async function main() {
       cwd,
       stageName,
       stageDef,
-      scope: run.scope
+      scope: effectiveScope
     }),
     logsDir,
     runId,
