@@ -33,7 +33,7 @@ Workflow:
 `node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js record-decision --run <runId> --stage <stage> --finding <findingId> --decision valid --action fixed --rationale <why> --files-changed <file1.js,file2.js>`
      For invalid findings: `--decision invalid --action none --rationale <why>`
      For deferred findings: `--decision valid_needs_approval --action none --rationale <why>`
-     Then repeat step 2.
+     Then repeat step 3.
    - `"error"` — a stage audit failed. Report the error and stop.
    - `"done"` — pipeline complete. Proceed to step 4.
 
