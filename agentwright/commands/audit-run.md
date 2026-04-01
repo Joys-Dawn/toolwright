@@ -20,10 +20,13 @@ Workflow:
 1. Start the run (output includes the runId):
 !`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js start $ARGUMENTS`
 
-2. Poll for findings using the runId from step 1:
+2. Wait 60 seconds for the auditor to start producing findings:
+`sleep 60`
+
+3. Poll for findings using the runId from step 1:
 `node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js next-finding --run <runId>`
 
-3. Handle the response:
+4. Handle the response:
    - `"waiting"` — auditor is still running. Pause briefly, then repeat step 2.
    - `"finding"` — re-read the cited file in the **live repo** (not the snapshot). If valid and narrowly fixable, apply the fix, then record your decision:
 `node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js record-decision --run <runId> --stage <stage> --finding <findingId> --decision valid --action fixed --rationale <why> --files-changed <file1.js,file2.js>`
@@ -33,9 +36,9 @@ Workflow:
    - `"error"` — a stage audit failed. Report the error and stop.
    - `"done"` — pipeline complete. Proceed to step 4.
 
-4. If any fixes were applied, dispatch the `agentwright:verifier` subagent with a summary of every fix (finding ID, description, files changed, what was done). Do not blindly accept verifier claims — re-read cited code yourself and independently confirm any reported issue is real before acting on it.
+5. If any fixes were applied, dispatch the `agentwright:verifier` subagent with a summary of every fix (finding ID, description, files changed, what was done). Do not blindly accept verifier claims — re-read cited code yourself and independently confirm any reported issue is real before acting on it.
 
-5. Present a summary table:
+6. Present a summary table:
 
 | # | Stage | Finding | File(s) | Decision | Action |
 |---|-------|---------|---------|----------|--------|
@@ -43,6 +46,6 @@ Workflow:
 
 Keep **Finding** and **Action** columns to one short phrase each. After the table, add a **Verifier** section with a one-line result.
 
-6. If `.collab/` exists and other agents are registered, use `/wrightward:collab-done` to release file claims.
+7. If `.collab/` exists and other agents are registered, use `/wrightward:collab-done` to release file claims.
 
-7. If any `valid_needs_approval` findings exist, present them to the user with: finding ID, severity, title, cited file and problem, and your rationale for deferring. Wait for explicit approval before implementing any deferred finding.
+8. If any `valid_needs_approval` findings exist, present them to the user with: finding ID, severity, title, cited file and problem, and your rationale for deferring. Wait for explicit approval before implementing any deferred finding.

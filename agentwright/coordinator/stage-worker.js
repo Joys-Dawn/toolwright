@@ -58,7 +58,7 @@ function buildAuditorPrompt({ pluginRoot, cwd, stageName, stageDef, scope }) {
     '</AUDIT_SCOPE>',
     '',
     'You are auditing a frozen stage snapshot. Output newline-delimited JSON only.',
-    'Emit one compact JSON object per line as soon as a finding is ready.',
+    'Emit one compact JSON object per line as soon as a finding is ready. Do not wait until you have reviewed all files — emit each finding immediately after identifying it so the verifier can work in parallel.',
     'Finding line format:',
     `{"type":"finding","finding":{"id":"${stageName}-1","severity":"low|medium|high|critical","title":"...","file":"relative/path","lines":"optional","problem":"...","fix":"...","evidence":"...","snippet":"optional"}}`,
     'When the audit is complete, emit exactly one final line:',

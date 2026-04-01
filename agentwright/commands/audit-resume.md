@@ -10,9 +10,11 @@ Resume an existing run by advancing to the next incomplete group.
 2. Advance the pipeline:
 !`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js next --run $ARGUMENTS`
 3. If the run is complete, report that clearly.
-4. Otherwise, enter the same poll loop as `audit-run`:
+4. Otherwise, wait 60 seconds for the auditor to start producing findings:
+`sleep 60`
+5. Enter the same poll loop as `audit-run`:
    - Call `next-finding --run <runId>` to get findings one at a time
    - Re-read cited code in the live repo, verify, fix if valid
    - Call `record-decision` for each finding
    - Repeat until `"done"`
-5. Apply the same fix vs. defer rules, verifier subagent step, summary table, and deferred-findings presentation as `audit-run`.
+6. Apply the same fix vs. defer rules, verifier subagent step, summary table, and deferred-findings presentation as `audit-run`.
