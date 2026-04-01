@@ -58,7 +58,7 @@ describe('context script', () => {
     assert.equal(result.exitCode, 0);
 
     const context = JSON.parse(
-      fs.readFileSync(path.join(tmpDir, '.collab', 'context', 'sess-1.json'), 'utf8')
+      fs.readFileSync(path.join(tmpDir, '.claude', 'collab', 'context', 'sess-1.json'), 'utf8')
     );
     assert.equal(context.task, 'Implement command bridge');
     assert.deepEqual(context.files, ['~commands/collab-context.md']);
@@ -91,7 +91,7 @@ describe('context script', () => {
 
     assert.equal(result.exitCode, 0);
     assert.equal(result.stdout.includes('Cleared collab state'), true);
-    assert.equal(fs.existsSync(path.join(tmpDir, '.collab', 'context', 'sess-1.json')), false);
+    assert.equal(fs.existsSync(path.join(tmpDir, '.claude', 'collab', 'context', 'sess-1.json')), false);
   });
 
   it('fully cleans up state when marking the current session done', () => {
@@ -109,7 +109,7 @@ describe('context script', () => {
       })
     });
 
-    const lastSeenDir = path.join(tmpDir, '.collab', 'last-seen');
+    const lastSeenDir = path.join(tmpDir, '.claude', 'collab', 'last-seen');
     fs.mkdirSync(lastSeenDir, { recursive: true });
     fs.writeFileSync(path.join(lastSeenDir, 'sess-1.json'), JSON.stringify({ hash: 'abc' }), 'utf8');
 
@@ -122,9 +122,9 @@ describe('context script', () => {
     });
 
     assert.equal(result.exitCode, 0);
-    assert.equal(fs.existsSync(path.join(tmpDir, '.collab', 'context', 'sess-1.json')), false);
-    assert.equal(readAgents(path.join(tmpDir, '.collab'))['sess-1'], undefined);
-    assert.equal(getLastSeenHash(path.join(tmpDir, '.collab'), 'sess-1'), null);
+    assert.equal(fs.existsSync(path.join(tmpDir, '.claude', 'collab', 'context', 'sess-1.json')), false);
+    assert.equal(readAgents(path.join(tmpDir, '.claude', 'collab'))['sess-1'], undefined);
+    assert.equal(getLastSeenHash(path.join(tmpDir, '.claude', 'collab'), 'sess-1'), null);
   });
 
   it('re-registers the session when a new context is declared after done cleanup', () => {
@@ -165,9 +165,9 @@ describe('context script', () => {
     });
 
     assert.equal(result.exitCode, 0);
-    assert.ok(readAgents(path.join(tmpDir, '.collab'))['sess-1']);
+    assert.ok(readAgents(path.join(tmpDir, '.claude', 'collab'))['sess-1']);
     const context = JSON.parse(
-      fs.readFileSync(path.join(tmpDir, '.collab', 'context', 'sess-1.json'), 'utf8')
+      fs.readFileSync(path.join(tmpDir, '.claude', 'collab', 'context', 'sess-1.json'), 'utf8')
     );
     assert.equal(context.task, 'Second task');
   });
@@ -283,7 +283,7 @@ describe('context script', () => {
     assert.ok(result.stderr.includes('foo.js'));
 
     const ctx = JSON.parse(
-      fs.readFileSync(path.join(tmpDir, '.collab', 'context', 'sess-b.json'), 'utf8')
+      fs.readFileSync(path.join(tmpDir, '.claude', 'collab', 'context', 'sess-b.json'), 'utf8')
     );
     // foo.js stripped, baz.js kept
     assert.deepEqual(ctx.files, ['~baz.js']);
@@ -315,7 +315,7 @@ describe('context script', () => {
     assert.equal(result.stderr, '');
 
     const ctx = JSON.parse(
-      fs.readFileSync(path.join(tmpDir, '.collab', 'context', 'sess-a.json'), 'utf8')
+      fs.readFileSync(path.join(tmpDir, '.claude', 'collab', 'context', 'sess-a.json'), 'utf8')
     );
     assert.deepEqual(ctx.files, ['~foo.js', '+new.js']);
   });
@@ -345,7 +345,7 @@ describe('context script', () => {
 
     assert.equal(result.exitCode, 0);
     const ctx = JSON.parse(
-      fs.readFileSync(path.join(tmpDir, '.collab', 'context', 'sess-b.json'), 'utf8')
+      fs.readFileSync(path.join(tmpDir, '.claude', 'collab', 'context', 'sess-b.json'), 'utf8')
     );
     assert.deepEqual(ctx.files, []);
   });

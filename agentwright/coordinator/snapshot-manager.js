@@ -12,7 +12,7 @@ const {
 const { writeJson } = require('./io');
 
 const EXCLUDED_ROOTS = new Set([
-  '.claude', '.collab', 'node_modules', '.git',
+  '.claude', 'node_modules', '.git',
   'dist', 'build', '.next', '.nuxt', '.output',
   '.turbo', '.vercel', '.svelte-kit',
   'coverage', '__pycache__', '.pytest_cache',
@@ -150,7 +150,7 @@ function createGroupSnapshot(cwd, runId, groupIndex) {
       path: snapshotDir,
       createdAt: new Date().toISOString(),
       sourcePath: cwd,
-      excludedRoots: ['.claude', '.collab', 'node_modules', '.git', '.env*']
+      excludedRoots: ['.claude', 'node_modules', '.git', '.env*']
     };
   }
   removeExternalSymlinks(snapshot.path);

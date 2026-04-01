@@ -117,7 +117,7 @@ describe('heartbeat hook', () => {
     assert.deepEqual(ctx.files, []);
   });
 
-  it('exits cleanly when .collab does not exist', () => {
+  it('exits cleanly when .claude/collab does not exist', () => {
     const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'collab-empty-'));
     try {
       runHook({ session_id: 'sess-1', cwd: emptyDir });

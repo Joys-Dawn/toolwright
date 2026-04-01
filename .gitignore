@@ -10,7 +10,6 @@ node_modules/
 .pnpm-store/
 
 .claude/
-.collab/
 
 *.log
 npm-debug.log*
@@ -31,3 +30,4 @@ build/
 .eslintcache
 *.tsbuildinfo
 *.tgz
+.collab/

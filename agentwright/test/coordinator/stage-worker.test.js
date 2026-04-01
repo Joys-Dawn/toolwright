@@ -39,6 +39,7 @@ describe('stage-worker', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-test-'));
+    fs.mkdirSync(path.join(tmpDir, '.claude'), { recursive: true });
   });
 
   afterEach(() => {
@@ -68,7 +69,7 @@ describe('stage-worker', () => {
   it('writes failure meta when snapshot path is wrong', () => {
     // Use a custom stage with invalid skillId to trigger a predictable error
     // before the auditor is spawned (no dependency on claude CLI)
-    fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), JSON.stringify({
+    fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
       customStages: {
         fakestage: { type: 'skill', skillId: 'nonexistent-skill-dir' }
       }
@@ -115,7 +116,7 @@ describe('stage-worker', () => {
   });
 
   it('writes failure meta when custom skillPath does not exist', () => {
-    fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), JSON.stringify({
+    fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
       customStages: {
         pathstage: { type: 'skill', skillPath: 'nonexistent/SKILL.md' }
       }
@@ -157,7 +158,7 @@ describe('stage-worker', () => {
   describe('prompt building validation', () => {
     it('rejects invalid skill IDs via worker error path', () => {
       // Create a config with a stage that has an invalid skillId
-      fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), JSON.stringify({
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
         customStages: {
           badstage: { type: 'skill', skillId: '../../../etc/passwd' }
         }

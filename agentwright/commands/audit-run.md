@@ -48,6 +48,6 @@ Workflow:
 
 Keep **Finding** and **Action** columns to one short phrase each. After the table, add a **Verifier** section with a one-line result.
 
-7. If `.collab/` exists and other agents are registered, use `/wrightward:collab-done` to release file claims.
+7. If `.claude/collab/` exists and other agents are registered, use `/wrightward:collab-done` to release file claims.
 
 8. If any `valid_needs_approval` findings exist, present them to the user with: finding ID, severity, title, cited file and problem, and your rationale for deferring. Wait for explicit approval before implementing any deferred finding.

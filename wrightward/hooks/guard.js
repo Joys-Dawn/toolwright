@@ -146,9 +146,9 @@ async function main() {
   }
   validateSessionId(session_id);
 
-  const collabDir = path.join(cwd, '.collab');
+  const collabDir = path.join(cwd, '.claude', 'collab');
 
-  // If .collab doesn't exist, no collab active
+  // If .claude/collab doesn't exist, no collab active
   if (!fs.existsSync(collabDir)) {
     process.exit(0);
   }

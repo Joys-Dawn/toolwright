@@ -78,7 +78,7 @@ Focused agents dispatched as subprocesses for specific tasks.
 
 ## Config
 
-Create `.agentwright.json` in the repo root to customize pipelines and add custom stages:
+Create `.claude/agentwright.json` in your project to customize pipelines and add custom stages:
 
 ```json
 {
@@ -113,7 +113,7 @@ Create `.agentwright.json` in the repo root to customize pipelines and add custo
 }
 ```
 
-A copyable template is provided at `.agentwright.example.json`.
+A copyable template is provided at `agentwright.example.json` in the plugin directory.
 
 Custom stages can reference either a `skillId` (builtin skill name) or a `skillPath` (project-relative path to a SKILL.md file).
 

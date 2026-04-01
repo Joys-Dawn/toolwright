@@ -29,28 +29,28 @@ describe('register hook', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('creates .collab directory and registers agent', () => {
+  it('creates .claude/collab directory and registers agent', () => {
     runHook({ session_id: 'test-sess-1', cwd: tmpDir });
 
-    assert.ok(fs.existsSync(path.join(tmpDir, '.collab')));
-    assert.ok(fs.existsSync(path.join(tmpDir, '.collab', 'context')));
-    assert.ok(fs.existsSync(path.join(tmpDir, '.collab', 'last-seen')));
+    assert.ok(fs.existsSync(path.join(tmpDir, '.claude', 'collab')));
+    assert.ok(fs.existsSync(path.join(tmpDir, '.claude', 'collab', 'context')));
+    assert.ok(fs.existsSync(path.join(tmpDir, '.claude', 'collab', 'last-seen')));
 
-    const agents = JSON.parse(fs.readFileSync(path.join(tmpDir, '.collab', 'agents.json'), 'utf8'));
+    const agents = JSON.parse(fs.readFileSync(path.join(tmpDir, '.claude', 'collab', 'agents.json'), 'utf8'));
     assert.ok(agents['test-sess-1']);
     assert.ok(agents['test-sess-1'].registered_at > 0);
   });
 
-  it('adds .collab/ to .gitignore', () => {
+  it('adds .claude/collab/ to .gitignore', () => {
     runHook({ session_id: 'test-sess-1', cwd: tmpDir });
     const gitignore = fs.readFileSync(path.join(tmpDir, '.gitignore'), 'utf8');
-    assert.ok(gitignore.includes('.collab/'));
+    assert.ok(gitignore.includes('.claude/collab/'));
   });
 
   it('registers multiple agents', () => {
     runHook({ session_id: 'sess-a', cwd: tmpDir });
     runHook({ session_id: 'sess-b', cwd: tmpDir });
-    const agents = JSON.parse(fs.readFileSync(path.join(tmpDir, '.collab', 'agents.json'), 'utf8'));
+    const agents = JSON.parse(fs.readFileSync(path.join(tmpDir, '.claude', 'collab', 'agents.json'), 'utf8'));
     assert.ok(agents['sess-a']);
     assert.ok(agents['sess-b']);
   });

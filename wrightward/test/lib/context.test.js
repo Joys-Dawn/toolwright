@@ -12,7 +12,7 @@ describe('context', () => {
 
   beforeEach(() => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'collab-test-'));
-    collabDir = path.join(tmpDir, '.collab');
+    collabDir = path.join(tmpDir, '.claude', 'collab');
     fs.mkdirSync(path.join(collabDir, 'context'), { recursive: true });
   });
 

@@ -23,6 +23,7 @@ describe('pipeline', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pipeline-test-'));
+    fs.mkdirSync(path.join(tmpDir, '.claude'), { recursive: true });
   });
 
   afterEach(() => {
@@ -79,7 +80,7 @@ describe('pipeline', () => {
     });
 
     it('loads user config and merges retention', () => {
-      fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), JSON.stringify({
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
         pipelines: { quick: ['correctness'] },
         customStages: { custom: { type: 'skill', skillId: 'custom-audit' } },
         retention: { keepCompletedRuns: 5 }
@@ -95,7 +96,7 @@ describe('pipeline', () => {
       const skillFile = path.join(tmpDir, 'my-audit', 'SKILL.md');
       fs.mkdirSync(path.dirname(skillFile), { recursive: true });
       fs.writeFileSync(skillFile, '# My Audit', 'utf8');
-      fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), JSON.stringify({
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
         customStages: { custom: { type: 'skill', skillPath: 'my-audit/SKILL.md' } }
       }), 'utf8');
       const config = loadUserConfig(tmpDir);
@@ -103,21 +104,21 @@ describe('pipeline', () => {
     });
 
     it('rejects custom stage with neither skillId nor skillPath', () => {
-      fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), JSON.stringify({
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
         customStages: { bad: { type: 'skill' } }
       }), 'utf8');
       assert.throws(() => loadUserConfig(tmpDir), /skillId.*skillPath|skillPath.*skillId/);
     });
 
     it('rejects custom stage with both skillId and skillPath', () => {
-      fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), JSON.stringify({
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
         customStages: { ambig: { type: 'skill', skillId: 'foo', skillPath: 'bar/SKILL.md' } }
       }), 'utf8');
       assert.throws(() => loadUserConfig(tmpDir), /not both/);
     });
 
     it('handles config with missing optional fields', () => {
-      fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), '{}', 'utf8');
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), '{}', 'utf8');
       const config = loadUserConfig(tmpDir);
       assert.deepEqual(config.pipelines, {});
       assert.deepEqual(config.customStages, {});
@@ -137,7 +138,7 @@ describe('pipeline', () => {
     });
 
     it('resolves custom stages from config', () => {
-      fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), JSON.stringify({
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
         customStages: { custom: { type: 'skill', skillId: 'custom-audit' } }
       }), 'utf8');
       const def = resolveStageDefinition('custom', tmpDir);
@@ -145,7 +146,7 @@ describe('pipeline', () => {
     });
 
     it('builtin takes precedence over custom with same name', () => {
-      fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), JSON.stringify({
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
         customStages: { correctness: { type: 'skill', skillId: 'overridden' } }
       }), 'utf8');
       const def = resolveStageDefinition('correctness', tmpDir);
@@ -167,14 +168,14 @@ describe('pipeline', () => {
     });
 
     it('resolves user-defined pipeline', () => {
-      fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), JSON.stringify({
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
         pipelines: { quick: ['correctness'] }
       }), 'utf8');
       assert.deepEqual(resolveNamedPipeline('quick', tmpDir), ['correctness']);
     });
 
     it('user pipeline takes precedence over builtin with same name', () => {
-      fs.writeFileSync(path.join(tmpDir, '.agentwright.json'), JSON.stringify({
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
         pipelines: { default: ['security'] }
       }), 'utf8');
       assert.deepEqual(resolveNamedPipeline('default', tmpDir), ['security']);

@@ -12,7 +12,7 @@ Claude Code plugin that coordinates multiple agents working on the same codebase
 
 ### Setup
 
-When a session starts alongside other agents, run `/wrightward:collab-context` (user or agent can invoke this). This declares what the agent is working on — task description, files it plans to touch, and functions it will modify. The declaration is written to `.collab/` in the project root.
+When a session starts alongside other agents, run `/wrightward:collab-context` (user or agent can invoke this). This declares what the agent is working on — task description, files it plans to touch, and functions it will modify. The declaration is written to `.claude/collab/` in the project.
 
 Best used after a plan has been made (e.g., after using plan mode or agentwright's feature planning skill), since the agent will have a clear picture of which files and functions it will touch. Only declare files you are certain you will touch — files edited via Edit/Write are automatically added to your context while other agents are active.
 
@@ -20,7 +20,7 @@ Best used after a plan has been made (e.g., after using plan mode or agentwright
 
 Once context is declared, three hooks run on every tool call with no user intervention:
 
-**On session start** (`register.js`): The agent is registered in `.collab/agents.json` with its PID and a heartbeat timestamp.
+**On session start** (`register.js`): The agent is registered in `.claude/collab/agents.json` with its PID and a heartbeat timestamp.
 
 **After every tool call** (`heartbeat.js`): The agent's heartbeat is updated. If the tool was an Edit or Write, the file is automatically added to the agent's declared file list — so even files the user didn't anticipate are tracked.
 
@@ -61,7 +61,7 @@ Prefixes: `+` create, `~` modify, `-` delete. Files edited via Edit/Write are au
 
 | Event | Hook | What it does |
 |-------|------|--------------|
-| SessionStart | `register.js` | Registers the agent in `.collab/agents.json` |
+| SessionStart | `register.js` | Registers the agent in `.claude/collab/agents.json` |
 | PostToolUse | `heartbeat.js` | Updates heartbeat timestamp; auto-tracks files written by Edit/Write |
 | PreToolUse | `guard.js` | Blocks writes on claimed files; injects context for reads and non-overlapping writes |
 
@@ -71,7 +71,7 @@ Prefixes: `+` create, `~` modify, `-` delete. Files edited via Edit/Write are au
 - Writes to unclaimed files still get injected context about other active agents (so the agent stays aware)
 - Context injection is deduplicated — the same summary is only shown once (hash comparison)
 - Solo agents (no other active agents) are never blocked or interrupted
-- All state lives in `.collab/` (auto-gitignored)
+- All state lives in `.claude/collab/` (auto-gitignored)
 - Agents inside `agentwright` snapshot directories are automatically excluded from registration
 
 ## Testing

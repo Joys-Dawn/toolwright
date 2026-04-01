@@ -78,13 +78,13 @@ describe('snapshot-manager', () => {
       fs.rmSync(snapshot.path, { recursive: true, force: true });
     });
 
-    it('excludes .collab directory', () => {
-      fs.mkdirSync(path.join(tmpDir, '.collab'), { recursive: true });
-      fs.writeFileSync(path.join(tmpDir, '.collab', 'agents.json'), '{}', 'utf8');
+    it('excludes .claude/collab directory', () => {
+      fs.mkdirSync(path.join(tmpDir, '.claude', 'collab'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'collab', 'agents.json'), '{}', 'utf8');
       fs.writeFileSync(path.join(tmpDir, 'keep.txt'), 'yes', 'utf8');
 
       const snapshot = createGroupSnapshot(tmpDir, 'test-snapshot-excl2', 0);
-      assert.ok(!fs.existsSync(path.join(snapshot.path, '.collab')));
+      assert.ok(!fs.existsSync(path.join(snapshot.path, '.claude')));
       assert.ok(fs.existsSync(path.join(snapshot.path, 'keep.txt')));
 
       fs.rmSync(snapshot.path, { recursive: true, force: true });

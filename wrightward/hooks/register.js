@@ -39,7 +39,7 @@ async function main() {
   validateSessionId(session_id);
 
   // Don't register agents inside agentwright snapshot directories — they are
-  // ephemeral, read-only workspaces that should not grow .collab/ state.
+  // ephemeral, read-only workspaces that should not grow .claude/collab/ state.
   const snapshotRoot = path.join(os.tmpdir(), 'agentwright-snapshots');
   if (path.resolve(cwd).toLowerCase().startsWith(snapshotRoot.toLowerCase())) {
     process.exit(0);

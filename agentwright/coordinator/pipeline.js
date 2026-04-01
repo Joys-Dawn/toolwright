@@ -70,7 +70,7 @@ function validateUserConfig(parsed, configPath) {
 }
 
 function loadUserConfig(cwd) {
-  const configPath = path.join(cwd, '.agentwright.json');
+  const configPath = path.join(cwd, '.claude', 'agentwright.json');
   if (!fs.existsSync(configPath)) {
     return { pipelines: {}, customStages: {}, retention: { ...DEFAULT_RETENTION } };
   }
@@ -148,7 +148,7 @@ function resolveNamedPipeline(name, cwd, config) {
  * Tries in order: named pipeline, comma-separated stage list, single stage, fallback to default.
  * Loads user config once and threads it through all resolution calls.
  * @param {string} argumentString - Raw CLI argument string (may be empty).
- * @param {string} cwd - Project working directory (used to locate .agentwright.json).
+ * @param {string} cwd - Project working directory (used to locate .claude/agentwright.json).
  * @returns {{ pipelineName: string|null, groups: string[][], stages: string[], scope: string }}
  */
 function resolveCommandArgs(argumentString, cwd, config) {

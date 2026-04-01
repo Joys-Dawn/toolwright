@@ -12,7 +12,7 @@ describe('agents', () => {
 
   beforeEach(() => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'collab-test-'));
-    collabDir = path.join(tmpDir, '.collab');
+    collabDir = path.join(tmpDir, '.claude', 'collab');
     fs.mkdirSync(collabDir, { recursive: true });
   });
 

@@ -41,7 +41,7 @@ describe('guard hook', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('exits 0 when .collab does not exist', () => {
+  it('exits 0 when .claude/collab does not exist', () => {
     const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'collab-empty-'));
     try {
       const result = runHook({ session_id: 'sess-1', cwd: emptyDir });

@@ -18,9 +18,9 @@
     }
   },
   "retention": {
-    "keepCompletedRuns": 20,
+    "keepCompletedRuns": 2,
     "deleteCompletedLogs": true,
     "deleteCompletedFindings": false,
-    "maxRunAgeDays": 14
+    "maxRunAgeDays": 2
   }
 }
