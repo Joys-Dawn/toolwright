@@ -343,6 +343,108 @@ describe('process-manager', () => {
     });
   });
 
+  describe('cross-turn buffer contamination', () => {
+    const MOCK_CROSS_TURN = path.resolve(__dirname, 'fixtures/mock-auditor-cross-turn.js');
+
+    function spawnCrossTurnMock(args = []) {
+      return new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [MOCK_CROSS_TURN, ...args], {
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+        const findings = [];
+        let doneEvent = null;
+        let resultEvent = null;
+        let sawTextDelta = false;
+
+        const handleTextDelta = createTextDeltaLineReader(line => {
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed.type === 'finding') findings.push(parsed);
+            if (parsed.type === 'done') doneEvent = parsed;
+          } catch (_) {}
+        });
+
+        createJsonLineReader(child.stdout, line => {
+          try {
+            const event = JSON.parse(line);
+            if (event.type === 'result') resultEvent = event;
+            if (event.type === 'stream_event' && event.event?.type === 'content_block_delta' && event.event?.delta?.type === 'text_delta') {
+              sawTextDelta = true;
+              handleTextDelta(event.event.delta.text);
+            }
+            if (event.type === 'stream_event' && event.event?.type === 'content_block_stop') {
+              handleTextDelta.flush();
+            }
+          } catch (_) {}
+        });
+
+        child.on('close', code => {
+          handleTextDelta.flush();
+          resolve({ exitCode: code, findings, doneEvent, resultEvent });
+        });
+        child.on('error', reject);
+      });
+    }
+
+    it('detects done marker after prose in a separate content block', async () => {
+      const { exitCode, findings, doneEvent } = await spawnCrossTurnMock();
+      assert.equal(exitCode, 0);
+      assert.equal(findings.length, 0);
+      assert.ok(doneEvent, 'Done marker must be detected despite prose in prior content block');
+      assert.equal(doneEvent.type, 'done');
+      assert.equal(doneEvent.auditType, 'security');
+      assert.equal(doneEvent.emittedCount, 0);
+    });
+
+    it('detects findings and done marker across separate content blocks', async () => {
+      const { exitCode, findings, doneEvent } = await spawnCrossTurnMock(['--with-findings']);
+      assert.equal(exitCode, 0);
+      assert.equal(findings.length, 1);
+      assert.equal(findings[0].finding.id, 'cross-1');
+      assert.ok(doneEvent, 'Done marker must be detected after findings in separate blocks');
+      assert.equal(doneEvent.emittedCount, 1);
+    });
+
+    it('fails to detect done marker WITHOUT content_block_stop flush', async () => {
+      // Prove the bug existed: process the same stream WITHOUT flushing on
+      // content_block_stop, and show the done marker is lost.
+      const child = spawn(process.execPath, [MOCK_CROSS_TURN], {
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+
+      const result = await new Promise((resolve, reject) => {
+        let doneEvent = null;
+        const handleTextDelta = createTextDeltaLineReader(line => {
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed.type === 'done') doneEvent = parsed;
+          } catch (_) {}
+        });
+
+        createJsonLineReader(child.stdout, line => {
+          try {
+            const event = JSON.parse(line);
+            if (event.type === 'stream_event' && event.event?.delta?.type === 'text_delta') {
+              handleTextDelta(event.event.delta.text);
+            }
+            // Deliberately NOT flushing on content_block_stop
+          } catch (_) {}
+        });
+
+        child.on('close', code => {
+          handleTextDelta.flush();
+          resolve({ exitCode: code, doneEvent });
+        });
+        child.on('error', reject);
+      });
+
+      assert.equal(result.exitCode, 0);
+      // Without the flush fix, the prose contaminates the buffer and the
+      // done marker gets concatenated with it, failing JSON.parse.
+      assert.equal(result.doneEvent, null, 'Without flush fix, done marker should be lost');
+    });
+  });
+
   describe('mock-auditor integration', () => {
     const MOCK_AUDITOR = path.resolve(__dirname, 'fixtures/mock-auditor.js');
 

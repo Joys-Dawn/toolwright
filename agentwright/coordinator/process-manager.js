@@ -132,6 +132,9 @@ function spawnAuditor({ cwd, pluginRoot, prompt, logsDir, runId, stageName, onEv
         sawTextDelta = true;
         handleTextDelta(event.event.delta.text);
       }
+      if (event.type === 'stream_event' && event.event?.type === 'content_block_stop') {
+        handleTextDelta.flush();
+      }
       if (!sawTextDelta && event.type === 'assistant' && Array.isArray(event.message?.content)) {
         for (const block of event.message.content) {
           if (block.type === 'text' && typeof block.text === 'string') {
