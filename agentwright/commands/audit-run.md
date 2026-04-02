@@ -29,7 +29,29 @@ Workflow:
 
 4. Handle the response:
    - `"waiting"` — auditor is still running. `sleep 60`, then repeat step 3. The auditor often needs several minutes of reading and thinking before emitting its first finding — this is normal. Keep polling every 60 seconds; do not shorten or lengthen the interval, do not check logs, just loop.
-   - `"finding"` — re-read the cited file in the **live repo** (not the snapshot). If valid and narrowly fixable, apply the fix, then record your decision:
+   - `"finding"` — verify the finding before acting on it. Follow these steps in order:
+
+     **Step A — Locate**: Read the cited file and lines in the **live repo** (not the snapshot). Also read surrounding context (±30 lines) and any related files the code interacts with (callers, callees, types, tests).
+
+     **Step B — Contradict**: Try to disprove the finding. Actively look for reasons it might be wrong:
+     - Is the issue already handled elsewhere? (a parent component, a middleware, a wrapper, a try/catch higher up)
+     - Did the auditor misread the code? (wrong variable, wrong branch, outdated line numbers from snapshot vs live)
+     - Is there a comment, test, or doc explaining why the code is intentionally written this way?
+     - Does the surrounding code make the "problem" unreachable or irrelevant?
+
+     **Step C — Reason through validity**: Confirming the code matches what the auditor described is NOT enough. You must independently judge whether it is actually a problem:
+     - **Correctness**: Is the behavior actually wrong, or is it intended? Think about the design intent, edge cases, and whether the "fix" could break something that currently works.
+     - **Security**: Is this truly exploitable in practice, or is it a theoretical risk that requires conditions that will never occur? (e.g., the attacker would need server access they already wouldn't have)
+     - **Best practices**: Does this violate a real industry standard (DRY, SOLID, KISS, YAGNI, Clean Code) in a way that causes measurable harm (maintenance burden, bug risk, readability), or is it nitpicking / style preference?
+     - **UI/Accessibility**: Does this actually affect users, or is the auditor applying a standard that doesn't apply to this platform or context?
+
+     **Step D — Decide**:
+     - If you found a contradiction in Step B or the reasoning in Step C shows it's not a real issue → `invalid`
+     - If it's a valid issue and narrowly fixable → fix it, then record `valid` with `--action fixed`
+     - If it's valid but involves a tradeoff, is large-scale, or you're not fully confident → `valid_needs_approval`
+
+     Your rationale must reflect the reasoning from Steps B and C — not just "auditor is correct" or "code matches description."
+
 `node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js record-decision --run <runId> --stage <stage> --finding <findingId> --decision valid --action fixed --rationale <why> --files-changed <file1.js,file2.js>`
      For invalid findings: `--decision invalid --action none --rationale <why>`
      For deferred findings: `--decision valid_needs_approval --action none --rationale <why>`

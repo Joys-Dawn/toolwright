@@ -17,7 +17,7 @@ Note the `runId` from the JSON output.
 
 3. Follow the same poll loop as `audit-run`:
    - Call `next-finding --run <runId>` to get findings one at a time
-   - Re-read cited code in the live repo, verify, fix if valid
+   - For each finding, follow `audit-run`'s verification process exactly (Steps A–D): locate the code, try to contradict the finding, critically reason through whether it's a real issue, then decide
    - Call `record-decision` for each finding
    - Repeat until `"done"`
 

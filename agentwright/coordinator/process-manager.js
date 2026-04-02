@@ -5,10 +5,19 @@ const path = require('path');
 const { spawnSync, spawn } = require('child_process');
 
 function requireClaudeCli() {
-  const result = spawnSync('claude', ['--version'], { encoding: 'utf8' });
-  if (result.error || result.status !== 0) {
-    throw new Error('Claude CLI is not available. Install Claude Code and ensure `claude` is on PATH.');
+  const MAX_ATTEMPTS = 3;
+  const DELAY_MS = 2000;
+  // Synchronous sleep — Atomics.wait is the only non-busy-wait blocking primitive in Node.
+  const waitBuf = new Int32Array(new SharedArrayBuffer(4));
+  let lastResult;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    lastResult = spawnSync('claude', ['--version'], { encoding: 'utf8' });
+    if (!lastResult.error && lastResult.status === 0) return;
+    if (attempt < MAX_ATTEMPTS - 1) {
+      Atomics.wait(waitBuf, 0, 0, DELAY_MS);
+    }
   }
+  throw new Error('Claude CLI is not available. Install Claude Code and ensure `claude` is on PATH.');
 }
 
 function buildAllowedTools() {

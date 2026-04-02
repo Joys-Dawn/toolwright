@@ -155,8 +155,8 @@ describe('snapshot-manager', () => {
     });
   });
 
-  describe('temp-copy (dirty git repo)', () => {
-    it('creates a temp-copy snapshot including uncommitted changes when tree is dirty', function() {
+  describe('git worktree with dirty overlay', () => {
+    it('creates a worktree snapshot with dirty files overlaid when tree is dirty', function() {
       if (!isGitAvailable) {
         this.skip();
         return;
@@ -172,14 +172,49 @@ describe('snapshot-manager', () => {
       fs.writeFileSync(path.join(tmpDir, 'uncommitted.txt'), 'not in HEAD', 'utf8');
 
       const snapshot = createGroupSnapshot(tmpDir, 'test-snapshot-dirty', 0);
-      assert.equal(snapshot.type, 'temp-copy');
+      assert.equal(snapshot.type, 'git-worktree');
+      assert.equal(snapshot.dirtyOverlay, true);
+      assert.ok(Array.isArray(snapshot.dirtyFiles));
+      assert.ok(snapshot.dirtyFiles.includes('uncommitted.txt'));
       assert.ok(fs.existsSync(snapshot.path));
-      // Committed file should be present
+      // Committed file should be present (from worktree checkout)
       assert.equal(fs.readFileSync(path.join(snapshot.path, 'committed.txt'), 'utf8'), 'in HEAD');
-      // Uncommitted file should also be present (temp-copy captures working state)
+      // Dirty file should be overlaid on top
       assert.ok(fs.existsSync(path.join(snapshot.path, 'uncommitted.txt')));
       assert.equal(fs.readFileSync(path.join(snapshot.path, 'uncommitted.txt'), 'utf8'), 'not in HEAD');
+      // git status should show the overlaid file as a change in the worktree
+      const status = spawnSync('git', ['status', '--porcelain'], { cwd: snapshot.path, encoding: 'utf8' });
+      assert.ok(status.stdout.includes('uncommitted.txt'), 'git status should show overlaid dirty files');
 
+      spawnSync('git', ['worktree', 'remove', '--force', snapshot.path], { cwd: tmpDir });
+      fs.rmSync(snapshot.path, { recursive: true, force: true });
+    });
+
+    it('removes deleted files from the snapshot overlay', function() {
+      if (!isGitAvailable) {
+        this.skip();
+        return;
+      }
+      spawnSync('git', ['init'], { cwd: tmpDir });
+      spawnSync('git', ['config', 'user.email', 'test@test.com'], { cwd: tmpDir });
+      spawnSync('git', ['config', 'user.name', 'Test'], { cwd: tmpDir });
+      fs.writeFileSync(path.join(tmpDir, 'keep.txt'), 'stays', 'utf8');
+      fs.writeFileSync(path.join(tmpDir, 'delete-me.txt'), 'going away', 'utf8');
+      spawnSync('git', ['add', '.'], { cwd: tmpDir });
+      spawnSync('git', ['commit', '-m', 'initial'], { cwd: tmpDir });
+
+      // Delete a tracked file in the working tree
+      fs.unlinkSync(path.join(tmpDir, 'delete-me.txt'));
+
+      const snapshot = createGroupSnapshot(tmpDir, 'test-snapshot-delete', 0);
+      assert.equal(snapshot.type, 'git-worktree');
+      assert.equal(snapshot.dirtyOverlay, true);
+      // Kept file should still be present
+      assert.ok(fs.existsSync(path.join(snapshot.path, 'keep.txt')));
+      // Deleted file should be absent from the snapshot
+      assert.ok(!fs.existsSync(path.join(snapshot.path, 'delete-me.txt')), 'Deleted file should be removed from snapshot');
+
+      spawnSync('git', ['worktree', 'remove', '--force', snapshot.path], { cwd: tmpDir });
       fs.rmSync(snapshot.path, { recursive: true, force: true });
     });
   });

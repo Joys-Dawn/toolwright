@@ -104,10 +104,6 @@ function isGitRepo(cwd) {
   return repoCheck.status === 0;
 }
 
-function isCleanWorkingTree(cwd) {
-  const statusCheck = runGit(cwd, ['status', '--porcelain']);
-  return statusCheck.status === 0 && statusCheck.stdout.trim() === '';
-}
 
 function createGitWorktreeSnapshot(cwd, runId, snapshotLabel) {
   const snapshotDir = path.join(
@@ -130,13 +126,53 @@ function createGitWorktreeSnapshot(cwd, runId, snapshotLabel) {
   };
 }
 
+function getDirtyFiles(cwd) {
+  const unstaged = spawnSync('git', ['diff', '--name-only'], { cwd, encoding: 'utf8' });
+  const staged = spawnSync('git', ['diff', '--name-only', '--cached'], { cwd, encoding: 'utf8' });
+  const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard'], { cwd, encoding: 'utf8' });
+  if (unstaged.status !== 0 || staged.status !== 0 || untracked.status !== 0) {
+    process.stderr.write('Warning: git commands failed while collecting dirty files; overlay may be incomplete.\n');
+  }
+  const files = new Set([
+    ...(unstaged.stdout || '').split('\n').map(f => f.trim()).filter(Boolean),
+    ...(staged.stdout || '').split('\n').map(f => f.trim()).filter(Boolean),
+    ...(untracked.stdout || '').split('\n').map(f => f.trim()).filter(Boolean)
+  ]);
+  return [...files].filter(f => !shouldExclude(f));
+}
+
+function overlayDirtyFiles(cwd, snapshotDir, dirtyFiles) {
+  for (const relFile of dirtyFiles) {
+    const srcPath = path.join(cwd, relFile);
+    const destPath = path.join(snapshotDir, relFile);
+    try {
+      if (!fs.existsSync(srcPath)) {
+        // File was deleted in the working tree — remove from snapshot too
+        fs.rmSync(destPath, { force: true });
+        continue;
+      }
+      fs.mkdirSync(path.dirname(destPath), { recursive: true });
+      fs.copyFileSync(srcPath, destPath);
+    } catch (err) {
+      process.stderr.write(`Warning: failed to overlay ${relFile}: ${err.message}\n`);
+    }
+  }
+}
+
 function createGroupSnapshot(cwd, runId, groupIndex) {
   let snapshot;
-  if (isGitRepo(cwd) && isCleanWorkingTree(cwd)) {
+  if (isGitRepo(cwd)) {
     snapshot = createGitWorktreeSnapshot(cwd, runId, `group-${groupIndex}`);
+    const dirtyFiles = getDirtyFiles(cwd);
+    if (dirtyFiles.length > 0) {
+      overlayDirtyFiles(cwd, snapshot.path, dirtyFiles);
+      snapshot.dirtyOverlay = true;
+      snapshot.dirtyFiles = dirtyFiles;
+    } else {
+      snapshot.dirtyOverlay = false;
+    }
   } else {
-    // Non-git or dirty working tree: use temp-copy so the snapshot reflects
-    // the actual working state (staged + unstaged changes), not just HEAD.
+    // Non-git project: use temp-copy as fallback.
     const snapshotDir = path.join(
       getManagedSnapshotRoot(),
       `${runId}-group-${groupIndex}`

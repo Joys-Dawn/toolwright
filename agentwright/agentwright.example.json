@@ -6,9 +6,6 @@
       "security",
       "best-practices",
       ["migration", "ui"],
-      "tests-migration",
-      "tests-edge",
-      "tests-frontend",
       "test-coverage"
     ]
   },

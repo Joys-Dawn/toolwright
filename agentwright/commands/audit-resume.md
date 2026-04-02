@@ -14,7 +14,7 @@ Resume an existing run by advancing to the next incomplete group.
 `sleep 60`
 5. Enter the same poll loop as `audit-run`:
    - Call `next-finding --run <runId>` to get findings one at a time
-   - Re-read cited code in the live repo, verify, fix if valid
+   - For each finding, follow `audit-run`'s verification process exactly (Steps A–D): locate the code, try to contradict the finding, critically reason through whether it's a real issue, then decide
    - Call `record-decision` for each finding
    - Repeat until `"done"`
 6. Apply the same fix vs. defer rules, verifier subagent step, summary table, and deferred-findings presentation as `audit-run`.
