@@ -8,11 +8,15 @@ const path = require('path');
 const os = require('os');
 const { ensureCollabDir } = require('../../lib/collab-dir');
 const { registerAgent, readAgents } = require('../../lib/agents');
-const { writeContext } = require('../../lib/context');
+const { writeContext, fileEntryForPath } = require('../../lib/context');
 const { setLastSeenHash, getLastSeenHash } = require('../../lib/last-seen');
 const { hashString } = require('../../lib/hash');
 
 const HOOK = path.resolve(__dirname, '../../hooks/guard.js');
+
+function fe(prefix, filePath) {
+  return { ...fileEntryForPath(filePath, prefix, 'planned'), declaredAt: Date.now(), lastTouched: Date.now() };
+}
 
 function runHook(input) {
   try {
@@ -60,7 +64,7 @@ describe('guard hook', () => {
   it('exits 2 when agent has no context and edit overlaps with another agent', () => {
     registerAgent(collabDir, 'sess-1');
     registerAgent(collabDir, 'sess-2');
-    writeContext(collabDir, 'sess-2', { task: 'other work', files: ['+target.js'], status: 'in-progress' });
+    writeContext(collabDir, 'sess-2', { task: 'other work', files: [fe('+', 'target.js')], status: 'in-progress' });
     const result = runHook({
       session_id: 'sess-1',
       cwd: tmpDir,
@@ -68,13 +72,13 @@ describe('guard hook', () => {
       tool_input: { file_path: path.join(tmpDir, 'target.js') }
     });
     assert.equal(result.exitCode, 2);
-    assert.ok(result.stdout.includes('/wrightward:collab-context'));
+    assert.ok(result.stderr.includes('collab-context'));
   });
 
   it('exits 0 when agent has no context but edit does not overlap', () => {
     registerAgent(collabDir, 'sess-1');
     registerAgent(collabDir, 'sess-2');
-    writeContext(collabDir, 'sess-2', { task: 'other work', files: ['+other.js'], status: 'in-progress' });
+    writeContext(collabDir, 'sess-2', { task: 'other work', files: [fe('+', 'other.js')], status: 'in-progress' });
     const result = runHook({
       session_id: 'sess-1',
       cwd: tmpDir,
@@ -95,7 +99,7 @@ describe('guard hook', () => {
     registerAgent(collabDir, 'sess-1');
     registerAgent(collabDir, 'sess-2');
     writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
-    writeContext(collabDir, 'sess-2', { task: 'their work', files: ['~foo.js'], status: 'in-progress' });
+    writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'foo.js')], status: 'in-progress' });
 
     const result = runHook({
       session_id: 'sess-1',
@@ -104,15 +108,15 @@ describe('guard hook', () => {
       tool_input: { file_path: path.join(tmpDir, 'foo.js') }
     });
     assert.equal(result.exitCode, 2);
-    assert.ok(result.stdout.includes('their work'));
-    assert.ok(result.stdout.includes('foo.js'));
+    assert.ok(result.stderr.includes('their work'));
+    assert.ok(result.stderr.includes('foo.js'));
   });
 
   it('injects non-blocking context when Write targets unrelated file', () => {
     registerAgent(collabDir, 'sess-1');
     registerAgent(collabDir, 'sess-2');
     writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
-    writeContext(collabDir, 'sess-2', { task: 'their work', files: ['~foo.js'], status: 'in-progress' });
+    writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'foo.js')], status: 'in-progress' });
 
     const result = runHook({
       session_id: 'sess-1',
@@ -122,6 +126,8 @@ describe('guard hook', () => {
     });
     assert.equal(result.exitCode, 0);
     const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.hookSpecificOutput.hookEventName, 'PreToolUse');
+    assert.equal(parsed.hookSpecificOutput.permissionDecision, 'allow');
     assert.ok(parsed.hookSpecificOutput.additionalContext.includes('their work'));
   });
 
@@ -129,7 +135,7 @@ describe('guard hook', () => {
     registerAgent(collabDir, 'sess-1');
     registerAgent(collabDir, 'sess-2');
     writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
-    writeContext(collabDir, 'sess-2', { task: 'their work', files: ['~foo.js'], status: 'in-progress' });
+    writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'foo.js')], status: 'in-progress' });
 
     // First call injects context (non-blocking, no file overlap)
     const first = runHook({
@@ -154,7 +160,7 @@ describe('guard hook', () => {
     registerAgent(collabDir, 'sess-1');
     registerAgent(collabDir, 'sess-2');
     writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
-    writeContext(collabDir, 'sess-2', { task: 'their work', files: ['~shared.js'], status: 'in-progress' });
+    writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'shared.js')], status: 'in-progress' });
 
     // First call blocks
     const first = runHook({
@@ -179,7 +185,7 @@ describe('guard hook', () => {
     registerAgent(collabDir, 'sess-1');
     registerAgent(collabDir, 'sess-2');
     writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
-    writeContext(collabDir, 'sess-2', { task: 'original task', files: ['~shared.js'], status: 'in-progress' });
+    writeContext(collabDir, 'sess-2', { task: 'original task', files: [fe('~', 'shared.js')], status: 'in-progress' });
 
     // First call blocks (file overlap)
     runHook({
@@ -190,7 +196,7 @@ describe('guard hook', () => {
     });
 
     // Agent 2 updates context
-    writeContext(collabDir, 'sess-2', { task: 'new task', files: ['~shared.js'], status: 'in-progress' });
+    writeContext(collabDir, 'sess-2', { task: 'new task', files: [fe('~', 'shared.js')], status: 'in-progress' });
 
     // Should block again (file still overlaps + context changed)
     const result = runHook({
@@ -200,7 +206,7 @@ describe('guard hook', () => {
       tool_input: { file_path: path.join(tmpDir, 'shared.js') }
     });
     assert.equal(result.exitCode, 2);
-    assert.ok(result.stdout.includes('new task'));
+    assert.ok(result.stderr.includes('new task'));
   });
 
   it('skips agents with status=done without cleaning them up', () => {
@@ -273,6 +279,8 @@ describe('guard hook', () => {
     });
     assert.equal(result.exitCode, 0);
     const output = JSON.parse(result.stdout);
+    assert.equal(output.hookSpecificOutput.hookEventName, 'PreToolUse');
+    assert.equal(output.hookSpecificOutput.permissionDecision, 'allow');
     assert.ok(output.hookSpecificOutput.additionalContext.includes('collab-context'));
     assert.ok(output.hookSpecificOutput.additionalContext.includes('inactive'));
   });
@@ -305,7 +313,7 @@ describe('guard hook', () => {
     writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
     writeContext(collabDir, 'sess-2', {
       task: 'their work',
-      files: ['~src/shared.js'],
+      files: [fe('~', 'src/shared.js')],
       functions: ['~sharedThing'],
       status: 'in-progress'
     });
@@ -319,7 +327,8 @@ describe('guard hook', () => {
 
     assert.equal(result.exitCode, 0);
     const parsed = JSON.parse(result.stdout);
-    assert.ok(parsed.hookSpecificOutput);
+    assert.equal(parsed.hookSpecificOutput.hookEventName, 'PreToolUse');
+    assert.equal(parsed.hookSpecificOutput.permissionDecision, 'allow');
     assert.ok(parsed.hookSpecificOutput.additionalContext.includes('their work'));
     assert.ok(parsed.hookSpecificOutput.additionalContext.includes('src/shared.js'));
   });
@@ -330,7 +339,7 @@ describe('guard hook', () => {
     writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
     writeContext(collabDir, 'sess-2', {
       task: 'their work',
-      files: ['~src/shared.js'],
+      files: [fe('~', 'src/shared.js')],
       status: 'in-progress'
     });
 
@@ -355,7 +364,7 @@ describe('guard hook', () => {
     writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
     writeContext(collabDir, 'sess-2', {
       task: 'their work',
-      files: ['~src/shared.js'],
+      files: [fe('~', 'src/shared.js')],
       status: 'in-progress'
     });
 
@@ -380,7 +389,7 @@ describe('guard hook', () => {
     writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
     writeContext(collabDir, 'sess-2', {
       task: 'their work',
-      files: ['~lib/utils.js'],
+      files: [fe('~', 'lib/utils.js')],
       status: 'in-progress'
     });
 
@@ -405,7 +414,7 @@ describe('guard hook', () => {
     writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
     writeContext(collabDir, 'sess-2', {
       task: 'their work',
-      files: ['~src/shared.js'],
+      files: [fe('~', 'src/shared.js')],
       status: 'in-progress'
     });
 
@@ -429,7 +438,7 @@ describe('guard hook', () => {
     registerAgent(collabDir, 'sess-1');
     registerAgent(collabDir, 'sess-2');
     writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
-    writeContext(collabDir, 'sess-2', { task: 'their work', files: ['~shared.js'], status: 'in-progress' });
+    writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'shared.js')], status: 'in-progress' });
 
     const result = runHook({
       session_id: 'sess-1',
@@ -438,14 +447,14 @@ describe('guard hook', () => {
       tool_input: { file_path: path.join(tmpDir, 'shared.js') }
     });
     assert.equal(result.exitCode, 2);
-    assert.ok(result.stdout.includes('their work'));
+    assert.ok(result.stderr.includes('their work'));
   });
 
   it('exits 0 for Read on non-overlapping file', () => {
     registerAgent(collabDir, 'sess-1');
     registerAgent(collabDir, 'sess-2');
     writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
-    writeContext(collabDir, 'sess-2', { task: 'their work', files: ['~foo.js'], status: 'in-progress' });
+    writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'foo.js')], status: 'in-progress' });
 
     const result = runHook({
       session_id: 'sess-1',
@@ -463,8 +472,8 @@ describe('guard hook', () => {
     registerAgent(collabDir, 'sess-2');
     registerAgent(collabDir, 'sess-3');
     writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
-    writeContext(collabDir, 'sess-2', { task: 'agent-two task', files: ['~shared.js'], status: 'in-progress' });
-    writeContext(collabDir, 'sess-3', { task: 'agent-three task', files: ['~shared.js'], status: 'in-progress' });
+    writeContext(collabDir, 'sess-2', { task: 'agent-two task', files: [fe('~', 'shared.js')], status: 'in-progress' });
+    writeContext(collabDir, 'sess-3', { task: 'agent-three task', files: [fe('~', 'shared.js')], status: 'in-progress' });
 
     const result = runHook({
       session_id: 'sess-1',
@@ -473,15 +482,15 @@ describe('guard hook', () => {
       tool_input: { file_path: path.join(tmpDir, 'shared.js') }
     });
     assert.equal(result.exitCode, 2);
-    assert.ok(result.stdout.includes('agent-two task'));
-    assert.ok(result.stdout.includes('agent-three task'));
+    assert.ok(result.stderr.includes('agent-two task'));
+    assert.ok(result.stderr.includes('agent-three task'));
   });
 
   it('exits 0 when tool_name is missing (no-op)', () => {
     registerAgent(collabDir, 'sess-1');
     registerAgent(collabDir, 'sess-2');
     writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
-    writeContext(collabDir, 'sess-2', { task: 'their work', files: ['~target.js'], status: 'in-progress' });
+    writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'target.js')], status: 'in-progress' });
 
     const result = runHook({
       session_id: 'sess-1',
@@ -496,7 +505,7 @@ describe('guard hook', () => {
     registerAgent(collabDir, 'sess-1');
     registerAgent(collabDir, 'sess-2');
     writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
-    writeContext(collabDir, 'sess-2', { task: 'removing old code', files: ['-obsolete.js'], status: 'in-progress' });
+    writeContext(collabDir, 'sess-2', { task: 'removing old code', files: [fe('-', 'obsolete.js')], status: 'in-progress' });
 
     const result = runHook({
       session_id: 'sess-1',

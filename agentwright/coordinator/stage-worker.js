@@ -262,6 +262,21 @@ async function main() {
   });
 
   const { exitCode, resultEvent, doneEvent } = await worker.wait();
+
+  // Clean up the CLI project folder created for the snapshot directory.
+  // Each auditor subprocess creates a project entry in ~/.claude/projects/
+  // named after the snapshot path — these are single-use and pile up.
+  // NOTE: The folder naming convention (drive letter + dashes) is reverse-engineered
+  // from Claude CLI behavior as of v2.1.91. If the CLI changes this convention,
+  // cleanup silently fails (swallowed by try-catch) and folders accumulate.
+  try {
+    const homedir = require('os').homedir();
+    const snapshotAbs = path.resolve(snapshot.path);
+    const folderName = snapshotAbs.replace(/^([a-zA-Z]):/, (_, d) => d.toUpperCase() + '-').replace(/[\\/]/g, '-');
+    const projectDir = path.join(homedir, '.claude', 'projects', folderName);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  } catch (_) {}
+
   if (!doneMarker) {
     doneMarker = doneEvent || {
       type: 'done',

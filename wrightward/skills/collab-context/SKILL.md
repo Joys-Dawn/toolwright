@@ -39,6 +39,13 @@ EOF
 
 **When to use:** Best used after a plan has been made (e.g., after using plan mode or agentwright's feature planning skill), since you'll have a clear picture of which files and functions you'll touch.
 
+**Timeout behavior:**
+
+- **Declared files** (listed here): Held for 15 minutes. If you're still actively editing a file near the end of that window, the claim extends automatically.
+- **Auto-tracked files** (detected from your Edit/Write calls without being declared here): Held for only 2 minutes from your last touch. These are lightweight claims that expire quickly.
+- **Idle reminders**: If you haven't touched a file in 5 minutes, you'll get a one-time reminder to consider releasing it.
+- **Early release**: Use `/wrightward:collab-release` to release files immediately when you're done with them, instead of waiting for the timeout.
+
 **Instructions:**
 
 1. Assess what you're currently working on
@@ -46,3 +53,4 @@ EOF
 3. Run the Bash command above with the payload on stdin
 4. If the script fails, explain the error plainly
 5. Update your context whenever your focus shifts significantly (new task, different files, etc.)
+6. Release files you no longer need with `/wrightward:collab-release`

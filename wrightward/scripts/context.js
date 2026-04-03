@@ -4,9 +4,9 @@
 const path = require('path');
 const { ensureCollabDir } = require('../lib/collab-dir');
 const { getActiveAgents, registerAgent } = require('../lib/agents');
-const { readContext, writeContext } = require('../lib/context');
+const { readContext, writeContext, fileEntryForPath } = require('../lib/context');
 const { removeSessionState } = require('../lib/session-state');
-const { INACTIVE_THRESHOLD_MS } = require('../lib/constants');
+const { loadConfig } = require('../lib/config');
 
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -30,6 +30,22 @@ function normalizeStringArray(value, fieldName) {
   return value;
 }
 
+/**
+ * Converts a prefixed file string (e.g. "+src/foo.js") into a file entry object.
+ */
+function toFileEntry(entry) {
+  if (typeof entry !== 'string') {
+    throw new Error(`Each file entry must be a prefixed string (e.g. "+src/foo.js"), got ${typeof entry}.`);
+  }
+  const prefixMatch = entry.match(/^([+~-])/);
+  const prefix = prefixMatch ? prefixMatch[1] : '~';
+  const filePath = prefixMatch ? entry.slice(1) : entry;
+  if (!filePath) {
+    throw new Error('File path cannot be empty.');
+  }
+  return fileEntryForPath(filePath, prefix, 'planned');
+}
+
 function normalizePayload(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new Error('Context payload must be a JSON object.');
@@ -44,9 +60,14 @@ function normalizePayload(payload) {
     throw new Error('"status" must be "in-progress" or "done".');
   }
 
+  const rawFiles = payload.files == null ? [] : payload.files;
+  if (!Array.isArray(rawFiles)) {
+    throw new Error('"files" must be an array.');
+  }
+
   return {
     task: payload.task.trim(),
-    files: normalizeStringArray(payload.files, 'files'),
+    files: rawFiles.map(toFileEntry),
     functions: normalizeStringArray(payload.functions, 'functions'),
     status
   };
@@ -83,21 +104,21 @@ async function main() {
   const payload = normalizePayload(JSON.parse(input));
 
   // Strip files already claimed by other active agents
-  const activeAgents = getActiveAgents(collabDir, INACTIVE_THRESHOLD_MS);
+  const config = loadConfig(cwd);
+  const activeAgents = getActiveAgents(collabDir, config.INACTIVE_THRESHOLD_MS);
   const claimedFiles = new Set();
   for (const [agentId, _] of Object.entries(activeAgents)) {
     if (agentId === sessionId) continue;
     const ctx = readContext(collabDir, agentId);
     if (!ctx || ctx.status === 'done') continue;
     for (const file of ctx.files || []) {
-      claimedFiles.add(file.replace(/^[+~-]/, ''));
+      claimedFiles.add(file.path);
     }
   }
   const stripped = [];
-  payload.files = payload.files.filter(file => {
-    const bare = file.replace(/^[+~-]/, '');
-    if (claimedFiles.has(bare)) {
-      stripped.push(file);
+  payload.files = payload.files.filter(entry => {
+    if (claimedFiles.has(entry.path)) {
+      stripped.push(entry.prefix + entry.path);
       return false;
     }
     return true;

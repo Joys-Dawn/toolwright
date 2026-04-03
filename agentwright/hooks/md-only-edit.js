@@ -9,9 +9,6 @@ const input = JSON.parse(fs.readFileSync(0, "utf8"));
 const filePath = input.tool_input?.file_path || "";
 
 if (!filePath.endsWith(".md")) {
-  const result = {
-    decision: "block",
-    reason: `update-docs agent can only edit .md files (attempted: ${filePath})`,
-  };
-  process.stdout.write(JSON.stringify(result));
+  process.stderr.write(`update-docs agent can only edit .md files (attempted: ${filePath})`);
+  process.exit(2);
 }

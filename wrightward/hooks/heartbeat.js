@@ -3,12 +3,12 @@
 
 const fs = require('fs');
 const path = require('path');
-const { updateHeartbeat, withAgentsLock } = require('../lib/agents');
-const { readContext, writeContext } = require('../lib/context');
-const { scavengeExpiredSessions } = require('../lib/session-state');
+const { updateHeartbeat } = require('../lib/agents');
+const { autoTrackFile } = require('../lib/auto-track');
+const { ensureCollabDir } = require('../lib/collab-dir');
+const { loadConfig } = require('../lib/config');
+const { scavengeExpiredSessions, scavengeExpiredFiles } = require('../lib/session-state');
 const { validateSessionId } = require('../lib/constants');
-
-const HARD_SCAVENGE_MS = 60 * 60 * 1000;
 
 async function main() {
   let input = '';
@@ -22,39 +22,41 @@ async function main() {
   }
   validateSessionId(session_id);
 
+  const isFileOp = (tool_name === 'Edit' || tool_name === 'Write') && tool_input && tool_input.file_path;
   const collabDir = path.join(cwd, '.claude', 'collab');
 
-  // If .claude/collab doesn't exist, nothing to do
+  // If .claude/collab doesn't exist: create it only for Edit/Write (auto-tracking).
+  // Non-file tools without an existing collab dir have nothing to do.
   if (!fs.existsSync(collabDir)) {
-    process.exit(0);
+    if (isFileOp) {
+      ensureCollabDir(cwd);
+    } else {
+      process.exit(0);
+    }
   }
 
-  scavengeExpiredSessions(collabDir, HARD_SCAVENGE_MS, session_id);
+  const config = loadConfig(cwd);
+
+  scavengeExpiredSessions(collabDir, config.SESSION_HARD_SCAVENGE_MS, session_id);
+  scavengeExpiredFiles(collabDir, config, session_id);
   updateHeartbeat(collabDir, session_id);
 
-  // Auto-track files this agent successfully wrote.
-  // This lives in the heartbeat hook rather than a separate PostToolUse hook
-  // to avoid doubling the per-tool-call overhead (two hooks vs one).
-  // Wrapped in withAgentsLock to prevent TOCTOU when parallel tool calls
-  // fire concurrent PostToolUse hooks for the same session.
-  if ((tool_name === 'Edit' || tool_name === 'Write') && tool_input && tool_input.file_path) {
-    withAgentsLock(collabDir, () => {
-      const ctx = readContext(collabDir, session_id);
-      if (ctx) {
-        const relative = path.relative(cwd, tool_input.file_path);
-        if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
-          const prefix = tool_name === 'Write' ? '+' : '~';
-          const prefixed = prefix + relative.split(path.sep).join('/');
-          const existingFiles = ctx.files || [];
-          // Check for either prefix variant to avoid duplicates
-          const bare = relative.split(path.sep).join('/');
-          if (!existingFiles.some(f => f.replace(/^[+~-]/, '') === bare)) {
-            ctx.files = [...existingFiles, prefixed];
-            writeContext(collabDir, session_id, ctx);
-          }
+  if (isFileOp) {
+    const reminderFiles = autoTrackFile(collabDir, session_id, cwd, tool_name, tool_input.file_path, config);
+
+    if (reminderFiles && reminderFiles.length > 0) {
+      const fileList = reminderFiles.join(', ');
+      const idleMinutes = Math.round(config.REMINDER_IDLE_MS / 60000);
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PostToolUse',
+          permissionDecision: 'allow',
+          additionalContext:
+            `You haven't touched these files in over ${idleMinutes} minute${idleMinutes === 1 ? '' : 's'}: ${fileList}. ` +
+            'Consider releasing them with /wrightward:collab-release if you no longer need them.'
         }
-      }
-    });
+      }));
+    }
   }
 
   process.exit(0);

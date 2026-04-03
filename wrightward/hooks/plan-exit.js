@@ -37,7 +37,11 @@ async function main() {
   if (otherAgents.length === 0) process.exit(0);
 
   process.stdout.write(JSON.stringify({
-    systemMessage: 'You just exited plan mode and now have a clear picture of which files you will touch. Other agents are active in this repo — run /wrightward:collab-context to declare your file claims before writing any code.'
+    hookSpecificOutput: {
+      hookEventName: 'PostToolUse',
+      permissionDecision: 'allow',
+      additionalContext: 'You just exited plan mode and now have a clear picture of which files you will touch. Other agents are active in this repo — run /wrightward:collab-context to declare your file claims before writing any code.'
+    }
   }));
 }
 

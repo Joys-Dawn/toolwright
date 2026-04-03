@@ -61,7 +61,10 @@ describe('context script', () => {
       fs.readFileSync(path.join(tmpDir, '.claude', 'collab', 'context', 'sess-1.json'), 'utf8')
     );
     assert.equal(context.task, 'Implement command bridge');
-    assert.deepEqual(context.files, ['~commands/collab-context.md']);
+    assert.equal(context.files.length, 1);
+    assert.equal(context.files[0].path, 'commands/collab-context.md');
+    assert.equal(context.files[0].prefix, '~');
+    assert.equal(context.files[0].source, 'planned');
     assert.deepEqual(context.functions, ['+persistSessionEnv']);
     assert.equal(context.status, 'in-progress');
   });
@@ -238,7 +241,7 @@ describe('context script', () => {
     assert.ok(result.stderr.includes('status'));
   });
 
-  it('rejects payload with non-string items in files array', () => {
+  it('rejects payload with invalid items in files array', () => {
     const result = runScript([], {
       cwd: tmpDir,
       env: {
@@ -253,7 +256,7 @@ describe('context script', () => {
     });
 
     assert.equal(result.exitCode, 1);
-    assert.ok(result.stderr.includes('files'));
+    assert.ok(result.stderr.includes('prefixed string'));
   });
 
   it('strips files already claimed by another agent', () => {
@@ -286,7 +289,9 @@ describe('context script', () => {
       fs.readFileSync(path.join(tmpDir, '.claude', 'collab', 'context', 'sess-b.json'), 'utf8')
     );
     // foo.js stripped, baz.js kept
-    assert.deepEqual(ctx.files, ['~baz.js']);
+    assert.equal(ctx.files.length, 1);
+    assert.equal(ctx.files[0].path, 'baz.js');
+    assert.equal(ctx.files[0].prefix, '~');
   });
 
   it('allows same agent to re-declare its own files', () => {
@@ -317,7 +322,11 @@ describe('context script', () => {
     const ctx = JSON.parse(
       fs.readFileSync(path.join(tmpDir, '.claude', 'collab', 'context', 'sess-a.json'), 'utf8')
     );
-    assert.deepEqual(ctx.files, ['~foo.js', '+new.js']);
+    assert.equal(ctx.files.length, 2);
+    assert.equal(ctx.files[0].path, 'foo.js');
+    assert.equal(ctx.files[0].prefix, '~');
+    assert.equal(ctx.files[1].path, 'new.js');
+    assert.equal(ctx.files[1].prefix, '+');
   });
 
   it('strips files regardless of prefix mismatch', () => {
@@ -347,7 +356,7 @@ describe('context script', () => {
     const ctx = JSON.parse(
       fs.readFileSync(path.join(tmpDir, '.claude', 'collab', 'context', 'sess-b.json'), 'utf8')
     );
-    assert.deepEqual(ctx.files, []);
+    assert.equal(ctx.files.length, 0);
   });
 
   it('fails when --done is used without existing context', () => {

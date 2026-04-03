@@ -1,6 +1,6 @@
 # wrightward
 
-Claude Code plugin that coordinates multiple agents working on the same codebase. Blocks writes to files another agent has claimed, and injects context so agents stay aware of each other's work.
+Claude Code plugin for multi-agent file coordination. When multiple Claude Code sessions work in the same repo, wrightward prevents them from silently overwriting each other's work. It tracks which files each agent is touching, blocks conflicting writes, and injects awareness of what other agents are doing.
 
 ## Installation
 
@@ -9,48 +9,89 @@ Claude Code plugin that coordinates multiple agents working on the same codebase
 /plugin install wrightward@Joys-Dawn/toolwright
 ```
 
+No configuration needed — hooks activate automatically.
+
 ## Quick start
 
-1. Start two or more Claude Code sessions in the same repo
-2. In each session, run `/wrightward:collab-context` to declare what the agent is working on. This is best done after a Plan session or an agentwright:feature-planning skill call. The agent is told to declare their context when exiting plan mode automatically.
-3. Writes to files claimed by another agent are automatically blocked
-4. When done, run `/wrightward:collab-done` to release file claims (or let them expire after 6 minutes of inactivity)
+1. Open two or more Claude Code sessions in the same repo
+2. Work normally — wrightward auto-tracks every file each agent edits or creates
+3. If an agent tries to write to a file another agent is working on, the write is blocked
+4. For longer claims, run `/wrightward:collab-context` to declare files up front (held for 15 minutes vs 2 minutes for auto-tracked files)
+5. Release files early with `/wrightward:collab-release` when you're done with them
 
 ## How it works
 
-Four hooks run automatically — no user intervention needed after initial setup:
+### Auto-tracking
 
-| Hook | Trigger | Behavior |
-|------|---------|----------|
-| `register.js` | Session start | Registers the agent in `.claude/collab/agents.json` |
-| `heartbeat.js` | After every tool call | Updates heartbeat; auto-tracks files touched by Edit/Write |
-| `guard.js` | Before every tool call | Blocks writes on claimed files; injects context on reads and non-overlapping writes |
-| `plan-exit.js` | After exiting plan mode | Reminds the agent to declare file claims via `/wrightward:collab-context` (only when other agents are active) |
+Every Edit/Write is automatically tracked. No setup required. If `.claude/collab/` doesn't exist yet, the first Edit/Write creates it. Auto-tracked files are held for **2 minutes** from the last touch — short enough to expire quickly when the agent moves on.
 
-### Write behavior
+### Declared files
 
-- **File claimed by another agent** — write is blocked (exit code 2), agent sees who owns the file
-- **File not claimed, but other agents are active** — write proceeds, agent receives context about what others are doing
-- **Solo agent (no other active agents)** — everything proceeds silently, zero overhead
+Running `/wrightward:collab-context` lets an agent declare files up front with a task description. Declared files are held for **15 minutes**, with automatic extension if the agent is still actively editing near the deadline. Best used after planning, when the agent knows which files it will touch.
 
-Context injection is deduplicated — the same summary is only shown once per change.
+### Guard (conflict prevention)
+
+Before every tool call, wrightward checks for conflicts:
+
+- **Read/Glob/Grep on another agent's files** — non-blocking context injected (who owns it, what they're doing)
+- **Write to another agent's file** — blocked, agent sees who owns it
+- **Write to an unrelated file** — proceeds with awareness of other active agents
+- **Solo agent** — everything proceeds silently with zero overhead
+
+Context injection is deduplicated — the same summary is only shown once per change in other agents' state.
+
+### Idle reminders
+
+If an agent hasn't touched a file in **5 minutes**, a one-time reminder suggests releasing it. This nudges agents to free files they've moved on from without waiting for the timeout.
 
 ## Skills
 
 | Skill | Description |
 |-------|-------------|
-| `/wrightward:collab-context` | Declare or update the current task, files (`+`create, `~`modify, `-`delete), and functions |
+| `/wrightward:collab-context` | Declare or update the current task and claimed files (`+` create, `~` modify, `-` delete) |
+| `/wrightward:collab-release` | Release specific files so other agents can work on them immediately |
 | `/wrightward:collab-done` | Release all file claims and exit coordination |
 
-Best used after planning (e.g., plan mode or a feature-planning skill), when the agent knows which files it will touch. Files edited via Edit/Write are auto-tracked even if not declared up front.
+## Hooks
+
+Five hooks run automatically — no user intervention needed:
+
+| Hook | Trigger | What it does |
+|------|---------|--------------|
+| `register.js` | Session start | Registers the agent in `.claude/collab/agents.json` |
+| `heartbeat.js` | After every tool call | Updates heartbeat, auto-tracks files, runs scavenging, fires idle reminders |
+| `guard.js` | Before Edit/Write/Read/Glob/Grep | Blocks conflicting writes, injects awareness context |
+| `plan-exit.js` | After exiting plan mode | Reminds the agent to declare files (only when other agents are active) |
+| `cleanup.js` | Session end | Deregisters the agent and releases all claims |
+
+## Configuration
+
+Create `.claude/wrightward.json` in your project to override timeout defaults. All fields are optional — only include what you want to change. Values are in **minutes**. See [wrightward.example.json](wrightward.example.json) for the full list.
+
+```json
+{
+  "PLANNED_FILE_TIMEOUT_MIN": 15,
+  "AUTO_TRACKED_FILE_TIMEOUT_MIN": 2,
+  "REMINDER_IDLE_MIN": 5
+}
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `PLANNED_FILE_TIMEOUT_MIN` | 15 | How long declared files are held |
+| `PLANNED_FILE_GRACE_MIN` | 2 | Extends the timeout if the file was touched within this window before expiry |
+| `AUTO_TRACKED_FILE_TIMEOUT_MIN` | 2 | How long auto-tracked files are held (from last touch) |
+| `REMINDER_IDLE_MIN` | 5 | How long a file must be idle before the release reminder |
+| `INACTIVE_THRESHOLD_MIN` | 6 | How long before a session is considered stale |
+| `SESSION_HARD_SCAVENGE_MIN` | 60 | Hard cleanup for truly dead sessions |
 
 ## State
 
-All coordination state lives in `.claude/collab/` (auto-gitignored). Sessions expire after 6 minutes of inactivity and are hard-scavenged after 60 minutes.
+All coordination state lives in `.claude/collab/` (auto-gitignored). No state persists between sessions.
 
 ## Requirements
 
-- Node.js (no external dependencies)
+- Node.js >= 18 (no external dependencies)
 - Cross-platform (Windows + Unix)
 
 ## License

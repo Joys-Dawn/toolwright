@@ -11,6 +11,21 @@ function contextPath(collabDir, sessionId) {
 }
 
 /**
+ * Creates a new file entry object for a given path.
+ */
+function fileEntryForPath(filePath, prefix, source) {
+  const now = Date.now();
+  return {
+    path: filePath,
+    prefix: prefix || '~',
+    source: source || 'auto',
+    declaredAt: now,
+    lastTouched: now,
+    reminded: false
+  };
+}
+
+/**
  * Reads a single agent's context file. Returns null if missing.
  */
 function readContext(collabDir, sessionId) {
@@ -39,4 +54,4 @@ function removeContext(collabDir, sessionId) {
   }
 }
 
-module.exports = { readContext, writeContext, removeContext };
+module.exports = { readContext, writeContext, removeContext, fileEntryForPath };

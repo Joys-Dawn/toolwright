@@ -7,16 +7,10 @@ const { getActiveAgents, readAgents } = require('../lib/agents');
 const { readContext } = require('../lib/context');
 const { getLastSeenHash, setLastSeenHash } = require('../lib/last-seen');
 const { hashString } = require('../lib/hash');
-const { INACTIVE_THRESHOLD_MS, validateSessionId } = require('../lib/constants');
+const { loadConfig } = require('../lib/config');
+const { validateSessionId } = require('../lib/constants');
 const { toPosixPath, matchesGlob } = require('../lib/glob');
 // scavenging is handled by heartbeat.js — guard only reads state
-
-function stripPrefix(filePath) {
-  if (typeof filePath !== 'string') {
-    return null;
-  }
-  return filePath.replace(/^[+~-]/, '');
-}
 
 function isPathWithin(basePath, targetPath) {
   const relative = path.relative(basePath, targetPath);
@@ -28,17 +22,16 @@ function getTrackedFiles(otherContexts, cwd) {
 
   for (const ctx of otherContexts) {
     for (const file of ctx.files || []) {
-      // Skip files being deleted — no conflict if both agents delete
-      if (typeof file === 'string' && file.startsWith('-')) continue;
-      const normalized = stripPrefix(file);
-      if (!normalized) continue;
+      // File entries are objects (written by context.js and heartbeat.js). Skip deletions.
+      if (!file || !file.path) continue;
+      if (file.prefix === '-') continue;
       tracked.push({
         sessionId: ctx.sessionId,
         task: ctx.task,
         files: ctx.files || [],
         functions: ctx.functions || [],
-        absolutePath: path.resolve(cwd, normalized),
-        relativePath: normalized
+        absolutePath: path.resolve(cwd, file.path),
+        relativePath: file.path
       });
     }
   }
@@ -46,8 +39,8 @@ function getTrackedFiles(otherContexts, cwd) {
   return tracked;
 }
 
-function getOverlappingContexts(toolName, toolInput, trackedFiles, cwd) {
-  if (!toolName || !toolInput || typeof toolInput !== 'object') {
+function getOverlappingContexts(tool_name, tool_input, trackedFiles, cwd) {
+  if (!tool_name || !tool_input || typeof tool_input !== 'object') {
     return [];
   }
 
@@ -64,8 +57,8 @@ function getOverlappingContexts(toolName, toolInput, trackedFiles, cwd) {
     }
   };
 
-  if ((toolName === 'Read' || toolName === 'Write' || toolName === 'Edit') && toolInput.file_path) {
-    const target = path.resolve(cwd, toolInput.file_path);
+  if ((tool_name === 'Read' || tool_name === 'Write' || tool_name === 'Edit') && tool_input.file_path) {
+    const target = path.resolve(cwd, tool_input.file_path);
     for (const tracked of trackedFiles) {
       if (tracked.absolutePath === target) {
         addOverlap(tracked);
@@ -74,8 +67,8 @@ function getOverlappingContexts(toolName, toolInput, trackedFiles, cwd) {
     return [...overlaps.values()];
   }
 
-  if (toolName === 'Glob' || toolName === 'Grep') {
-    const searchPath = path.resolve(cwd, toolInput.path || '.');
+  if (tool_name === 'Glob' || tool_name === 'Grep') {
+    const searchPath = path.resolve(cwd, tool_input.path || '.');
     const searchExists = fs.existsSync(searchPath);
     const isDirectory = searchExists ? fs.statSync(searchPath).isDirectory() : true;
 
@@ -85,18 +78,18 @@ function getOverlappingContexts(toolName, toolInput, trackedFiles, cwd) {
           continue;
         }
         const relative = path.relative(searchPath, tracked.absolutePath);
-        if (toolName === 'Glob') {
-          if (matchesGlob(relative, toolInput.pattern)) {
+        if (tool_name === 'Glob') {
+          if (matchesGlob(relative, tool_input.pattern)) {
             addOverlap(tracked);
           }
         } else {
-          if (!toolInput.glob || matchesGlob(relative, toolInput.glob)) {
+          if (!tool_input.glob || matchesGlob(relative, tool_input.glob)) {
             addOverlap(tracked);
           }
         }
       } else if (tracked.absolutePath === searchPath) {
-        if (toolName === 'Grep') {
-          if (!toolInput.glob || matchesGlob(path.basename(tracked.absolutePath), toolInput.glob)) {
+        if (tool_name === 'Grep') {
+          if (!tool_input.glob || matchesGlob(path.basename(tracked.absolutePath), tool_input.glob)) {
             addOverlap(tracked);
           }
         } else {
@@ -109,11 +102,16 @@ function getOverlappingContexts(toolName, toolInput, trackedFiles, cwd) {
   return [...overlaps.values()];
 }
 
+function formatFileList(files) {
+  if (!Array.isArray(files) || files.length === 0) return '';
+  return files.filter(f => f && f.path).map(f => (f.prefix || '') + f.path).join(', ');
+}
+
 function buildSummary(contexts) {
   const lines = ['Other agents are active in this codebase:'];
   for (const ctx of contexts) {
     const shortId = ctx.sessionId.substring(0, 8);
-    const fileList = (ctx.files || []).join(', ');
+    const fileList = formatFileList(ctx.files);
     const funcList = (ctx.functions || []).join(', ');
     let detail = `- Agent ${shortId}: ${ctx.task || 'no task description'}`;
     if (fileList) detail += ` (files: ${fileList})`;
@@ -127,6 +125,8 @@ function buildSummary(contexts) {
 function allowWithAdditionalContext(message) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'allow',
       additionalContext: message
     }
   }));
@@ -140,8 +140,7 @@ async function main() {
   }
 
   const { session_id, cwd, tool_name, tool_input } = JSON.parse(input);
-  const toolName = tool_name;
-  if (!session_id || !cwd || !toolName) {
+  if (!session_id || !cwd || !tool_name) {
     process.exit(0);
   }
   validateSessionId(session_id);
@@ -153,10 +152,12 @@ async function main() {
     process.exit(0);
   }
 
+  const config = loadConfig(cwd);
+
   // Check if this agent was idle long enough to have lost its context
   const allAgents = readAgents(collabDir);
   const selfAgent = allAgents[session_id];
-  if (selfAgent && (Date.now() - selfAgent.last_active) > INACTIVE_THRESHOLD_MS) {
+  if (selfAgent && (Date.now() - selfAgent.last_active) > config.INACTIVE_THRESHOLD_MS) {
     const selfContext = readContext(collabDir, session_id);
     if (!selfContext) {
       allowWithAdditionalContext(
@@ -168,7 +169,7 @@ async function main() {
   }
 
   // Get active agents (excluding this one)
-  const activeAgents = getActiveAgents(collabDir, INACTIVE_THRESHOLD_MS);
+  const activeAgents = getActiveAgents(collabDir, config.INACTIVE_THRESHOLD_MS);
   delete activeAgents[session_id];
 
   if (Object.keys(activeAgents).length === 0) {
@@ -190,16 +191,16 @@ async function main() {
 
   const trackedFiles = getTrackedFiles(otherContexts, cwd);
 
-  if (toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep') {
-    handleReadTool(toolName, tool_input, trackedFiles, cwd, collabDir, session_id);
+  if (tool_name === 'Read' || tool_name === 'Glob' || tool_name === 'Grep') {
+    handleReadTool(tool_name, tool_input, trackedFiles, cwd, collabDir, session_id);
     return;
   }
 
-  handleWriteTool(toolName, tool_input, trackedFiles, cwd, collabDir, session_id, otherContexts);
+  handleWriteTool(tool_name, tool_input, trackedFiles, cwd, collabDir, session_id, otherContexts);
 }
 
-function handleReadTool(toolName, toolInput, trackedFiles, cwd, collabDir, sessionId) {
-  const overlaps = getOverlappingContexts(toolName, toolInput, trackedFiles, cwd);
+function handleReadTool(tool_name, tool_input, trackedFiles, cwd, collabDir, sessionId) {
+  const overlaps = getOverlappingContexts(tool_name, tool_input, trackedFiles, cwd);
   if (overlaps.length === 0) {
     process.exit(0);
   }
@@ -213,28 +214,20 @@ function handleReadTool(toolName, toolInput, trackedFiles, cwd, collabDir, sessi
   allowWithAdditionalContext(summary);
 }
 
-function handleWriteTool(toolName, toolInput, trackedFiles, cwd, collabDir, sessionId, otherContexts) {
-  const overlaps = getOverlappingContexts(toolName, toolInput, trackedFiles, cwd);
+function handleWriteTool(tool_name, tool_input, trackedFiles, cwd, collabDir, sessionId, otherContexts) {
+  const overlaps = getOverlappingContexts(tool_name, tool_input, trackedFiles, cwd);
   if (overlaps.length > 0) {
     const myContext = readContext(collabDir, sessionId);
     if (!myContext) {
-      process.stdout.write(JSON.stringify({
-        hookSpecificOutput: {
-          reason: 'no_context_declared',
-          message: 'Another agent is working on files that overlap with this edit. ' +
-            'Use /wrightward:collab-context to declare what you are working on first.',
-          overlappingAgents: overlaps
-        }
-      }));
+      process.stderr.write(
+        'Another agent is working on files that overlap with this edit. ' +
+        'Use /wrightward:collab-context to declare what you are working on first.'
+      );
       process.exit(2);
     }
-    process.stdout.write(JSON.stringify({
-      hookSpecificOutput: {
-        reason: 'file_overlap',
-        message: buildSummary(overlaps),
-        overlappingAgents: overlaps
-      }
-    }));
+    process.stderr.write(
+      buildSummary(overlaps) + '\nThis file overlaps with another agent\'s claimed files. Skip this edit or ask the user for guidance.'
+    );
     process.exit(2);
   }
 
