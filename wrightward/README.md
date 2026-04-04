@@ -72,7 +72,8 @@ Create `.claude/wrightward.json` in your project to override timeout defaults. A
 {
   "PLANNED_FILE_TIMEOUT_MIN": 15,
   "AUTO_TRACKED_FILE_TIMEOUT_MIN": 2,
-  "REMINDER_IDLE_MIN": 5
+  "REMINDER_IDLE_MIN": 5,
+  "AUTO_TRACK": true
 }
 ```
 
@@ -84,6 +85,7 @@ Create `.claude/wrightward.json` in your project to override timeout defaults. A
 | `REMINDER_IDLE_MIN` | 5 | How long a file must be idle before the release reminder |
 | `INACTIVE_THRESHOLD_MIN` | 6 | How long before a session is considered stale |
 | `SESSION_HARD_SCAVENGE_MIN` | 60 | Hard cleanup for truly dead sessions |
+| `AUTO_TRACK` | true | Whether Edit/Write auto-creates a context when none has been declared. When false, files are still tracked into an existing context but no new context is created automatically |
 
 ## State
 

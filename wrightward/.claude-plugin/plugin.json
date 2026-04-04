@@ -1,6 +1,6 @@
 {
   "name": "wrightward",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Multi-agent awareness — gives Claude Code agents context about what other agents are doing before they write",
   "author": {
     "name": "yiann"

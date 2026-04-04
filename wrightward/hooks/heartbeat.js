@@ -24,18 +24,17 @@ async function main() {
 
   const isFileOp = (tool_name === 'Edit' || tool_name === 'Write') && tool_input && tool_input.file_path;
   const collabDir = path.join(cwd, '.claude', 'collab');
+  const config = loadConfig(cwd);
 
-  // If .claude/collab doesn't exist: create it only for Edit/Write (auto-tracking).
+  // If .claude/collab doesn't exist: create it only for Edit/Write when auto-tracking is on.
   // Non-file tools without an existing collab dir have nothing to do.
   if (!fs.existsSync(collabDir)) {
-    if (isFileOp) {
+    if (isFileOp && config.AUTO_TRACK) {
       ensureCollabDir(cwd);
     } else {
       process.exit(0);
     }
   }
-
-  const config = loadConfig(cwd);
 
   scavengeExpiredSessions(collabDir, config.SESSION_HARD_SCAVENGE_MS, session_id);
   scavengeExpiredFiles(collabDir, config, session_id);

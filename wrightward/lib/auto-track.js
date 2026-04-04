@@ -6,7 +6,9 @@ const { readContext, writeContext, fileEntryForPath } = require('./context');
 
 /**
  * Auto-tracks a file in the session's context and collects idle file reminders.
- * Creates a minimal context if none exists.
+ * Creates a minimal context if none exists (unless AUTO_TRACK is false).
+ * When AUTO_TRACK is false, files are still tracked into an existing context
+ * (declared via collab-context) but no new context is created automatically.
  * Returns an array of idle file paths eligible for reminder, or null.
  */
 function autoTrackFile(collabDir, sessionId, cwd, tool_name, filePath, config) {
@@ -15,6 +17,7 @@ function autoTrackFile(collabDir, sessionId, cwd, tool_name, filePath, config) {
   withAgentsLock(collabDir, () => {
     let ctx = readContext(collabDir, sessionId);
     if (!ctx) {
+      if (!config.AUTO_TRACK) return;
       ctx = { task: 'Auto-tracked (no task declared)', files: [], functions: [], status: 'in-progress' };
     }
 

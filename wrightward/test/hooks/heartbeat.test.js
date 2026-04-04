@@ -223,4 +223,39 @@ describe('heartbeat hook', () => {
     // No reminder emitted (already reminded)
     assert.equal(result.stdout, '');
   });
+
+  it('does not auto-create context when AUTO_TRACK is false', () => {
+    // Write config disabling auto-track
+    const claudeDir = path.join(tmpDir, '.claude');
+    fs.writeFileSync(path.join(claudeDir, 'wrightward.json'), JSON.stringify({ AUTO_TRACK: false }));
+
+    // Remove existing context so we test the no-context path
+    const contextFile = path.join(collabDir, 'context', 'sess-1.json');
+    try { fs.unlinkSync(contextFile); } catch (_) {}
+
+    runHook({
+      session_id: 'sess-1',
+      cwd: tmpDir,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(tmpDir, 'foo.js') }
+    });
+    const ctx = readContext(collabDir, 'sess-1');
+    assert.equal(ctx, null);
+  });
+
+  it('still tracks into existing context when AUTO_TRACK is false', () => {
+    const claudeDir = path.join(tmpDir, '.claude');
+    fs.writeFileSync(path.join(claudeDir, 'wrightward.json'), JSON.stringify({ AUTO_TRACK: false }));
+
+    writeContext(collabDir, 'sess-1', { task: 'my work', files: [], status: 'in-progress' });
+    runHook({
+      session_id: 'sess-1',
+      cwd: tmpDir,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(tmpDir, 'foo.js') }
+    });
+    const ctx = readContext(collabDir, 'sess-1');
+    assert.equal(ctx.files.length, 1);
+    assert.equal(ctx.files[0].path, 'foo.js');
+  });
 });

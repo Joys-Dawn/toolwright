@@ -79,4 +79,21 @@ describe('config', () => {
     const config = loadConfig(cwd);
     assert.equal(config.REMINDER_IDLE_MS, 0);
   });
+
+  it('defaults AUTO_TRACK to true', () => {
+    const config = loadConfig(cwd);
+    assert.equal(config.AUTO_TRACK, true);
+  });
+
+  it('allows AUTO_TRACK to be set to false', () => {
+    fs.writeFileSync(configPath, JSON.stringify({ AUTO_TRACK: false }));
+    const config = loadConfig(cwd);
+    assert.equal(config.AUTO_TRACK, false);
+  });
+
+  it('ignores non-boolean AUTO_TRACK values', () => {
+    fs.writeFileSync(configPath, JSON.stringify({ AUTO_TRACK: 'yes' }));
+    const config = loadConfig(cwd);
+    assert.equal(config.AUTO_TRACK, true);
+  });
 });

@@ -13,6 +13,10 @@ const DEFAULTS_MIN = {
   INACTIVE_THRESHOLD_MIN: 6
 };
 
+const DEFAULTS_BOOL = {
+  AUTO_TRACK: true
+};
+
 function toMs(minutes) {
   return minutes * 60 * 1000;
 }
@@ -34,13 +38,21 @@ function loadConfig(cwd) {
       merged[key] = userConfig[key];
     }
   }
+  const bools = { ...DEFAULTS_BOOL };
+  for (const key of Object.keys(DEFAULTS_BOOL)) {
+    if (typeof userConfig[key] === 'boolean') {
+      bools[key] = userConfig[key];
+    }
+  }
+
   return Object.freeze({
     PLANNED_FILE_TIMEOUT_MS: toMs(merged.PLANNED_FILE_TIMEOUT_MIN),
     PLANNED_FILE_GRACE_MS: toMs(merged.PLANNED_FILE_GRACE_MIN),
     AUTO_TRACKED_FILE_TIMEOUT_MS: toMs(merged.AUTO_TRACKED_FILE_TIMEOUT_MIN),
     SESSION_HARD_SCAVENGE_MS: toMs(merged.SESSION_HARD_SCAVENGE_MIN),
     REMINDER_IDLE_MS: toMs(merged.REMINDER_IDLE_MIN),
-    INACTIVE_THRESHOLD_MS: toMs(merged.INACTIVE_THRESHOLD_MIN)
+    INACTIVE_THRESHOLD_MS: toMs(merged.INACTIVE_THRESHOLD_MIN),
+    AUTO_TRACK: bools.AUTO_TRACK
   });
 }
 
