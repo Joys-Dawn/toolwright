@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { updateHeartbeat } = require('../lib/agents');
 const { autoTrackFile } = require('../lib/auto-track');
-const { ensureCollabDir } = require('../lib/collab-dir');
+const { ensureCollabDir, resolveCollabDir } = require('../lib/collab-dir');
 const { loadConfig } = require('../lib/config');
 const { scavengeExpiredSessions, scavengeExpiredFiles } = require('../lib/session-state');
 const { validateSessionId } = require('../lib/constants');
@@ -23,25 +23,31 @@ async function main() {
   validateSessionId(session_id);
 
   const isFileOp = (tool_name === 'Edit' || tool_name === 'Write') && tool_input && tool_input.file_path;
-  const collabDir = path.join(cwd, '.claude', 'collab');
-  const config = loadConfig(cwd);
+  let resolved = resolveCollabDir(cwd);
 
   // If .claude/collab doesn't exist: create it only for Edit/Write when auto-tracking is on.
   // Non-file tools without an existing collab dir have nothing to do.
-  if (!fs.existsSync(collabDir)) {
+  if (!resolved) {
+    const config = loadConfig(cwd);
+    if (!config.ENABLED) process.exit(0);
     if (isFileOp && config.AUTO_TRACK) {
-      ensureCollabDir(cwd);
+      const collabDir = ensureCollabDir(cwd);
+      resolved = { root: path.resolve(cwd), collabDir };
     } else {
       process.exit(0);
     }
   }
+
+  const { root, collabDir } = resolved;
+  const config = loadConfig(root);
+  if (!config.ENABLED) process.exit(0);
 
   scavengeExpiredSessions(collabDir, config.SESSION_HARD_SCAVENGE_MS, session_id);
   scavengeExpiredFiles(collabDir, config, session_id);
   updateHeartbeat(collabDir, session_id);
 
   if (isFileOp) {
-    const reminderFiles = autoTrackFile(collabDir, session_id, cwd, tool_name, tool_input.file_path, config);
+    const reminderFiles = autoTrackFile(collabDir, session_id, root, tool_name, tool_input.file_path, config);
 
     if (reminderFiles && reminderFiles.length > 0) {
       const fileList = reminderFiles.join(', ');

@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { resolveCollabDir } = require('../lib/collab-dir');
 const { removeSessionState } = require('../lib/session-state');
 const { validateSessionId } = require('../lib/constants');
 
@@ -18,12 +19,11 @@ async function main() {
   }
   validateSessionId(session_id);
 
-  const collabDir = path.join(cwd, '.claude', 'collab');
-
-  // If .claude/collab doesn't exist, nothing to clean up
-  if (!fs.existsSync(collabDir)) {
+  const resolved = resolveCollabDir(cwd);
+  if (!resolved) {
     process.exit(0);
   }
+  const { collabDir } = resolved;
 
   removeSessionState(collabDir, session_id);
 

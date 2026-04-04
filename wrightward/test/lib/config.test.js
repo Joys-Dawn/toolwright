@@ -96,4 +96,21 @@ describe('config', () => {
     const config = loadConfig(cwd);
     assert.equal(config.AUTO_TRACK, true);
   });
+
+  it('defaults ENABLED to true', () => {
+    const config = loadConfig(cwd);
+    assert.equal(config.ENABLED, true);
+  });
+
+  it('allows ENABLED to be set to false', () => {
+    fs.writeFileSync(configPath, JSON.stringify({ ENABLED: false }));
+    const config = loadConfig(cwd);
+    assert.equal(config.ENABLED, false);
+  });
+
+  it('ignores non-boolean ENABLED values', () => {
+    fs.writeFileSync(configPath, JSON.stringify({ ENABLED: 0 }));
+    const config = loadConfig(cwd);
+    assert.equal(config.ENABLED, true);
+  });
 });

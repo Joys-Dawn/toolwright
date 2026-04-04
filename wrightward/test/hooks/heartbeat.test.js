@@ -157,7 +157,10 @@ describe('heartbeat hook', () => {
   });
 
   it('creates collabDir when .claude/collab does not exist and tool is Edit', () => {
-    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'collab-empty-'));
+    // Use a dir at filesystem root so walk-up can't find a real .claude/collab
+    const { root: fsRoot } = path.parse(tmpDir);
+    const emptyDir = path.join(fsRoot, '__collab_heartbeat_test_' + process.pid);
+    fs.mkdirSync(emptyDir, { recursive: true });
     try {
       const result = runHook({
         session_id: 'sess-1',
@@ -241,6 +244,48 @@ describe('heartbeat hook', () => {
     });
     const ctx = readContext(collabDir, 'sess-1');
     assert.equal(ctx, null);
+  });
+
+  it('does nothing when ENABLED is false', () => {
+    const claudeDir = path.join(tmpDir, '.claude');
+    fs.writeFileSync(path.join(claudeDir, 'wrightward.json'), JSON.stringify({ ENABLED: false }));
+    writeContext(collabDir, 'sess-1', { task: 'my work', files: [], status: 'in-progress' });
+    const before = readAgents(collabDir)['sess-1'].last_active;
+    const start = Date.now();
+    while (Date.now() === start) {}
+    runHook({
+      session_id: 'sess-1',
+      cwd: tmpDir,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(tmpDir, 'foo.js') }
+    });
+    // Heartbeat should not have updated
+    const after = readAgents(collabDir)['sess-1'].last_active;
+    assert.equal(after, before);
+    // File should not have been tracked
+    const ctx = readContext(collabDir, 'sess-1');
+    assert.equal(ctx.files.length, 0);
+  });
+
+  it('does nothing when ENABLED is false and cwd is a subdirectory', () => {
+    const claudeDir = path.join(tmpDir, '.claude');
+    fs.writeFileSync(path.join(claudeDir, 'wrightward.json'), JSON.stringify({ ENABLED: false }));
+    writeContext(collabDir, 'sess-1', { task: 'my work', files: [], status: 'in-progress' });
+    const subDir = path.join(tmpDir, 'app', 'src');
+    fs.mkdirSync(subDir, { recursive: true });
+    const before = readAgents(collabDir)['sess-1'].last_active;
+    const start = Date.now();
+    while (Date.now() === start) {}
+    runHook({
+      session_id: 'sess-1',
+      cwd: subDir,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(subDir, 'foo.js') }
+    });
+    const after = readAgents(collabDir)['sess-1'].last_active;
+    assert.equal(after, before);
+    const ctx = readContext(collabDir, 'sess-1');
+    assert.equal(ctx.files.length, 0);
   });
 
   it('still tracks into existing context when AUTO_TRACK is false', () => {

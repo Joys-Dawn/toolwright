@@ -6,6 +6,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const { resolveCollabDir } = require('../lib/collab-dir');
+const { loadConfig } = require('../lib/config');
 
 async function main() {
   let raw = '';
@@ -23,7 +25,11 @@ async function main() {
   const { session_id, cwd } = input;
   if (!cwd) process.exit(0);
 
-  const agentsFile = path.join(cwd, '.claude', 'collab', 'agents.json');
+  const resolved = resolveCollabDir(cwd);
+  if (!resolved) process.exit(0);
+  if (!loadConfig(resolved.root).ENABLED) process.exit(0);
+
+  const agentsFile = path.join(resolved.collabDir, 'agents.json');
   if (!fs.existsSync(agentsFile)) process.exit(0);
 
   let agents;

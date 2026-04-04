@@ -9,7 +9,6 @@ const os = require('os');
 const { ensureCollabDir } = require('../../lib/collab-dir');
 const { registerAgent, readAgents } = require('../../lib/agents');
 const { writeContext, fileEntryForPath } = require('../../lib/context');
-const { setLastSeenHash, getLastSeenHash } = require('../../lib/last-seen');
 const { hashString } = require('../../lib/hash');
 
 const HOOK = path.resolve(__dirname, '../../hooks/guard.js');
@@ -53,6 +52,26 @@ describe('guard hook', () => {
     } finally {
       fs.rmSync(emptyDir, { recursive: true, force: true });
     }
+  });
+
+  it('exits 0 when ENABLED is false even with overlapping files', () => {
+    registerAgent(collabDir, 'sess-1');
+    registerAgent(collabDir, 'sess-2');
+    writeContext(collabDir, 'sess-2', {
+      task: 'other work',
+      files: [fe('+', 'src/foo.js')],
+      status: 'in-progress'
+    });
+    const claudeDir = path.join(tmpDir, '.claude');
+    fs.writeFileSync(path.join(claudeDir, 'wrightward.json'), JSON.stringify({ ENABLED: false }));
+    const result = runHook({
+      session_id: 'sess-1',
+      cwd: tmpDir,
+      tool_name: 'Write',
+      tool_input: { file_path: path.join(tmpDir, 'src', 'foo.js') }
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, '');
   });
 
   it('exits 0 when agent has no context but is the only agent', () => {

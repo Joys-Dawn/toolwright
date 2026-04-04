@@ -6,6 +6,7 @@ const path = require('path');
 const os = require('os');
 const { ensureCollabDir } = require('../lib/collab-dir');
 const { registerAgent } = require('../lib/agents');
+const { loadConfig } = require('../lib/config');
 const { validateSessionId } = require('../lib/constants');
 
 function shellQuote(value) {
@@ -44,6 +45,9 @@ async function main() {
   if (path.resolve(cwd).toLowerCase().startsWith(snapshotRoot.toLowerCase())) {
     process.exit(0);
   }
+
+  const config = loadConfig(cwd);
+  if (!config.ENABLED) process.exit(0);
 
   const collabDir = ensureCollabDir(cwd);
   registerAgent(collabDir, session_id);

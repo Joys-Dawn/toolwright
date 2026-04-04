@@ -5,9 +5,10 @@ const fs = require('fs');
 const path = require('path');
 const { getActiveAgents, readAgents } = require('../lib/agents');
 const { readContext } = require('../lib/context');
-const { getLastSeenHash, setLastSeenHash } = require('../lib/last-seen');
+const { getContextHash, setContextHash } = require('../lib/context-hash');
 const { hashString } = require('../lib/hash');
 const { loadConfig } = require('../lib/config');
+const { resolveCollabDir } = require('../lib/collab-dir');
 const { validateSessionId } = require('../lib/constants');
 const { toPosixPath, matchesGlob } = require('../lib/glob');
 // scavenging is handled by heartbeat.js — guard only reads state
@@ -145,14 +146,14 @@ async function main() {
   }
   validateSessionId(session_id);
 
-  const collabDir = path.join(cwd, '.claude', 'collab');
-
-  // If .claude/collab doesn't exist, no collab active
-  if (!fs.existsSync(collabDir)) {
+  const resolved = resolveCollabDir(cwd);
+  if (!resolved) {
     process.exit(0);
   }
+  const { root, collabDir } = resolved;
 
-  const config = loadConfig(cwd);
+  const config = loadConfig(root);
+  if (!config.ENABLED) process.exit(0);
 
   // Check if this agent was idle long enough to have lost its context
   const allAgents = readAgents(collabDir);
@@ -189,14 +190,14 @@ async function main() {
     process.exit(0);
   }
 
-  const trackedFiles = getTrackedFiles(otherContexts, cwd);
+  const trackedFiles = getTrackedFiles(otherContexts, root);
 
   if (tool_name === 'Read' || tool_name === 'Glob' || tool_name === 'Grep') {
-    handleReadTool(tool_name, tool_input, trackedFiles, cwd, collabDir, session_id);
+    handleReadTool(tool_name, tool_input, trackedFiles, root, collabDir, session_id);
     return;
   }
 
-  handleWriteTool(tool_name, tool_input, trackedFiles, cwd, collabDir, session_id, otherContexts);
+  handleWriteTool(tool_name, tool_input, trackedFiles, root, collabDir, session_id, otherContexts);
 }
 
 function handleReadTool(tool_name, tool_input, trackedFiles, cwd, collabDir, sessionId) {
@@ -206,11 +207,11 @@ function handleReadTool(tool_name, tool_input, trackedFiles, cwd, collabDir, ses
   }
   const summary = buildSummary(overlaps);
   const summaryHash = hashString(summary);
-  const lastSeen = getLastSeenHash(collabDir, sessionId);
-  if (lastSeen === summaryHash) {
+  const prevHash = getContextHash(collabDir, sessionId);
+  if (prevHash === summaryHash) {
     process.exit(0);
   }
-  setLastSeenHash(collabDir, sessionId, summaryHash);
+  setContextHash(collabDir, sessionId, summaryHash);
   allowWithAdditionalContext(summary);
 }
 
@@ -234,11 +235,11 @@ function handleWriteTool(tool_name, tool_input, trackedFiles, cwd, collabDir, se
   // No file overlap — inject non-blocking context only when something changed
   otherContexts.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
   const contextHash = hashString(JSON.stringify(otherContexts));
-  const lastSeen = getLastSeenHash(collabDir, sessionId);
-  if (lastSeen === contextHash) {
+  const prevHash = getContextHash(collabDir, sessionId);
+  if (prevHash === contextHash) {
     process.exit(0);
   }
-  setLastSeenHash(collabDir, sessionId, contextHash);
+  setContextHash(collabDir, sessionId, contextHash);
   allowWithAdditionalContext(buildSummary(otherContexts));
 }
 

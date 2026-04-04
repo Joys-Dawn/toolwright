@@ -4,11 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const { readAgents, removeAgent, withAgentsLock, writeAgents } = require('./agents');
 const { readContext, writeContext, removeContext } = require('./context');
-const { removeLastSeen } = require('./last-seen');
+const { removeContextHash } = require('./context-hash');
 
 function removeSessionState(collabDir, sessionId) {
   removeContext(collabDir, sessionId);
-  removeLastSeen(collabDir, sessionId);
+  removeContextHash(collabDir, sessionId);
   removeAgent(collabDir, sessionId);
 }
 
@@ -31,7 +31,7 @@ function scavengeExpiredSessions(collabDir, maxAgeMs, excludeSessionId) {
 
     for (const sessionId of expiredIds) {
       removeContext(collabDir, sessionId);
-      removeLastSeen(collabDir, sessionId);
+      removeContextHash(collabDir, sessionId);
       delete agents[sessionId];
     }
 

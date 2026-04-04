@@ -32,8 +32,16 @@ describe('plan-exit hook', () => {
   });
 
   it('exits silently when no collab directory exists', () => {
-    const output = runHook({ session_id: 'sess-1', cwd: tmpDir });
-    assert.equal(output, '');
+    // Use a dir at the filesystem root so walk-up can't find a real .claude/collab
+    const { root: fsRoot } = path.parse(tmpDir);
+    const isolated = path.join(fsRoot, '__collab_plan_exit_test_' + process.pid);
+    fs.mkdirSync(isolated, { recursive: true });
+    try {
+      const output = runHook({ session_id: 'sess-1', cwd: isolated });
+      assert.equal(output, '');
+    } finally {
+      fs.rmSync(isolated, { recursive: true, force: true });
+    }
   });
 
   it('exits silently when solo agent', () => {

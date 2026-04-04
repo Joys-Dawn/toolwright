@@ -9,7 +9,7 @@ const os = require('os');
 const { ensureCollabDir } = require('../../lib/collab-dir');
 const { registerAgent, readAgents } = require('../../lib/agents');
 const { writeContext, readContext } = require('../../lib/context');
-const { setLastSeenHash, getLastSeenHash } = require('../../lib/last-seen');
+const { setContextHash, getContextHash } = require('../../lib/context-hash');
 
 const HOOK = path.resolve(__dirname, '../../hooks/cleanup.js');
 
@@ -30,18 +30,18 @@ describe('cleanup hook', () => {
     collabDir = ensureCollabDir(tmpDir);
     registerAgent(collabDir, 'sess-1');
     writeContext(collabDir, 'sess-1', { task: 'test', status: 'in-progress' });
-    setLastSeenHash(collabDir, 'sess-1', 'abc');
+    setContextHash(collabDir, 'sess-1', 'abc');
   });
 
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('removes context, last-seen, and agent entry', () => {
+  it('removes context, context-hash, and agent entry', () => {
     runHook({ session_id: 'sess-1', cwd: tmpDir });
 
     assert.equal(readContext(collabDir, 'sess-1'), null);
-    assert.equal(getLastSeenHash(collabDir, 'sess-1'), null);
+    assert.equal(getContextHash(collabDir, 'sess-1'), null);
     assert.equal(readAgents(collabDir)['sess-1'], undefined);
   });
 

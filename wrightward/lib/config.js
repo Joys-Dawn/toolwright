@@ -14,6 +14,7 @@ const DEFAULTS_MIN = {
 };
 
 const DEFAULTS_BOOL = {
+  ENABLED: true,
   AUTO_TRACK: true
 };
 
@@ -52,6 +53,7 @@ function loadConfig(cwd) {
     SESSION_HARD_SCAVENGE_MS: toMs(merged.SESSION_HARD_SCAVENGE_MIN),
     REMINDER_IDLE_MS: toMs(merged.REMINDER_IDLE_MIN),
     INACTIVE_THRESHOLD_MS: toMs(merged.INACTIVE_THRESHOLD_MIN),
+    ENABLED: bools.ENABLED,
     AUTO_TRACK: bools.AUTO_TRACK
   });
 }

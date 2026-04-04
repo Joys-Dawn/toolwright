@@ -34,7 +34,7 @@ describe('register hook', () => {
 
     assert.ok(fs.existsSync(path.join(tmpDir, '.claude', 'collab')));
     assert.ok(fs.existsSync(path.join(tmpDir, '.claude', 'collab', 'context')));
-    assert.ok(fs.existsSync(path.join(tmpDir, '.claude', 'collab', 'last-seen')));
+    assert.ok(fs.existsSync(path.join(tmpDir, '.claude', 'collab', 'context-hash')));
 
     const agents = JSON.parse(fs.readFileSync(path.join(tmpDir, '.claude', 'collab', 'agents.json'), 'utf8'));
     assert.ok(agents['test-sess-1']);
@@ -53,6 +53,14 @@ describe('register hook', () => {
     const agents = JSON.parse(fs.readFileSync(path.join(tmpDir, '.claude', 'collab', 'agents.json'), 'utf8'));
     assert.ok(agents['sess-a']);
     assert.ok(agents['sess-b']);
+  });
+
+  it('does nothing when ENABLED is false', () => {
+    const claudeDir = path.join(tmpDir, '.claude');
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(path.join(claudeDir, 'wrightward.json'), JSON.stringify({ ENABLED: false }));
+    runHook({ session_id: 'test-sess-1', cwd: tmpDir });
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.claude', 'collab')));
   });
 
   it('persists session env vars for later Bash commands when CLAUDE_ENV_FILE is set', () => {

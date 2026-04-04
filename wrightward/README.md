@@ -79,6 +79,7 @@ Create `.claude/wrightward.json` in your project to override timeout defaults. A
 
 | Key | Default | Description |
 |-----|---------|-------------|
+| `ENABLED` | true | Master switch — when false, all hooks exit immediately |
 | `PLANNED_FILE_TIMEOUT_MIN` | 15 | How long declared files are held |
 | `PLANNED_FILE_GRACE_MIN` | 2 | Extends the timeout if the file was touched within this window before expiry |
 | `AUTO_TRACKED_FILE_TIMEOUT_MIN` | 2 | How long auto-tracked files are held (from last touch) |
@@ -86,6 +87,14 @@ Create `.claude/wrightward.json` in your project to override timeout defaults. A
 | `INACTIVE_THRESHOLD_MIN` | 6 | How long before a session is considered stale |
 | `SESSION_HARD_SCAVENGE_MIN` | 60 | Hard cleanup for truly dead sessions |
 | `AUTO_TRACK` | true | Whether Edit/Write auto-creates a context when none has been declared. When false, files are still tracked into an existing context but no new context is created automatically |
+
+## Disabling in a repo
+
+Set `ENABLED` to `false` in `.claude/wrightward.json` to fully disable wrightward in a repo. All hooks exit immediately — no registration, no tracking, no blocking.
+
+```json
+{ "ENABLED": false }
+```
 
 ## State
 

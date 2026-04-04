@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { readAgents } = require('../../lib/agents');
-const { getLastSeenHash } = require('../../lib/last-seen');
+const { getContextHash } = require('../../lib/context-hash');
 
 const SCRIPT = path.resolve(__dirname, '../../scripts/context.js');
 
@@ -112,9 +112,9 @@ describe('context script', () => {
       })
     });
 
-    const lastSeenDir = path.join(tmpDir, '.claude', 'collab', 'last-seen');
-    fs.mkdirSync(lastSeenDir, { recursive: true });
-    fs.writeFileSync(path.join(lastSeenDir, 'sess-1.json'), JSON.stringify({ hash: 'abc' }), 'utf8');
+    const contextHashDir = path.join(tmpDir, '.claude', 'collab', 'context-hash');
+    fs.mkdirSync(contextHashDir, { recursive: true });
+    fs.writeFileSync(path.join(contextHashDir, 'sess-1.json'), JSON.stringify({ hash: 'abc' }), 'utf8');
 
     const result = runScript(['--done'], {
       cwd: tmpDir,
@@ -127,7 +127,7 @@ describe('context script', () => {
     assert.equal(result.exitCode, 0);
     assert.equal(fs.existsSync(path.join(tmpDir, '.claude', 'collab', 'context', 'sess-1.json')), false);
     assert.equal(readAgents(path.join(tmpDir, '.claude', 'collab'))['sess-1'], undefined);
-    assert.equal(getLastSeenHash(path.join(tmpDir, '.claude', 'collab'), 'sess-1'), null);
+    assert.equal(getContextHash(path.join(tmpDir, '.claude', 'collab'), 'sess-1'), null);
   });
 
   it('re-registers the session when a new context is declared after done cleanup', () => {
