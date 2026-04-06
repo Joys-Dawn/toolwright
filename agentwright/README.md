@@ -49,7 +49,7 @@ Add the marketplace and install the plugin:
 
 ## Skills
 
-18 vendored skills:
+19 vendored skills:
 
 ### Audit skills (used by the pipeline)
 
@@ -59,6 +59,7 @@ Add the marketplace and install the plugin:
 | **security-audit** | OWASP Top 10 2025, API Security Top 10, CWE, GDPR, PCI-DSS |
 | **best-practices-audit** | DRY, SOLID, KISS, YAGNI, Clean Code, naming, coupling, anti-patterns |
 | **migration-audit** | PL/pgSQL: NULL traps, race conditions, missing constraints, JSONB pitfalls |
+| **implementation-audit** | Roundabout solutions, unnecessary complexity, reinvented wheels, naive designs |
 | **ui-audit** | WCAG 2.2 accessibility, WAI-ARIA patterns, component anti-patterns (React/Tailwind) |
 | **test-coverage-audit** | Maps source files against tests, produces risk-prioritized coverage gaps |
 
