@@ -7,12 +7,13 @@ const BUILTIN_STAGES = {
   correctness: { type: 'skill', skillId: 'correctness-audit' },
   security: { type: 'skill', skillId: 'security-audit' },
   'best-practices': { type: 'skill', skillId: 'best-practices-audit' },
+  implementation: { type: 'skill', skillId: 'implementation-audit' },
   migration: { type: 'skill', skillId: 'migration-audit' },
   ui: { type: 'skill', skillId: 'ui-audit' },
   'test-coverage': { type: 'skill', skillId: 'test-coverage-audit' },
-  'tests-migration': { type: 'skill', skillId: 'test-pgtap' },
-  'tests-edge': { type: 'skill', skillId: 'test-deno' },
-  'tests-frontend': { type: 'skill', skillId: 'test-frontend' }
+  'tests-migration': { type: 'skill', skillId: 'write-tests-pgtap' },
+  'tests-edge': { type: 'skill', skillId: 'write-tests-deno' },
+  'tests-frontend': { type: 'skill', skillId: 'write-tests-frontend' }
 };
 
 const DEFAULT_PIPELINES = {
