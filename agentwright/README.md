@@ -49,7 +49,7 @@ Add the marketplace and install the plugin:
 
 ## Skills
 
-19 vendored skills:
+20 vendored skills:
 
 ### Audit skills (used by the pipeline)
 
@@ -70,6 +70,7 @@ Add the marketplace and install the plugin:
 | **feature-planning** | Impact analysis, requirements, design, implementation steps, risk assessment |
 | **project-planning** | Stack selection, directory structure, tooling, scaffolding for greenfield projects |
 | **bug-fix-planning** | Root cause mapping, change impact, minimal fix, regression tests |
+| **refactor-planning** | Blast radius mapping, safe transformation sequence, behavior preservation verification |
 
 ### Debugging
 
