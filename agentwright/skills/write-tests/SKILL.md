@@ -1,6 +1,6 @@
 ---
-name: test-writing
-description: Use when writing, reviewing, or fixing tests in any language or framework, or when auditing a test suite for general best practices. Triggers on test structure issues, assertion quality, test isolation failures, flakiness, over-mocking, naming problems, or missing coverage. Defer to test-deno, test-frontend, or test-pgtap when the domain is specifically Deno edge functions, React components, or pgTAP database tests.
+name: write-tests
+description: Use when writing, reviewing, or fixing tests in any language or framework, or when auditing a test suite for general best practices. Triggers on test structure issues, assertion quality, test isolation failures, flakiness, over-mocking, naming problems, or missing coverage. Defer to write-tests-deno, write-tests-frontend, or write-tests-pgtap when the domain is specifically Deno edge functions, React components, or pgTAP database tests.
 ---
 
 # Test Writing

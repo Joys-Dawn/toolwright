@@ -1,5 +1,5 @@
 ---
-name: test-frontend
+name: write-tests-frontend
 description: Use when writing, reviewing, or fixing React component/hook tests, or when auditing frontend tests for RTL, Vitest, Zustand, or TanStack Query best practices. Triggers on query priority issues, mock leaks, flaky async tests, or Kent C. Dodds common-mistakes violations.
 ---
 

@@ -75,10 +75,10 @@ Every bug fix needs tests — both to verify the fix works and to cover any gaps
 - **Existing test updates**: If current tests assert the buggy behavior (and will break when you fix it), note which ones need updating and what the correct assertions should be.
 
 Delegate test writing to the appropriate skill based on what's being tested:
-- **test-frontend**: React components, hooks, RTL / Vitest
-- **test-deno**: Deno / Supabase Edge Functions
-- **test-pgtap**: Database migrations, RLS policies, SQL logic
-- **test-writing**: Everything else (general-purpose, any language/framework)
+- **write-tests-frontend**: React components, hooks, RTL / Vitest
+- **write-tests-deno**: Deno / Supabase Edge Functions
+- **write-tests-pgtap**: Database migrations, RLS policies, SQL logic
+- **write-tests**: Everything else (general-purpose, any language/framework)
 
 ### 6. Identify Risks
 
@@ -124,7 +124,7 @@ Write the plan to the plan file with this structure:
 - **Regression test**: [Reproduces the bug: inputs, expected output, test file]
 - **New tests**: [Tests for affected code paths that lacked coverage]
 - **Updated tests**: [Existing tests that assert buggy behavior and need correction]
-- **Test skill**: [Which test skill to delegate to: test-frontend / test-deno / test-pgtap / test-writing]
+- **Test skill**: [Which test skill to delegate to: write-tests-frontend / write-tests-deno / write-tests-pgtap / write-tests]
 
 ## Risks
 - [Risk with mitigation]
@@ -137,6 +137,6 @@ Write the plan to the plan file with this structure:
 - **Minimal fix**: Fix the root cause with the smallest change that fully resolves the bug. Do not refactor surrounding code, add features, or "improve" unrelated things.
 - **Read before planning**: Explore the affected code, its callers, and its tests before proposing any change.
 - **Root cause, not symptoms**: Confirm the root cause before designing the fix. A fix aimed at symptoms will need to be re-fixed.
-- **Every fix gets tests**: At minimum a regression test. If the fix touches untested code, add coverage for that too. Delegate to the appropriate test skill (test-frontend, test-deno, test-pgtap, or test-writing).
+- **Every fix gets tests**: At minimum a regression test. If the fix touches untested code, add coverage for that too. Delegate to the appropriate test skill (write-tests-frontend, write-tests-deno, write-tests-pgtap, or write-tests).
 - **Name what you're leaving alone**: Explicitly scope the fix. Prevent "while I'm in here" scope creep.
 - **Honest about uncertainty**: If the root cause is not fully confirmed, say so. A "probably X" plan should note the uncertainty and include a verification step.

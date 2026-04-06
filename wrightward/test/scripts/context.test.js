@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { readAgents } = require('../../lib/agents');
+const { readContext } = require('../../lib/context');
 const { getContextHash } = require('../../lib/context-hash');
 
 const SCRIPT = path.resolve(__dirname, '../../scripts/context.js');
@@ -175,7 +176,7 @@ describe('context script', () => {
     assert.equal(context.task, 'Second task');
   });
 
-  it('fails clearly when session env vars are missing', () => {
+  it('fails clearly when session id is missing from both CLI args and env vars', () => {
     const result = runScript([], {
       cwd: tmpDir,
       env: {
@@ -183,7 +184,7 @@ describe('context script', () => {
         COLLAB_PROJECT_CWD: ''
       },
       input: JSON.stringify({
-        task: 'Missing env case',
+        task: 'Missing session case',
         files: [],
         functions: [],
         status: 'in-progress'
@@ -191,7 +192,29 @@ describe('context script', () => {
     });
 
     assert.equal(result.exitCode, 1);
-    assert.ok(result.stderr.includes('COLLAB_SESSION_ID'));
+    assert.ok(result.stderr.includes('session_id'));
+  });
+
+  it('accepts session id via --session-id CLI arg (no env vars)', () => {
+    const result = runScript(['--session-id', 'cli-session-id'], {
+      cwd: tmpDir,
+      env: {
+        COLLAB_SESSION_ID: '',
+        COLLAB_PROJECT_CWD: tmpDir
+      },
+      input: JSON.stringify({
+        task: 'CLI arg case',
+        files: [],
+        functions: [],
+        status: 'in-progress'
+      })
+    });
+
+    assert.equal(result.exitCode, 0);
+    const collabDir = path.join(tmpDir, '.claude', 'collab');
+    const context = readContext(collabDir, 'cli-session-id');
+    assert.ok(context);
+    assert.equal(context.task, 'CLI arg case');
   });
 
   it('rejects invalid JSON on stdin', () => {

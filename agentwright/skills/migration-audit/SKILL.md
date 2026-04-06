@@ -9,6 +9,16 @@ Run this audit on EVERY migration file BEFORE presenting it to the user. Do not 
 
 See [REFERENCE.md](REFERENCE.md) for detailed failure modes, code examples, and source citations for each check.
 
+## Scope
+
+Determine which migration files to audit:
+
+- **Git diff mode** (default when no scope specified and changes exist): run `git diff` and `git diff --cached` to find changed `.sql` files in migration directories. Also check for **new untracked migrations** with `git ls-files --others --exclude-standard '*.sql'` — new migration files won't appear in `git diff`.
+- **File mode**: audit the specific migration file(s) the user specifies
+- **Directory mode**: audit all `.sql` files in the specified migration directory
+
+Read all in-scope migration files before producing findings.
+
 ## Pre-audit: Read Dependencies
 
 Before auditing, read ALL referenced tables' CREATE TABLE statements to understand:
@@ -157,19 +167,16 @@ Before finalizing your audit notes, verify every issue you found:
 
 ## Output
 
-After auditing, include a brief audit summary when presenting the migration:
+**Only report issues.** Do not list dimensions that passed — silence means no problems found.
+
+If the audit is clean: `**Migration audit: PASS** (no issues found)`
+
+If issues exist, list only the findings:
 
 ```
-**Audit notes:**
-- NULL: [which params/vars checked, any IS DISTINCT FROM needed]
-- TOCTOU: [which row locked and why, or why locking isn't needed]
-- Constraints: [which unique constraints protect each INSERT]
-- Error handling: [FOUND checks present, STRICT used where appropriate, EXCEPTION blocks justified]
-- JSONB: [NULL handling verified for build_object / agg calls]
-- Volatility: [VOLATILE/STABLE/IMMUTABLE correctly assigned]
-- Financial: [atomic deduction + idempotency key, or N/A]
-- Security: [SECURITY DEFINER + search_path + REVOKE/GRANT confirmed]
-- DDL: [lock levels, idempotency, CONCURRENTLY, or N/A]
+**Migration audit: <filename>**
+- [Dimension]: [file:line] — [what's wrong and concrete fix]
+- [Dimension]: [file:line] — [what's wrong and concrete fix]
 ```
 
 If issues are found, fix them BEFORE presenting. Do not present migrations with known issues.

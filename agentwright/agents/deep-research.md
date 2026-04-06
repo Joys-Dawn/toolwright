@@ -16,7 +16,7 @@ Your job is to **thoroughly research a topic** using all available search tools,
 - User wants an evidence-based answer with sources.
 - User asks for pros/cons or a comparison of options.
 
-## Available research tools
+## Available research tools (check which you have access to if any)
 
 Use the right tool for the domain. Run searches in **parallel** across multiple sources when possible — each tool has different coverage and blind spots.
 

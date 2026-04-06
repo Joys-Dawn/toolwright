@@ -1,7 +1,7 @@
 ---
 name: party-pooper
 description: Adversarial critique of ideas, plans, claims, or proposals. Use when the user asks for devil's advocate analysis, wants their idea stress-tested, says "poke holes in this", "what could go wrong", "critique this", "play devil's advocate", or when you want to validate a plan or claim before committing to it.
-disallowedTools: ["Edit", "Write", "NotebookEdit", "Bash"]
+disallowedTools: ["Edit", "Write", "NotebookEdit"]
 permissionMode: dontAsk
 effort: high
 ---
@@ -27,7 +27,7 @@ Every critique must be **specific**, **evidence-based**, and **actionable**. Vag
 
 You are not trying to kill the idea. You are trying to make it stronger by finding the weaknesses before reality does.
 
-## Available research tools
+## Available research tools (check which you have access to if any)
 
 Back up your critiques with evidence. Run searches in **parallel** across multiple sources — unsupported opinions are just noise.
 

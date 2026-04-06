@@ -9,7 +9,7 @@ Declare or update what you're currently working on for multi-agent awareness.
 Run the bundled collab script with a JSON payload on stdin. Do not use Edit or Write for this — use the Bash tool only.
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/context.js <<'EOF'
+node ${CLAUDE_PLUGIN_ROOT}/scripts/context.js --session-id '${CLAUDE_SESSION_ID}' <<'EOF'
 {
   "task": "...",
   "files": ["..."],

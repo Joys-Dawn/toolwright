@@ -1,5 +1,5 @@
 ---
-name: test-pgtap
+name: write-tests-pgtap
 description: Use when writing, reviewing, or fixing pgTAP tests for Supabase SQL migrations, or when auditing database tests for best practices. Triggers on plan count mismatches, transaction isolation issues, RLS policy testing, privilege verification, or assertion selection problems.
 ---
 

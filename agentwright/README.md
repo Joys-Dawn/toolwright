@@ -49,7 +49,7 @@ Add the marketplace and install the plugin:
 
 ## Skills
 
-14 vendored skills — each can be used in audit pipelines or invoked standalone:
+18 vendored skills:
 
 ### Audit skills (used by the pipeline)
 
@@ -76,14 +76,27 @@ Add the marketplace and install the plugin:
 |-------|-------|
 | **systematic-debugging** | Reproduce, isolate, hypothesize, verify — evidence-based root-cause analysis |
 
-### Testing skills
+### Test writing skills
+
+Write, review, and fix tests. Typically invoked by the main agent after `test-coverage-audit` identifies gaps.
 
 | Skill | Focus |
 |-------|-------|
-| **test-writing** | General test quality: assertions, isolation, flakiness, over-mocking (any language/framework) |
-| **test-frontend** | React with Vitest + React Testing Library |
-| **test-deno** | Deno integration tests for Supabase Edge Functions |
-| **test-pgtap** | pgTAP database tests for Supabase SQL migrations |
+| **write-tests** | General test quality: assertions, isolation, flakiness, over-mocking (any language/framework) |
+| **write-tests-frontend** | React with Vitest + React Testing Library |
+| **write-tests-deno** | Deno integration tests for Supabase Edge Functions |
+| **write-tests-pgtap** | pgTAP database tests for Supabase SQL migrations |
+
+### Agent shortcuts
+
+Skill wrappers that invoke the built-in agents. Use `/agentwright:<name>` instead of typing the full `@agent-agentwright:<agent>` mention.
+
+| Skill | Agent | Pattern |
+|-------|-------|---------|
+| **research** `<topic>` | deep-research | Forked — self-contained topic |
+| **update-docs** `[scope]` | update-docs | Forked — infers from git diff |
+| **critique** `[focus]` | party-pooper | Forked — reads session transcript |
+| **verify** `[focus]` | verifier | Forked — reads session transcript + git diff |
 
 ## Agents
 

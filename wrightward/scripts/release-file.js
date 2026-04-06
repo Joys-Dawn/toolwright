@@ -2,22 +2,42 @@
 'use strict';
 
 const path = require('path');
+const { resolveCollabDir } = require('../lib/collab-dir');
 const { readContext, writeContext } = require('../lib/context');
 const { validateSessionId } = require('../lib/constants');
 
-function getSessionContext() {
-  const sessionId = process.env.COLLAB_SESSION_ID;
-  const cwd = process.env.COLLAB_PROJECT_CWD;
+function parseArgs(argv) {
+  const args = {};
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--session-id' && i + 1 < argv.length) {
+      args.sessionId = argv[i + 1];
+      i++;
+    } else if (argv[i] === '--cwd' && i + 1 < argv.length) {
+      args.cwd = argv[i + 1];
+      i++;
+    }
+  }
+  return args;
+}
 
-  if (!sessionId || !cwd) {
-    throw new Error('Missing COLLAB_SESSION_ID or COLLAB_PROJECT_CWD. Start a Claude session with the plugin enabled before using this command.');
+function getSessionContext(cliArgs) {
+  const sessionId = cliArgs.sessionId || process.env.COLLAB_SESSION_ID;
+  if (!sessionId) {
+    throw new Error('Missing session_id. Invoke via /wrightward:collab-release or pass --session-id <uuid>.');
+  }
+
+  let cwd = cliArgs.cwd || process.env.COLLAB_PROJECT_CWD;
+  if (!cwd) {
+    const resolved = resolveCollabDir(process.cwd());
+    cwd = resolved ? resolved.root : process.cwd();
   }
 
   return { sessionId, cwd };
 }
 
 async function main() {
-  const { sessionId, cwd } = getSessionContext();
+  const cliArgs = parseArgs(process.argv.slice(2));
+  const { sessionId, cwd } = getSessionContext(cliArgs);
   validateSessionId(sessionId);
 
   const collabDir = path.join(cwd, '.claude', 'collab');

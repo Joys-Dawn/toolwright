@@ -2,11 +2,27 @@
 'use strict';
 
 const path = require('path');
-const { ensureCollabDir } = require('../lib/collab-dir');
+const { ensureCollabDir, resolveCollabDir } = require('../lib/collab-dir');
 const { getActiveAgents, registerAgent } = require('../lib/agents');
 const { readContext, writeContext, fileEntryForPath } = require('../lib/context');
 const { removeSessionState } = require('../lib/session-state');
 const { loadConfig } = require('../lib/config');
+
+function parseArgs(argv) {
+  const args = {};
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--session-id' && i + 1 < argv.length) {
+      args.sessionId = argv[i + 1];
+      i++;
+    } else if (argv[i] === '--cwd' && i + 1 < argv.length) {
+      args.cwd = argv[i + 1];
+      i++;
+    } else if (argv[i] === '--done') {
+      args.done = true;
+    }
+  }
+  return args;
+}
 
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -73,21 +89,29 @@ function normalizePayload(payload) {
   };
 }
 
-function getSessionContext() {
-  const sessionId = process.env.COLLAB_SESSION_ID;
-  const cwd = process.env.COLLAB_PROJECT_CWD;
+function getSessionContext(cliArgs) {
+  // Priority: CLI args (from skill template substitution) > env vars > walk-up from process.cwd()
+  // Env var path is kept as fallback for direct script invocation.
+  const sessionId = cliArgs.sessionId || process.env.COLLAB_SESSION_ID;
+  if (!sessionId) {
+    throw new Error('Missing session_id. Invoke via /wrightward:collab-context or pass --session-id <uuid>.');
+  }
 
-  if (!sessionId || !cwd) {
-    throw new Error('Missing COLLAB_SESSION_ID or COLLAB_PROJECT_CWD. Start a Claude session with the plugin enabled before using this command.');
+  let cwd = cliArgs.cwd || process.env.COLLAB_PROJECT_CWD;
+  if (!cwd) {
+    // Try to find an existing collab dir by walking up from the current working directory.
+    const resolved = resolveCollabDir(process.cwd());
+    cwd = resolved ? resolved.root : process.cwd();
   }
 
   return { sessionId, cwd };
 }
 
 async function main() {
-  const { sessionId, cwd } = getSessionContext();
+  const cliArgs = parseArgs(process.argv.slice(2));
+  const { sessionId, cwd } = getSessionContext(cliArgs);
   const collabDir = ensureCollabDir(cwd);
-  const markDone = process.argv.includes('--done');
+  const markDone = cliArgs.done;
 
   if (markDone) {
     const existing = readContext(collabDir, sessionId);

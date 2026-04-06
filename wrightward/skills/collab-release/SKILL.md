@@ -7,7 +7,7 @@ allowed-tools: Bash(node *)
 Release one or more files from your collab context.
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/release-file.js <<'EOF'
+node ${CLAUDE_PLUGIN_ROOT}/scripts/release-file.js --session-id '${CLAUDE_SESSION_ID}' <<'EOF'
 {
   "files": ["src/foo.js", "src/bar.js"]
 }

@@ -1,5 +1,5 @@
 ---
-name: test-deno
+name: write-tests-deno
 description: Use when writing, reviewing, or fixing Deno integration tests for Supabase Edge Functions, or when auditing edge function tests for best practices. Triggers on test failures involving sanitizers, assertions, mocking, HTTP testing, or environment isolation.
 ---
 

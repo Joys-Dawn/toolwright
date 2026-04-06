@@ -15,7 +15,7 @@ Determine what to audit based on context:
 - **File/directory mode**: audit coverage for the files or directories the user specifies
 - **Full audit mode**: map the entire source tree against the test tree to find untested modules
 
-Skip: `node_modules/`, `vendor/`, build output, generated files, config files, static assets, migration files (migrations are tested via `test-pgtap`, not unit tests).
+Skip: `node_modules/`, `vendor/`, build output, generated files, config files, static assets, migration files (migrations are tested via `write-tests-pgtap`, not unit tests).
 
 ## Process
 
@@ -66,10 +66,10 @@ For each gap, indicate which test writing skill applies:
 
 | Code type | Test skill |
 |-----------|-----------|
-| Database migrations, RLS policies, RPCs, triggers | `test-pgtap` |
-| Supabase/Deno edge functions | `test-deno` |
-| React components, hooks, user interactions | `test-frontend` |
-| Everything else (backend logic, utilities, APIs, CLI, libraries) | `test-writing` |
+| Database migrations, RLS policies, RPCs, triggers | `write-tests-pgtap` |
+| Supabase/Deno edge functions | `write-tests-deno` |
+| React components, hooks, user interactions | `write-tests-frontend` |
+| Everything else (backend logic, utilities, APIs, CLI, libraries) | `write-tests` |
 
 ## Output Format
 
@@ -122,7 +122,7 @@ For each gap, indicate which test writing skill applies:
 - **Re-export barrels** (`index.ts` that just re-exports) — no logic
 - **Configuration files** — `tailwind.config.ts`, `vitest.config.ts`, etc.
 - **Generated code** — Prisma client, GraphQL codegen output, etc.
-- **Migration SQL files** — tested via `test-pgtap` against the applied schema, not via unit tests of the SQL file itself
+- **Migration SQL files** — tested via `write-tests-pgtap` against the applied schema, not via unit tests of the SQL file itself
 - **Static assets** — images, fonts, CSS
 - **Simple constants and enums** — no branching logic
 
@@ -131,6 +131,6 @@ For each gap, indicate which test writing skill applies:
 - **Map before judging**: read both the source and test files before assessing coverage depth. Don't flag a file as untested if it's covered by a shared integration test.
 - **Risk over completeness**: a project doesn't need 100% coverage. Prioritize gaps where bugs would cause real damage (data loss, auth bypass, financial errors).
 - **Be specific about what to test**: don't say "add tests for billing.ts" — say "test that `charge()` rejects negative amounts, handles Stripe API errors, and creates an audit log entry."
-- **Name the skill**: every gap should specify which test writing skill (`test-pgtap`, `test-deno`, `test-frontend`, `test-writing`) applies.
+- **Name the skill**: every gap should specify which test writing skill (`write-tests-pgtap`, `write-tests-deno`, `write-tests-frontend`, `write-tests`) applies.
 - **Don't duplicate other audits**: this audit finds missing tests, not bugs in existing code or tests. For bugs, use `correctness-audit`. For test quality issues, use the appropriate test writing skill in review mode.
 - **Respect scope**: in diff mode, only assess coverage for changed files.

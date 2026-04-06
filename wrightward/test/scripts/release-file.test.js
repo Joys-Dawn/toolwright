@@ -12,8 +12,16 @@ const { writeContext, readContext } = require('../../lib/context');
 
 const SCRIPT = path.resolve(__dirname, '../../scripts/release-file.js');
 
-function runScript(input, env) {
-  const result = spawnSync('node', [SCRIPT], {
+function runScript(input, envOrArgs, maybeEnv) {
+  // runScript(input, env) — backward compat
+  // runScript(input, args, env) — with CLI args
+  let args = [];
+  let env = envOrArgs;
+  if (Array.isArray(envOrArgs)) {
+    args = envOrArgs;
+    env = maybeEnv || {};
+  }
+  const result = spawnSync('node', [SCRIPT, ...args], {
     input: JSON.stringify(input),
     encoding: 'utf8',
     timeout: 5000,
@@ -106,9 +114,28 @@ describe('release-file script', () => {
     assert.ok(result.stderr.includes('non-empty'));
   });
 
-  it('fails when env vars are missing', () => {
+  it('fails when session id is missing from both CLI args and env vars', () => {
     const result = runScript({ files: ['foo.js'] }, { COLLAB_SESSION_ID: '', COLLAB_PROJECT_CWD: '' });
     assert.equal(result.exitCode, 1);
-    assert.ok(result.stderr.includes('COLLAB_SESSION_ID'));
+    assert.ok(result.stderr.includes('session_id'));
+  });
+
+  it('accepts session id via --session-id CLI arg (no env vars)', () => {
+    writeContext(collabDir, 'cli-sess', {
+      task: 'cli test',
+      files: [{ path: 'x.js', prefix: '~', source: 'planned', declaredAt: 1, lastTouched: 2, reminded: false }],
+      status: 'in-progress'
+    });
+
+    const result = runScript(
+      { files: ['x.js'] },
+      ['--session-id', 'cli-sess', '--cwd', tmpDir],
+      { COLLAB_SESSION_ID: '', COLLAB_PROJECT_CWD: '' }
+    );
+    assert.equal(result.exitCode, 0);
+    assert.ok(result.stdout.includes('Released'));
+
+    const ctx = readContext(collabDir, 'cli-sess');
+    assert.equal(ctx.files.length, 0);
   });
 });
