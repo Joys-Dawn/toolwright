@@ -49,7 +49,7 @@ Add the marketplace and install the plugin:
 
 ## Skills
 
-20 vendored skills:
+21 vendored skills:
 
 ### Audit skills (used by the pipeline)
 
@@ -99,13 +99,15 @@ Skill wrappers that invoke the built-in agents. Use `/agentwright:<name>` instea
 | **update-docs** `[scope]` | update-docs | Forked — infers from git diff |
 | **critique** `[focus]` | party-pooper | Forked — reads session transcript |
 | **verify** `[focus]` | verifier | Forked — reads session transcript + git diff |
+| **challenge** `[claim]` | detective (x2) | Inline — dispatches two detectives with opposing hypotheses |
 
 ## Agents
 
-Four built-in agents available for dispatch:
+Five built-in agents available for dispatch:
 
 | Agent | What it does | Permissions |
 |-------|-------------|-------------|
+| **detective** | Investigates a hypothesis about code behavior — traces logic, reads files, runs tests, reports evidence. Used by `/challenge` to independently verify disputed claims. | Read-only |
 | **verifier** | Validates applied fixes: implementations exist, tests pass, no unstated changes. Dispatched automatically after audit fixes. | Read-only |
 | **deep-research** | Web search and literature review with synthesis | Read-only |
 | **party-pooper** | Adversarial critique of ideas, plans, and proposals | Read-only |
