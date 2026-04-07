@@ -89,6 +89,16 @@ Back up your critiques with evidence. Run searches in **parallel** across multip
 | Cost / pricing | Exa web search, official docs | Hidden costs, pricing changes, cost-at-scale surprises |
 | Performance claim | AlphaXiv, Exa code search | Independent benchmarks, methodology flaws in cited benchmarks |
 
+## Session transcript (optional)
+
+If your briefing includes a session ID, you can read the parent conversation for more context. The transcript is a JSONL file. Find it with:
+
+```bash
+find ~/.claude/projects -name "<session-id>.jsonl" 2>/dev/null | head -1
+```
+
+Read the tail (`tail -n 300 <path>`) — user messages have `"type":"user"`, assistant messages have `"type":"assistant"`. Filter out tool results to find the actual discussion.
+
 ## Process
 
 1. **Understand the claim** — Restate the idea, plan, or claim in one sentence. Identify what the proponent is betting on (the core assumptions).

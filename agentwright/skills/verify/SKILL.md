@@ -1,54 +1,21 @@
 ---
 name: verify
-description: Verify that completed work matches what was requested. Reads the session transcript directly and checks implementations against claims.
+description: Verify that completed work matches what was requested. Dispatches the verifier agent to independently check implementations against claims.
 argument-hint: [optional focus area]
-context: fork
-agent: agentwright:verifier
 ---
 
-Verify the work that was just completed. Your scope is **uncommitted changes** (what `git diff` shows) plus anything recently committed as part of the current task — not the entire session history. The session transcript is only a source for *what was claimed* about those changes.
+Dispatch the verifier agent to independently check the work just completed in this conversation.
 
-## Step 1: Locate the session transcript
+Launch the Agent tool with `subagent_type` set to exactly `agentwright:verifier`. In the `prompt`, include:
 
-The transcript is at `~/.claude/projects/<sanitized-cwd>/${CLAUDE_SESSION_ID}.jsonl`. Locate it with:
+1. **What the user originally requested** — summarize from this conversation. Use the user's own framing, not an optimistic paraphrase.
+2. **What you claimed to have done** — the specific files, functions, and behaviors you reported as complete. Use the exact language you used when reporting completion.
+3. **Relevant file paths** — absolute paths to every file you touched.
+4. **Snapshot path if available** — if agentwright provided a snapshot directory for this task, include it so the verifier can diff against pre-task state instead of `git diff`.
+5. **Focus area** — if the user passed `$ARGUMENTS`, include it to focus the verification.
 
-```bash
-find ~/.claude/projects -name "${CLAUDE_SESSION_ID}.jsonl" 2>/dev/null | head -1
-```
+6. **Session ID** — include `${CLAUDE_SESSION_ID}` so the verifier can optionally read the full transcript if it needs more context.
 
-## Step 2: Extract the recent request and claims
+Do not filter your claims to only the ones you are confident about. The verifier's job is to catch gaps.
 
-The file is JSON Lines and can be thousands of lines across a long session. **Only look at the tail** — the current task. Start by reading the last ~200 lines (`tail -n 200 <path>`) and work backward only if you need more context.
-
-Entry types you care about:
-
-- **User requests**: `{"type":"user","message":{"content":[{"type":"text","text":"..."}]}}`. Filter out tool results and tool_use_ids:
-  ```bash
-  tail -n 200 <path> | grep '"type":"user"' | grep -v '"tool_result"' | grep -v '"tool_use_id"'
-  ```
-  The most recent real user message (ignoring the `/verify` invocation itself) is the task to verify.
-
-- **Assistant claims and tool calls**: `{"type":"assistant","message":{"content":[...]}}`. The content array has text blocks (the claims) and `tool_use` blocks. Edit/Write/NotebookEdit tool_use blocks contain `input.file_path` — those are the files actually modified.
-  ```bash
-  tail -n 200 <path> | grep '"type":"assistant"'
-  ```
-
-- Ignore the trailing entries that belong to this `/verify` invocation itself.
-
-If `git diff` shows changes that go back further than the last 200 lines of transcript, widen the tail window until you have the full picture of the current task.
-
-## Step 3: Verify
-
-Now follow your normal verification process from your system prompt:
-
-1. **Scope**: state what was requested (from user messages) and what was claimed (from assistant text + tool calls). Do not paraphrase optimistically — use the agent's own words for claims.
-2. **Check each claim**: read the touched files and confirm the claimed changes are present and correct.
-3. **Check the diff**: run `git diff` (or compare against a snapshot directory if the transcript mentions one) to find unstated changes.
-4. **Check for regressions**: run relevant tests in the affected area if they exist.
-5. **Verdict**: PASS / FAIL / PARTIAL with specific file paths and line numbers for any issues.
-
-## Focus area
-
-If the user passed arguments, focus the verification on that area. Otherwise verify everything that was claimed.
-
-$ARGUMENTS
+After the verifier returns, report its findings to the user verbatim — do not soften or filter the output.

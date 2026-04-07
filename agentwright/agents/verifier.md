@@ -36,6 +36,16 @@ Flag anything that was claimed but is missing, incomplete, or broken. Be specifi
 - If there are existing tests in the affected area, run them — not just the new ones.
 - Check for obvious regressions: removed exports that are imported elsewhere, changed function signatures, modified default values.
 
+## Session transcript (optional)
+
+If your briefing includes a session ID, you can read the parent conversation for more context. The transcript is a JSONL file. Find it with:
+
+```bash
+find ~/.claude/projects -name "<session-id>.jsonl" 2>/dev/null | head -1
+```
+
+Read the tail (`tail -n 300 <path>`) — user messages have `"type":"user"`, assistant messages have `"type":"assistant"`. Filter out tool results to find the actual discussion.
+
 ## Process
 
 1. **Extract scope**: From context, identify (a) what was requested, (b) what the main agent said it did. List both explicitly.

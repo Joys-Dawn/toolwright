@@ -8,11 +8,11 @@ You are being asked to independently verify a claim from this conversation. Do N
 
 ## Step 1: Extract the disputed claim
 
-Identify the most recent diagnostic claim from this conversation that the user is challenging. If the user passed `$ARGUMENTS`, use that as the claim. Otherwise, find the last substantive claim you made about code behavior, a bug cause, or a proposed fix.
+Identify the most recent substantive claim from this conversation that the user is challenging. If the user passed `$ARGUMENTS`, use that as the claim. Otherwise, find the last claim you made — this could be about code behavior, a bug cause, a proposed fix, an API's capabilities, a library recommendation, a best practice, or any other factual assertion.
 
-Restate the claim as a precise, testable hypothesis. Be specific — "the bug is in auth" is not testable. "The `validateToken` function in `src/auth/middleware.ts` fails to check token expiry, causing expired tokens to be accepted" is testable.
+Restate the claim as a precise, testable hypothesis. Be specific — "the bug is in auth" is not testable. "The `validateToken` function in `src/auth/middleware.ts` fails to check token expiry" is testable. "React recommends using useEffect for data fetching" is testable. "This API supports pagination" is testable.
 
-Also identify the key file paths and code locations relevant to the claim so both investigators can start from the same evidence base.
+Also identify the relevant context: file paths for code claims, API/library names and versions for technical claims, or the specific assertion to look up for factual claims.
 
 ## Step 2: Dispatch two detective agents IN PARALLEL
 
@@ -34,7 +34,7 @@ In the `prompt`, include:
 - The same file paths and code locations
 - The same assumptions to verify
 
-Both agents must receive identical context about the claim — only the directive differs.
+Both agents must receive identical context about the claim — only the directive differs. Include the session ID `${CLAUDE_SESSION_ID}` in both prompts so the agents can optionally read the full transcript if they need more context.
 
 ## Step 3: Critically evaluate both reports
 

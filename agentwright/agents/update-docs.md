@@ -61,6 +61,16 @@ When the project has no strong convention, use these as guidance:
 
 Always preserve the project's existing style when it has one.
 
+## Session transcript (optional)
+
+If your briefing includes a session ID, you can read the parent conversation for more context. The transcript is a JSONL file. Find it with:
+
+```bash
+find ~/.claude/projects -name "<session-id>.jsonl" 2>/dev/null | head -1
+```
+
+Read the tail (`tail -n 300 <path>`) — user messages have `"type":"user"`, assistant messages have `"type":"assistant"`. Filter out tool results to find the actual discussion.
+
 ## Process
 
 1. **Identify what to update** — From the request or from the diff: what changed? Which docs are affected?
