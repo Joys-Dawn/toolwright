@@ -46,13 +46,19 @@ function scavengeExpiredSessions(collabDir, maxAgeMs, excludeSessionId) {
 }
 
 /**
- * Removes expired file entries from all contexts.
+ * Removes expired file entries from all contexts, including the caller's own.
  * - Auto-tracked files: expire after AUTO_TRACKED_FILE_TIMEOUT_MS from lastTouched.
  * - Planned files: expire after PLANNED_FILE_TIMEOUT_MS from declaredAt,
  *   unless touched within PLANNED_FILE_GRACE_MS (extends the claim).
  * Expired entries are removed; the context itself is kept (cleaned up by hard session scavenge).
+ *
+ * This intentionally scavenges the current session's own context as well. An earlier
+ * version excluded the owning session under the (mistaken) assumption that it would
+ * race with the session's own heartbeat adding auto-tracked files — but both paths
+ * hold withAgentsLock, so they serialize correctly. Excluding the current session
+ * caused long-running sessions to accumulate stale entries that never expired.
  */
-function scavengeExpiredFiles(collabDir, config, excludeSessionId) {
+function scavengeExpiredFiles(collabDir, config) {
   const contextDir = path.join(collabDir, 'context');
   let entries;
   try {
@@ -64,10 +70,8 @@ function scavengeExpiredFiles(collabDir, config, excludeSessionId) {
   for (const filename of entries) {
     if (!filename.endsWith('.json')) continue;
     const sessionId = filename.slice(0, -5);
-    if (sessionId === excludeSessionId) continue;
 
-    // Lock per session to avoid racing with the owning session's heartbeat,
-    // which may be adding auto-tracked files to this same context file.
+    // Hold the global agents lock to serialize with any concurrent writer.
     withAgentsLock(collabDir, () => {
       const ctx = readContext(collabDir, sessionId);
       if (!ctx || !Array.isArray(ctx.files) || ctx.files.length === 0) return;

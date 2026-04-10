@@ -40,6 +40,12 @@ Before every tool call, wrightward checks for conflicts:
 
 Context injection is deduplicated — the same summary is only shown once per change in other agents' state.
 
+### Collab state is off-limits to the model
+
+Edit/Write on any file inside `.claude/collab/` is hard-blocked unconditionally — whether or not other agents are active. This prevents an agent from bypassing the coordination system by directly editing `agents.json` or another agent's context file (e.g., to remove what it perceives as a "stale" claim). Collab state is managed exclusively by the wrightward skills and hooks. Read access is not blocked — agents can still inspect their own state for debugging.
+
+If an agent believes another agent's claim is stale, the instructions in every collab skill tell it to **wait 6 minutes and try again**. After 6 minutes of no heartbeat, a crashed or abandoned session is automatically excluded from the active set, and its claims stop enforcing. If the claim is still enforced after 6 minutes, the other agent is alive — the claim is legitimate, not stale, and agents are explicitly instructed never to bypass it. Claims declared through `/wrightward:collab-context` can persist for 15 minutes or longer while the other agent works through a plan.
+
 ### Idle reminders
 
 If an agent hasn't touched a file in **5 minutes**, a one-time reminder suggests releasing it. This nudges agents to free files they've moved on from without waiting for the timeout.

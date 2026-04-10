@@ -178,13 +178,19 @@ describe('heartbeat hook', () => {
     }
   });
 
-  it('emits idle reminder for files not touched within REMINDER_IDLE_MS', () => {
-    const oldTime = Date.now() - 400000; // 6+ minutes ago
+  it('emits idle reminder for planned files not touched within REMINDER_IDLE_MS (when other agents active)', () => {
+    // Reminders are designed for planned files (declared via /wrightward:collab-context)
+    // that the agent forgot about. Auto-tracked files expire at 2 minutes, well before
+    // the 5-minute reminder window, so they're never reachable for reminders.
+    // Planned files have a 15-minute timeout, which gives the reminder a real window.
+    // Reminders only fire when another agent is active — otherwise there's nobody to unblock.
+    registerAgent(collabDir, 'sess-other');
+    const oldTime = Date.now() - 400000; // 6+ minutes ago — past reminder window, still within planned timeout
     writeContext(collabDir, 'sess-1', {
       task: 'my work',
       files: [
-        { path: 'old.js', prefix: '~', source: 'auto', declaredAt: oldTime, lastTouched: oldTime, reminded: false },
-        { path: 'recent.js', prefix: '~', source: 'auto', declaredAt: Date.now(), lastTouched: Date.now(), reminded: false }
+        { path: 'old.js', prefix: '~', source: 'planned', declaredAt: oldTime, lastTouched: oldTime, reminded: false },
+        { path: 'recent.js', prefix: '~', source: 'planned', declaredAt: Date.now(), lastTouched: Date.now(), reminded: false }
       ],
       status: 'in-progress'
     });
@@ -207,12 +213,41 @@ describe('heartbeat hook', () => {
     assert.equal(oldEntry.reminded, true);
   });
 
-  it('does not re-emit reminder for already-reminded files', () => {
+  it('does NOT emit idle reminder when the session is solo (no other agents)', () => {
+    // Solo agent has nobody to unblock, so the reminder is just noise.
+    // Also verifies the 'reminded' flag is NOT flipped — so a later-joining agent
+    // can still trigger the reminder when it becomes relevant.
     const oldTime = Date.now() - 400000;
     writeContext(collabDir, 'sess-1', {
       task: 'my work',
       files: [
-        { path: 'old.js', prefix: '~', source: 'auto', declaredAt: oldTime, lastTouched: oldTime, reminded: true }
+        { path: 'old.js', prefix: '~', source: 'planned', declaredAt: oldTime, lastTouched: oldTime, reminded: false }
+      ],
+      status: 'in-progress'
+    });
+    const result = runHook({
+      session_id: 'sess-1',
+      cwd: tmpDir,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(tmpDir, 'another.js') }
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, '');
+
+    // Reminded flag must NOT be set — if another agent joins later, the reminder
+    // should still be able to fire.
+    const ctx = readContext(collabDir, 'sess-1');
+    const oldEntry = ctx.files.find(f => f.path === 'old.js');
+    assert.equal(oldEntry.reminded, false);
+  });
+
+  it('does not re-emit reminder for already-reminded files', () => {
+    registerAgent(collabDir, 'sess-other');
+    const oldTime = Date.now() - 400000;
+    writeContext(collabDir, 'sess-1', {
+      task: 'my work',
+      files: [
+        { path: 'old.js', prefix: '~', source: 'planned', declaredAt: oldTime, lastTouched: oldTime, reminded: true }
       ],
       status: 'in-progress'
     });
@@ -225,6 +260,32 @@ describe('heartbeat hook', () => {
     assert.equal(result.exitCode, 0);
     // No reminder emitted (already reminded)
     assert.equal(result.stdout, '');
+  });
+
+  it('does not emit reminder for auto-tracked files (they expire before reminder window)', () => {
+    // Auto-tracked files have a 2-minute timeout, scavenged well before the 5-minute
+    // reminder window. This test documents that the reminder path is unreachable for
+    // auto files — they just quietly age out.
+    const oldTime = Date.now() - 400000; // 6+ minutes ago
+    writeContext(collabDir, 'sess-1', {
+      task: 'my work',
+      files: [
+        { path: 'auto-old.js', prefix: '~', source: 'auto', declaredAt: oldTime, lastTouched: oldTime, reminded: false }
+      ],
+      status: 'in-progress'
+    });
+    const result = runHook({
+      session_id: 'sess-1',
+      cwd: tmpDir,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(tmpDir, 'another.js') }
+    });
+    assert.equal(result.exitCode, 0);
+    // The stale auto-tracked file has been scavenged; the only remaining entry
+    // should be the current 'another.js' just added by autoTrackFile.
+    const ctx = readContext(collabDir, 'sess-1');
+    assert.ok(!ctx.files.some(f => f.path === 'auto-old.js'));
+    assert.ok(ctx.files.some(f => f.path === 'another.js'));
   });
 
   it('does not auto-create context when AUTO_TRACK is false', () => {

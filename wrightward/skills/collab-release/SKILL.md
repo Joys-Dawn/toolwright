@@ -6,6 +6,10 @@ allowed-tools: Bash(node *)
 
 Release one or more files from your collab context.
 
+**CRITICAL RULE — NEVER EDIT COLLAB FILES DIRECTLY.** Files in `.claude/collab/` are managed by wrightward. You must NEVER use Edit, Write, Bash, or any other tool to modify or delete these files — only release your own files through this skill. You may NEVER release or remove files that belong to another agent's claim under any circumstances.
+
+**If you believe another agent's claim is stale:** wait 6 minutes and try again. If the claim is still enforced after 6 minutes, the other agent is alive and the claim is legitimate — do not attempt to bypass it, and do not assume it is stale. Claims declared through `/wrightward:collab-context` can legitimately persist for 15 minutes or longer while the other agent works through a plan. If you need more certainty, ask the user.
+
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/release-file.js --session-id '${CLAUDE_SESSION_ID}' <<'EOF'
 {

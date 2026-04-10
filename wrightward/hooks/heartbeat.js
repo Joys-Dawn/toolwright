@@ -3,7 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { updateHeartbeat } = require('../lib/agents');
+const { updateHeartbeat, getActiveAgents } = require('../lib/agents');
 const { autoTrackFile } = require('../lib/auto-track');
 const { ensureCollabDir, resolveCollabDir } = require('../lib/collab-dir');
 const { loadConfig } = require('../lib/config');
@@ -43,11 +43,16 @@ async function main() {
   if (!config.ENABLED) process.exit(0);
 
   scavengeExpiredSessions(collabDir, config.SESSION_HARD_SCAVENGE_MS, session_id);
-  scavengeExpiredFiles(collabDir, config, session_id);
+  scavengeExpiredFiles(collabDir, config);
   updateHeartbeat(collabDir, session_id);
 
   if (isFileOp) {
-    const reminderFiles = autoTrackFile(collabDir, session_id, root, tool_name, tool_input.file_path, config);
+    // Reminders to release idle files only make sense when other agents are
+    // active — otherwise there's nobody to unblock. Check once and pass down.
+    const otherAgents = getActiveAgents(collabDir, config.INACTIVE_THRESHOLD_MS);
+    delete otherAgents[session_id];
+    const hasOtherAgents = Object.keys(otherAgents).length > 0;
+    const reminderFiles = autoTrackFile(collabDir, session_id, root, tool_name, tool_input.file_path, config, hasOtherAgents);
 
     if (reminderFiles && reminderFiles.length > 0) {
       const fileList = reminderFiles.join(', ');

@@ -6,6 +6,10 @@ allowed-tools: Bash(node *)
 
 Declare or update what you're currently working on for multi-agent awareness.
 
+**CRITICAL RULE — NEVER EDIT COLLAB FILES DIRECTLY.** Files in `.claude/collab/` (including `agents.json`, `context/*.json`, and any other files in that directory) are managed by wrightward. You must NEVER use Edit, Write, Bash, or any other tool to modify, delete, or remove these files — not to update your own state, not to release your own claims, and absolutely not to remove another agent's claims. Doing so is a security violation. Your only interface to collab state is through the wrightward skills (`/wrightward:collab-context`, `/wrightward:collab-release`, `/wrightward:collab-done`).
+
+**If you believe another agent's claim is stale:** wait 6 minutes and try again. If the claim is still enforced after 6 minutes, the other agent is alive and the claim is legitimate — do not attempt to bypass it, and do not assume it is stale. Claims declared through `/wrightward:collab-context` can legitimately persist for 15 minutes or longer while the other agent works through a plan. If you need more certainty, ask the user.
+
 Run the bundled collab script with a JSON payload on stdin. Do not use Edit or Write for this — use the Bash tool only.
 
 ```bash

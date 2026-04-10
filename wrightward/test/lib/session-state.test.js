@@ -38,7 +38,7 @@ describe('scavengeExpiredFiles', () => {
       status: 'in-progress'
     });
 
-    scavengeExpiredFiles(collabDir, config, 'other-session');
+    scavengeExpiredFiles(collabDir, config);
     const ctx = readContext(collabDir, 'sess-1');
     assert.equal(ctx.files.length, 1);
     assert.equal(ctx.files[0].path, 'recent.js');
@@ -56,7 +56,7 @@ describe('scavengeExpiredFiles', () => {
       status: 'in-progress'
     });
 
-    scavengeExpiredFiles(collabDir, config, 'other-session');
+    scavengeExpiredFiles(collabDir, config);
     const ctx = readContext(collabDir, 'sess-1');
     assert.equal(ctx.files.length, 0);
   });
@@ -73,7 +73,7 @@ describe('scavengeExpiredFiles', () => {
       status: 'in-progress'
     });
 
-    scavengeExpiredFiles(collabDir, config, 'other-session');
+    scavengeExpiredFiles(collabDir, config);
     const ctx = readContext(collabDir, 'sess-1');
     assert.equal(ctx.files.length, 1);
     assert.equal(ctx.files[0].path, 'active-planned.js');
@@ -90,32 +90,42 @@ describe('scavengeExpiredFiles', () => {
       status: 'in-progress'
     });
 
-    scavengeExpiredFiles(collabDir, config, 'other-session');
+    scavengeExpiredFiles(collabDir, config);
     const ctx = readContext(collabDir, 'sess-1');
     assert.notEqual(ctx, null);
     assert.equal(ctx.files.length, 0);
   });
 
-  it('skips the excluded session', () => {
+  it('removes expired files from the current session too (long-running session cleanup)', () => {
+    // Regression: previously scavengeExpiredFiles excluded the current session,
+    // causing long-running sessions to accumulate stale auto-tracked file entries
+    // that would never expire. This test mirrors what heartbeat.js does — it
+    // passes the current session ID — and asserts stale entries still get cleaned.
     registerAgent(collabDir, 'sess-1');
     const oldTime = Date.now() - config.AUTO_TRACKED_FILE_TIMEOUT_MS - 1000;
     writeContext(collabDir, 'sess-1', {
-      task: null,
+      task: 'my work',
       files: [
-        { path: 'old.js', prefix: '~', source: 'auto', declaredAt: oldTime, lastTouched: oldTime, reminded: false }
+        { path: 'old.js', prefix: '~', source: 'auto', declaredAt: oldTime, lastTouched: oldTime, reminded: false },
+        { path: 'recent.js', prefix: '~', source: 'auto', declaredAt: Date.now(), lastTouched: Date.now(), reminded: false }
       ],
       status: 'in-progress'
     });
 
-    scavengeExpiredFiles(collabDir, config, 'sess-1');
+    // heartbeat.js runs this unconditionally — the owning session's own entries
+    // must be scavenged just like any other session's. Previously an excludeSessionId
+    // argument caused the owning session to be skipped, which meant long-running
+    // sessions accumulated stale entries indefinitely.
+    scavengeExpiredFiles(collabDir, config);
     const ctx = readContext(collabDir, 'sess-1');
     assert.notEqual(ctx, null);
-    assert.equal(ctx.files.length, 1);
+    assert.equal(ctx.files.length, 1, 'expected old.js to be scavenged from the owning session');
+    assert.equal(ctx.files[0].path, 'recent.js');
   });
 
   it('does nothing when context directory is missing', () => {
     fs.rmSync(path.join(collabDir, 'context'), { recursive: true, force: true });
-    assert.doesNotThrow(() => scavengeExpiredFiles(collabDir, config, 'sess-1'));
+    assert.doesNotThrow(() => scavengeExpiredFiles(collabDir, config));
   });
 
   it('keeps planned files within timeout', () => {
@@ -129,7 +139,7 @@ describe('scavengeExpiredFiles', () => {
       status: 'in-progress'
     });
 
-    scavengeExpiredFiles(collabDir, config, 'other-session');
+    scavengeExpiredFiles(collabDir, config);
     const ctx = readContext(collabDir, 'sess-1');
     assert.equal(ctx.files.length, 1);
   });

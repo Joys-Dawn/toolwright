@@ -520,6 +520,131 @@ describe('guard hook', () => {
     assert.equal(result.exitCode, 0);
   });
 
+  describe('hard block on .claude/collab/ files', () => {
+    it('blocks Edit on agents.json even when solo', () => {
+      registerAgent(collabDir, 'sess-1');
+      const result = runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: path.join(collabDir, 'agents.json') }
+      });
+      assert.equal(result.exitCode, 2);
+      assert.ok(result.stderr.includes('BLOCKED'));
+      assert.ok(result.stderr.includes('.claude/collab/'));
+    });
+
+    it('blocks Write on another agent\'s context file', () => {
+      registerAgent(collabDir, 'sess-1');
+      registerAgent(collabDir, 'sess-2');
+      writeContext(collabDir, 'sess-2', {
+        task: 'other work',
+        files: [fe('~', 'target.js')],
+        status: 'in-progress'
+      });
+      const result = runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Write',
+        tool_input: { file_path: path.join(collabDir, 'context', 'sess-2.json') }
+      });
+      assert.equal(result.exitCode, 2);
+      assert.ok(result.stderr.includes('BLOCKED'));
+      // The other agent's context file must still exist — the block prevents the write
+      const otherContextPath = path.join(collabDir, 'context', 'sess-2.json');
+      assert.ok(fs.existsSync(otherContextPath));
+      const stillThere = JSON.parse(fs.readFileSync(otherContextPath, 'utf8'));
+      assert.equal(stillThere.task, 'other work');
+    });
+
+    it('blocks Edit on own context file', () => {
+      registerAgent(collabDir, 'sess-1');
+      writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
+      const result = runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: path.join(collabDir, 'context', 'sess-1.json') }
+      });
+      assert.equal(result.exitCode, 2);
+      assert.ok(result.stderr.includes('BLOCKED'));
+    });
+
+    it('blocks Edit on the root file', () => {
+      registerAgent(collabDir, 'sess-1');
+      const result = runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: path.join(collabDir, 'root') }
+      });
+      assert.equal(result.exitCode, 2);
+      assert.ok(result.stderr.includes('BLOCKED'));
+    });
+
+    it('blocks Write on a new file inside .claude/collab/', () => {
+      registerAgent(collabDir, 'sess-1');
+      const result = runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Write',
+        tool_input: { file_path: path.join(collabDir, 'malicious.json') }
+      });
+      assert.equal(result.exitCode, 2);
+      assert.ok(result.stderr.includes('BLOCKED'));
+    });
+
+    it('allows Read on .claude/collab/ files (inspection is fine)', () => {
+      registerAgent(collabDir, 'sess-1');
+      const result = runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Read',
+        tool_input: { file_path: path.join(collabDir, 'agents.json') }
+      });
+      assert.equal(result.exitCode, 0);
+    });
+
+    it('does not block Edit on a file named similarly outside collab dir', () => {
+      registerAgent(collabDir, 'sess-1');
+      // Path that shares a prefix but isn't actually inside .claude/collab/
+      const siblingPath = path.join(tmpDir, '.claude', 'collab-sibling.json');
+      const result = runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: siblingPath }
+      });
+      assert.equal(result.exitCode, 0);
+    });
+
+    it('block applies even when ENABLED=true with no other agents', () => {
+      registerAgent(collabDir, 'sess-1');
+      // No other agents, default config — the block still fires
+      const result = runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: path.join(collabDir, 'context', 'sess-2.json') }
+      });
+      assert.equal(result.exitCode, 2);
+      assert.ok(result.stderr.includes('BLOCKED'));
+    });
+
+    it('block is skipped when ENABLED=false (plugin disabled)', () => {
+      registerAgent(collabDir, 'sess-1');
+      const claudeDir = path.join(tmpDir, '.claude');
+      fs.writeFileSync(path.join(claudeDir, 'wrightward.json'), JSON.stringify({ ENABLED: false }));
+      const result = runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: path.join(collabDir, 'agents.json') }
+      });
+      assert.equal(result.exitCode, 0);
+    });
+  });
+
   it('skips files with deleted prefix (-) from overlap detection', () => {
     registerAgent(collabDir, 'sess-1');
     registerAgent(collabDir, 'sess-2');

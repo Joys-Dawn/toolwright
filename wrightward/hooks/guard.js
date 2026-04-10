@@ -155,6 +155,26 @@ async function main() {
   const config = loadConfig(root);
   if (!config.ENABLED) process.exit(0);
 
+  // Hard block: never allow Edit/Write on files inside .claude/collab/.
+  // These files are plugin-managed. The model must never modify them directly —
+  // not to release its own claims, not to remove stale claims from other agents,
+  // not for any reason. Applies unconditionally, even when this is the only agent.
+  // `file_path` must be a string — fail closed on malformed input so bad payloads
+  // cannot bypass the hard block via a TypeError in path.resolve.
+  if ((tool_name === 'Edit' || tool_name === 'Write') &&
+      tool_input && typeof tool_input.file_path === 'string') {
+    const target = path.resolve(root, tool_input.file_path);
+    if (isInCollabDir(target, collabDir)) {
+      process.stderr.write(
+        'BLOCKED: Files in .claude/collab/ are managed by wrightward and must never be modified directly.\n' +
+        'Do NOT attempt to edit, delete, or modify any file in .claude/collab/ by any means — not via Edit, Write, or Bash (rm, sed, redirects, etc.). Do NOT try to escalate to Bash after this block fires.\n' +
+        'To release your own claims: use /wrightward:collab-release or /wrightward:collab-done.\n' +
+        'If you believe another agent\'s claim is stale, ask the user. Never remove another agent\'s claim yourself.'
+      );
+      process.exit(2);
+    }
+  }
+
   // Check if this agent was idle long enough to have lost its context
   const allAgents = readAgents(collabDir);
   const selfAgent = allAgents[session_id];
@@ -213,6 +233,13 @@ function handleReadTool(tool_name, tool_input, trackedFiles, cwd, collabDir, ses
   }
   setContextHash(collabDir, sessionId, summaryHash);
   allowWithAdditionalContext(summary);
+}
+
+function isInCollabDir(targetPath, collabDir) {
+  const target = path.resolve(targetPath);
+  const base = path.resolve(collabDir);
+  const relative = path.relative(base, target);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
 function handleWriteTool(tool_name, tool_input, trackedFiles, cwd, collabDir, sessionId, otherContexts) {

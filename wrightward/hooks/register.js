@@ -8,6 +8,7 @@ const { ensureCollabDir } = require('../lib/collab-dir');
 const { registerAgent } = require('../lib/agents');
 const { loadConfig } = require('../lib/config');
 const { validateSessionId } = require('../lib/constants');
+const { scavengeExpiredFiles } = require('../lib/session-state');
 
 function shellQuote(value) {
   return '\'' + String(value).replace(/'/g, '\'\\\'\'') + '\'';
@@ -50,6 +51,13 @@ async function main() {
   if (!config.ENABLED) process.exit(0);
 
   const collabDir = ensureCollabDir(cwd);
+  // Sweep stale file entries on SessionStart. This closes the "reopened session"
+  // gap: when a session is reopened after days of idleness, Cursor reuses the same
+  // session UUID, so registerAgent refreshes last_active to now — making other
+  // sessions treat this one as active again, while its old file claims still
+  // enforce. Running scavenge here cleans the session's own (and any other
+  // session's) expired entries before registration refreshes the heartbeat.
+  scavengeExpiredFiles(collabDir, config);
   registerAgent(collabDir, session_id);
   persistSessionEnv(session_id, cwd);
 

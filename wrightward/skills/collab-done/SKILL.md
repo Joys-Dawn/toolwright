@@ -6,6 +6,10 @@ allowed-tools: Bash(node *)
 
 Clear the current session from collab coordination state.
 
+**CRITICAL RULE — NEVER EDIT COLLAB FILES DIRECTLY.** Files in `.claude/collab/` are managed by wrightward. You must NEVER use Edit, Write, Bash (`rm`, `sed`, redirects, etc.), or any other tool to modify or delete these files. Only clear your own session through this skill. You may NEVER remove another agent's context or claims.
+
+**If you believe another agent's claim is stale:** wait 6 minutes and try again. If the claim is still enforced after 6 minutes, the other agent is alive and the claim is legitimate — do not attempt to bypass it, and do not assume it is stale. Claims declared through `/wrightward:collab-context` can legitimately persist for 15 minutes or longer while the other agent works through a plan. If you need more certainty, ask the user.
+
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/context.js --session-id '${CLAUDE_SESSION_ID}' --done
 ```
