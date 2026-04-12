@@ -26,6 +26,16 @@
       },
       "category": "developer-tools",
       "tags": ["audit", "automation", "pipeline", "code-review"]
+    },
+    {
+      "name": "timewright",
+      "source": "./timewright",
+      "description": "Single-slot undo for Claude's in-session changes, covering Bash-driven mutations that native /rewind misses",
+      "author": {
+        "name": "Joy's Dawn Solutions LLC"
+      },
+      "category": "developer-tools",
+      "tags": ["undo", "snapshot", "rewind", "hooks"]
     }
   ]
 }
