@@ -1,11 +1,12 @@
 # AI Engineering Plugins
 
-Two [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugins that can be installed separately or together. Both are zero-config — install and start using them immediately.
+Three [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugins that can be installed separately or together. All are zero-config — install and start using them immediately.
 
 | Plugin | What it does |
 |--------|-------------|
 | [agentwright](agentwright/) | Automated code audits that find and fix bugs, security issues, and bad practices. Also includes skills for planning, debugging, and testing. Run `/audit-run` and it does the rest. |
 | [wrightward](wrightward/) | Multi-agent context awareness — when two or more Claude Code sessions work in the same repo, wrightward injects context so each agent knows what the others are working on, what files they've claimed, and what functions they're touching. |
+| [timewright](timewright/) | Undo for Claude's in-session source file changes — including Bash-driven mutations (file deletions, sed rewrites, git operations) that native `/rewind` misses. Type `/undo` to revert. |
 
 ## Installation
 
@@ -15,6 +16,7 @@ In any Claude Code session, add the marketplace and install the plugins you want
 /plugin marketplace add Joys-Dawn/toolwright
 /plugin install agentwright@Joys-Dawn/toolwright
 /plugin install wrightward@Joys-Dawn/toolwright
+/plugin install timewright@Joys-Dawn/toolwright
 ```
 
 Or use `/plugin` and browse the **Discover** tab to install interactively.
@@ -40,6 +42,16 @@ Open two or more Claude Code sessions in the same repo, then in each session:
 ```
 
 Declare which files each agent will touch. Each agent automatically receives context about what the others are working on as it reads and writes files. See [wrightward/README.md](wrightward/) for the full workflow.
+
+### timewright
+
+After Claude makes changes you want to revert:
+
+```
+/undo
+```
+
+Claude shows you what will change (modified, added, deleted files) and asks for confirmation before applying. Covers everything — Bash commands, file edits, notebook changes. See [timewright/README.md](timewright/) for details.
 
 ## Using them together
 
