@@ -1,0 +1,11 @@
+{
+  "name": "timewright",
+  "version": "1.0.0",
+  "description": "Single-slot undo for Claude's in-session changes, covering Bash-driven filesystem mutations that native /rewind misses.",
+  "author": {
+    "name": "yiann"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["undo", "rewind", "snapshot", "claude-code", "plugin"],
+  "commands": "./commands/"
+}
