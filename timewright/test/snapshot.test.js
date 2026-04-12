@@ -400,7 +400,9 @@ describe('createSnapshot', () => {
 
       const meta = createSnapshot(cwd);
 
-      assert.equal(meta.dirtyFileCount, 2);
+      // 3 = a.txt (modified) + new.txt (untracked) + .gitignore (created by
+      // ensureGitignored, which auto-adds .claude/timewright/ on first run)
+      assert.equal(meta.dirtyFileCount, 3);
     });
   });
 });

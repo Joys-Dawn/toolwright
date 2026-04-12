@@ -1,6 +1,6 @@
 {
   "name": "timewright",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Single-slot undo for Claude's in-session changes, covering Bash-driven filesystem mutations that native /rewind misses.",
   "author": {
     "name": "yiann"

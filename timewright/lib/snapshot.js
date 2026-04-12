@@ -200,12 +200,32 @@ function removePreviousSnapshot(cwd, snapshotDir) {
  * Returns metadata describing the snapshot.
  * Throws if `cwd` is not a git repo or if git worktree add fails.
  */
+function ensureGitignored(cwd) {
+  // Check if .claude/timewright/ is already ignored by any .gitignore rule.
+  const check = runGit(cwd, ['check-ignore', '-q', '.claude/timewright/']);
+  if (check.status === 0) return; // already ignored
+
+  // Append to the project root .gitignore.
+  const gitignorePath = path.join(cwd, '.gitignore');
+  let content = '';
+  try {
+    content = fs.readFileSync(gitignorePath, 'utf8');
+  } catch {
+    // No .gitignore yet — we'll create one.
+  }
+
+  const entry = '.claude/timewright/';
+  const trailing = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
+  fs.writeFileSync(gitignorePath, content + trailing + entry + '\n');
+}
+
 function createSnapshot(cwd) {
   if (!isGitRepo(cwd)) {
     throw new Error('timewright requires a git repository.');
   }
 
   ensureRoot(cwd);
+  ensureGitignored(cwd);
   const snapshotDir = getSnapshotDir(cwd);
   removePreviousSnapshot(cwd, snapshotDir);
 
