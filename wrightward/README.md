@@ -60,15 +60,32 @@ If an agent hasn't touched a file in **5 minutes**, a one-time reminder suggests
 
 ## Hooks
 
-Five hooks run automatically — no user intervention needed:
+Six hooks run automatically — no user intervention needed:
 
 | Hook | Trigger | What it does |
 |------|---------|--------------|
 | `register.js` | Session start | Registers the agent in `.claude/collab/agents.json` |
 | `heartbeat.js` | After every tool call | Updates heartbeat, auto-tracks files, runs scavenging, fires idle reminders |
 | `guard.js` | Before Edit/Write/Read/Glob/Grep | Blocks conflicting writes, injects awareness context |
+| `bash-allow.js` | Before Bash | Auto-approves wrightward's own script invocations (workaround for [claude-code#11932](https://github.com/anthropics/claude-code/issues/11932)) |
 | `plan-exit.js` | After exiting plan mode | Reminds the agent to declare files (only when other agents are active) |
 | `cleanup.js` | Session end | Deregisters the agent and releases all claims |
+
+## Recommended permissions
+
+Add these to your global `~/.claude/settings.json` to avoid the "Use skill?" consent dialog on every skill invocation:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Skill(wrightward:collab-context)",
+      "Skill(wrightward:collab-done)",
+      "Skill(wrightward:collab-release)"
+    ]
+  }
+}
+```
 
 ## Configuration
 

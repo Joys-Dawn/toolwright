@@ -10,6 +10,10 @@ const { ensureCollabDir } = require('../../lib/collab-dir');
 const { registerAgent, readAgents } = require('../../lib/agents');
 const { writeContext, fileEntryForPath } = require('../../lib/context');
 const { hashString } = require('../../lib/hash');
+const { withAgentsLock } = require('../../lib/agents');
+const { append, busPath, readBookmark } = require('../../lib/bus-log');
+const { createEvent } = require('../../lib/bus-schema');
+const interestIndex = require('../../lib/interest-index');
 
 const HOOK = path.resolve(__dirname, '../../hooks/guard.js');
 
@@ -643,6 +647,193 @@ describe('guard hook', () => {
       });
       assert.equal(result.exitCode, 0);
     });
+  });
+
+  // Bus-specific tests
+  describe('bus integration', () => {
+    it('emits interest event when Write is blocked by overlap', () => {
+      registerAgent(collabDir, 'sess-1');
+      registerAgent(collabDir, 'sess-2');
+      writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
+      writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'target.js')], status: 'in-progress' });
+
+      runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Write',
+        tool_input: { file_path: path.join(tmpDir, 'target.js') }
+      });
+
+      // Check bus for interest event
+      const bp = busPath(collabDir);
+      assert.ok(fs.existsSync(bp), 'bus.jsonl must exist after Write block');
+      const events = fs.readFileSync(bp, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+      const interest = events.find(e => e.type === 'interest');
+      assert.ok(interest, 'Expected interest event on bus');
+      assert.equal(interest.from, 'sess-1');
+      assert.equal(interest.meta.file, 'target.js');
+    });
+
+    it('updates interest index when Write is blocked', () => {
+      registerAgent(collabDir, 'sess-1');
+      registerAgent(collabDir, 'sess-2');
+      writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
+      writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'blocked.js')], status: 'in-progress' });
+
+      runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Write',
+        tool_input: { file_path: path.join(tmpDir, 'blocked.js') }
+      });
+
+      const idx = interestIndex.read(collabDir);
+      const entries = idx['blocked.js'] || [];
+      assert.ok(entries.some(e => e.sessionId === 'sess-1'));
+    });
+
+    it('injects urgent inbox events as additionalContext', () => {
+      registerAgent(collabDir, 'sess-1');
+      registerAgent(collabDir, 'sess-2');
+      writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'other.js')], status: 'in-progress' });
+
+      // Pre-seed an urgent event for sess-1
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'handoff', 'take over the auth work'));
+      });
+
+      const result = runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Read',
+        tool_input: { file_path: path.join(tmpDir, 'other.js') }
+      });
+
+      assert.equal(result.exitCode, 0);
+      const parsed = JSON.parse(result.stdout);
+      assert.ok(parsed.hookSpecificOutput.additionalContext.includes('take over the auth work'));
+      assert.ok(parsed.hookSpecificOutput.additionalContext.includes('Urgent messages'));
+    });
+
+    it('advances bookmark after inbox injection', () => {
+      registerAgent(collabDir, 'sess-1');
+      registerAgent(collabDir, 'sess-2');
+      writeContext(collabDir, 'sess-2', { task: 'work', files: [fe('~', 'x.js')], status: 'in-progress' });
+
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'handoff', 'task for you'));
+      });
+
+      runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Read',
+        tool_input: { file_path: path.join(tmpDir, 'x.js') }
+      });
+
+      const bm = readBookmark(collabDir, 'sess-1');
+      assert.ok(bm.lastDeliveredOffset > 0);
+      assert.ok(bm.lastScannedOffset > 0);
+    });
+
+    it('does not create bus files when BUS_ENABLED is false', () => {
+      registerAgent(collabDir, 'sess-1');
+      registerAgent(collabDir, 'sess-2');
+      writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
+      writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'target.js')], status: 'in-progress' });
+
+      const claudeDir = path.join(tmpDir, '.claude');
+      fs.writeFileSync(path.join(claudeDir, 'wrightward.json'), JSON.stringify({ BUS_ENABLED: false }));
+
+      runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Write',
+        tool_input: { file_path: path.join(tmpDir, 'target.js') }
+      });
+
+      assert.ok(!fs.existsSync(busPath(collabDir)));
+    });
+
+    it('injects inbox events even with no other agents', () => {
+      registerAgent(collabDir, 'sess-1');
+
+      // Pre-seed a broadcast event from a now-dead session
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('sess-dead', 'sess-1', 'file_freed', 'auth.ts is free', { file: 'auth.ts' }));
+      });
+
+      const result = runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Read',
+        tool_input: { file_path: path.join(tmpDir, 'whatever.js') }
+      });
+
+      assert.equal(result.exitCode, 0);
+      const parsed = JSON.parse(result.stdout);
+      assert.ok(parsed.hookSpecificOutput.additionalContext.includes('auth.ts is free'));
+    });
+  });
+
+  it('blocked Write acquires the agents lock exactly once (Sg2)', () => {
+    // Pre-Sg2, scanInbox + writeInterest each took the lock — two acquisitions
+    // per blocked Write. Now both happen inside one withAgentsLock block.
+    // Instrument require cache so the in-process counter survives the spawn.
+    // Because runHook spawns a child process we can't share state — instead,
+    // verify by monkey-patching agents.js at the source level via env var.
+    registerAgent(collabDir, 'sess-1');
+    registerAgent(collabDir, 'sess-2');
+    writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
+    writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'blocked.js')], status: 'in-progress' });
+
+    const counterFile = path.join(tmpDir, 'lock-acquisitions.count');
+    fs.writeFileSync(counterFile, '0');
+
+    // Wrap node so the spawned guard.js patches withAgentsLock to bump the counter.
+    // We do it by setting NODE_OPTIONS to require a tiny shim before guard runs.
+    const shimPath = path.join(tmpDir, 'lock-counter-shim.js');
+    fs.writeFileSync(shimPath, `
+      const fs = require('fs');
+      const Module = require('module');
+      const origLoad = Module._load;
+      Module._load = function(req, parent, isMain) {
+        const mod = origLoad.apply(this, arguments);
+        if (req.endsWith('lib/agents') || req === '../lib/agents' || req === '../../lib/agents') {
+          if (!mod.__counterPatched) {
+            const orig = mod.withAgentsLock;
+            mod.withAgentsLock = function(dir, fn) {
+              const cur = parseInt(fs.readFileSync(${JSON.stringify(counterFile)}, 'utf8'), 10);
+              fs.writeFileSync(${JSON.stringify(counterFile)}, String(cur + 1));
+              return orig.call(this, dir, fn);
+            };
+            mod.__counterPatched = true;
+          }
+        }
+        return mod;
+      };
+    `);
+
+    const env = { ...process.env, NODE_OPTIONS: '--require ' + shimPath };
+    try {
+      execFileSync('node', [HOOK], {
+        input: JSON.stringify({
+          session_id: 'sess-1',
+          cwd: tmpDir,
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'blocked.js') }
+        }),
+        encoding: 'utf8',
+        timeout: 5000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env
+      });
+    } catch (_) {
+      // exit 2 expected on block
+    }
+
+    const acquisitions = parseInt(fs.readFileSync(counterFile, 'utf8'), 10);
+    assert.equal(acquisitions, 1, 'blocked Write should acquire the agents lock exactly once, got ' + acquisitions);
   });
 
   it('skips files with deleted prefix (-) from overlap detection', () => {

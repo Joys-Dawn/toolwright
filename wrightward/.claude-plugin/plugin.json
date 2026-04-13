@@ -1,11 +1,12 @@
 {
   "name": "wrightward",
-  "version": "2.3.3",
-  "description": "Multi-agent awareness — gives Claude Code agents context about what other agents are doing before they write",
+  "version": "3.0.0",
+  "description": "Multi-agent coordination and message bus for Claude Code",
   "author": {
     "name": "yiann"
   },
   "license": "Apache-2.0",
-  "keywords": ["multi-agent", "collaboration", "awareness"],
-  "skills": "./skills/"
+  "keywords": ["multi-agent", "collaboration", "bus", "coordination"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
 }

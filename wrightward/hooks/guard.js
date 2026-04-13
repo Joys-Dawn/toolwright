@@ -3,14 +3,17 @@
 
 const fs = require('fs');
 const path = require('path');
-const { getActiveAgents, readAgents } = require('../lib/agents');
+const { getActiveAgents, readAgents, withAgentsLock } = require('../lib/agents');
 const { readContext } = require('../lib/context');
 const { getContextHash, setContextHash } = require('../lib/context-hash');
 const { hashString } = require('../lib/hash');
 const { loadConfig } = require('../lib/config');
 const { resolveCollabDir } = require('../lib/collab-dir');
-const { validateSessionId } = require('../lib/constants');
-const { toPosixPath, matchesGlob } = require('../lib/glob');
+const { validateSessionId, isWriteTool } = require('../lib/constants');
+const { matchesGlob } = require('../lib/glob');
+const { projectRelative } = require('../lib/path-normalize');
+const { writeInterest } = require('../lib/bus-query');
+const { scanAndFormatInbox } = require('../lib/bus-delivery');
 // scavenging is handled by heartbeat.js — guard only reads state
 
 function isPathWithin(basePath, targetPath) {
@@ -123,6 +126,33 @@ function buildSummary(contexts) {
   return lines.join('\n');
 }
 
+/**
+ * Scans bus inbox for urgent events and (optionally) emits an interest event
+ * for a blocked file in the SAME lock acquisition. Two callers used to take
+ * the agents lock back-to-back on a blocked Write — collapsing them avoids
+ * a second 5s stale-wait risk and one filesystem round-trip per blocked edit.
+ *
+ * `interestFile` is the canonical cwd-relative path (already normalized by
+ * projectRelative); pass null on the read path or when no overlap fired.
+ */
+function scanInboxAndMaybeEmitInterest(collabDir, sessionId, config, interestFile) {
+  if (!config.BUS_ENABLED) return null;
+
+  let inboxText = null;
+  try {
+    withAgentsLock(collabDir, (token) => {
+      const result = scanAndFormatInbox(token, collabDir, sessionId, config);
+      inboxText = result.text;
+      if (interestFile) {
+        writeInterest(token, collabDir, sessionId, interestFile, config.BUS_INTEREST_TTL_MS);
+      }
+    });
+  } catch (err) {
+    process.stderr.write('[collab/guard] inbox scan failed: ' + (err.message || err) + '\n');
+  }
+  return inboxText;
+}
+
 function allowWithAdditionalContext(message) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
@@ -161,7 +191,7 @@ async function main() {
   // not for any reason. Applies unconditionally, even when this is the only agent.
   // `file_path` must be a string — fail closed on malformed input so bad payloads
   // cannot bypass the hard block via a TypeError in path.resolve.
-  if ((tool_name === 'Edit' || tool_name === 'Write') &&
+  if (isWriteTool(tool_name) &&
       tool_input && typeof tool_input.file_path === 'string') {
     const target = path.resolve(root, tool_input.file_path);
     if (isInCollabDir(target, collabDir)) {
@@ -193,10 +223,6 @@ async function main() {
   const activeAgents = getActiveAgents(collabDir, config.INACTIVE_THRESHOLD_MS);
   delete activeAgents[session_id];
 
-  if (Object.keys(activeAgents).length === 0) {
-    process.exit(0);
-  }
-
   // Read other agents' contexts, skip missing and status=done
   const otherContexts = [];
   for (const agentId of Object.keys(activeAgents)) {
@@ -206,33 +232,56 @@ async function main() {
     otherContexts.push({ sessionId: agentId, ...ctx });
   }
 
+  // Compute overlap up-front so a blocked Write can scan inbox + emit interest
+  // in a single lock acquisition (Sg2).
+  const trackedFiles = getTrackedFiles(otherContexts, root);
+  const isWrite = isWriteTool(tool_name);
+  const overlaps = otherContexts.length > 0
+    ? getOverlappingContexts(tool_name, tool_input, trackedFiles, root)
+    : [];
+  const blockedFile = isWrite && overlaps.length > 0 && tool_input && typeof tool_input.file_path === 'string'
+    ? projectRelative(root, tool_input.file_path)
+    : null;
+
+  const inboxText = scanInboxAndMaybeEmitInterest(collabDir, session_id, config, blockedFile);
+
   if (otherContexts.length === 0) {
+    // No other agents — but may still have inbox events
+    if (inboxText) {
+      allowWithAdditionalContext(inboxText);
+    }
     process.exit(0);
   }
 
-  const trackedFiles = getTrackedFiles(otherContexts, root);
-
   if (tool_name === 'Read' || tool_name === 'Glob' || tool_name === 'Grep') {
-    handleReadTool(tool_name, tool_input, trackedFiles, root, collabDir, session_id);
+    handleReadTool(overlaps, collabDir, session_id, inboxText);
     return;
   }
 
-  handleWriteTool(tool_name, tool_input, trackedFiles, root, collabDir, session_id, otherContexts);
+  handleWriteTool(overlaps, collabDir, session_id, otherContexts, inboxText);
 }
 
-function handleReadTool(tool_name, tool_input, trackedFiles, cwd, collabDir, sessionId) {
-  const overlaps = getOverlappingContexts(tool_name, tool_input, trackedFiles, cwd);
-  if (overlaps.length === 0) {
+function handleReadTool(overlaps, collabDir, sessionId, inboxText) {
+  if (overlaps.length === 0 && !inboxText) {
     process.exit(0);
   }
-  const summary = buildSummary(overlaps);
-  const summaryHash = hashString(summary);
+
+  const parts = [];
+  if (overlaps.length > 0) {
+    parts.push(buildSummary(overlaps));
+  }
+  if (inboxText) {
+    parts.push(inboxText);
+  }
+  const combined = parts.join('\n\n');
+
+  const combinedHash = hashString(combined);
   const prevHash = getContextHash(collabDir, sessionId);
-  if (prevHash === summaryHash) {
+  if (prevHash === combinedHash) {
     process.exit(0);
   }
-  setContextHash(collabDir, sessionId, summaryHash);
-  allowWithAdditionalContext(summary);
+  setContextHash(collabDir, sessionId, combinedHash);
+  allowWithAdditionalContext(combined);
 }
 
 function isInCollabDir(targetPath, collabDir) {
@@ -242,8 +291,7 @@ function isInCollabDir(targetPath, collabDir) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function handleWriteTool(tool_name, tool_input, trackedFiles, cwd, collabDir, sessionId, otherContexts) {
-  const overlaps = getOverlappingContexts(tool_name, tool_input, trackedFiles, cwd);
+function handleWriteTool(overlaps, collabDir, sessionId, otherContexts, inboxText) {
   if (overlaps.length > 0) {
     const myContext = readContext(collabDir, sessionId);
     if (!myContext) {
@@ -253,6 +301,10 @@ function handleWriteTool(tool_name, tool_input, trackedFiles, cwd, collabDir, se
       );
       process.exit(2);
     }
+
+    // The interest event was already emitted under the same lock as the inbox
+    // scan in scanInboxAndMaybeEmitInterest (Sg2: one lock per hook invocation).
+
     process.stderr.write(
       buildSummary(overlaps) + '\nThis file overlaps with another agent\'s claimed files. Skip this edit or ask the user for guidance.'
     );
@@ -261,13 +313,18 @@ function handleWriteTool(tool_name, tool_input, trackedFiles, cwd, collabDir, se
 
   // No file overlap — inject non-blocking context only when something changed
   otherContexts.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
-  const contextHash = hashString(JSON.stringify(otherContexts));
+  const parts = [buildSummary(otherContexts)];
+  if (inboxText) {
+    parts.push(inboxText);
+  }
+  const combined = parts.join('\n\n');
+  const combinedHash = hashString(combined);
   const prevHash = getContextHash(collabDir, sessionId);
-  if (prevHash === contextHash) {
+  if (prevHash === combinedHash) {
     process.exit(0);
   }
-  setContextHash(collabDir, sessionId, contextHash);
-  allowWithAdditionalContext(buildSummary(otherContexts));
+  setContextHash(collabDir, sessionId, combinedHash);
+  allowWithAdditionalContext(combined);
 }
 
 main().catch(err => {

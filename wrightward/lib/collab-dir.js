@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { atomicWriteText } = require('./atomic-write');
 
 const ROOT_FILE = 'root';
 
@@ -17,28 +18,42 @@ function ensureCollabDir(projectRoot) {
   const collabDir = path.join(resolved, '.claude', 'collab');
   const contextDir = path.join(collabDir, 'context');
   const contextHashDir = path.join(collabDir, 'context-hash');
+  const busDeliveredDir = path.join(collabDir, 'bus-delivered');
+  const busIndexDir = path.join(collabDir, 'bus-index');
+  const mcpBindingsDir = path.join(collabDir, 'mcp-bindings');
 
   fs.mkdirSync(collabDir, { recursive: true });
   fs.mkdirSync(contextDir, { recursive: true });
   fs.mkdirSync(contextHashDir, { recursive: true });
+  fs.mkdirSync(busDeliveredDir, { recursive: true });
+  fs.mkdirSync(busIndexDir, { recursive: true });
+  fs.mkdirSync(mcpBindingsDir, { recursive: true });
 
   // Record the project root so resolveCollabDir can find it later.
   fs.writeFileSync(path.join(collabDir, ROOT_FILE), resolved, 'utf8');
 
-  // Ensure .claude/collab/ is in .gitignore
+  // Append .claude/collab/ to .gitignore — but only if a .gitignore already
+  // exists. Creating one ourselves treats the cwd like a git project, which
+  // is wrong when Claude is launched from ~ or any non-VCS directory: we'd
+  // litter a .gitignore in the user's home (or any folder they cd into).
+  // If the user later runs `git init`, they can add the line themselves.
   const gitignorePath = path.join(resolved, '.gitignore');
-  let gitignoreContent = '';
+  let gitignoreContent;
   try {
     gitignoreContent = fs.readFileSync(gitignorePath, 'utf8');
   } catch (e) {
-    // .gitignore doesn't exist yet
+    gitignoreContent = null;
   }
-
-  const lines = gitignoreContent.split('\n').map(l => l.trim());
-  const alreadyIgnored = lines.some(l => l === '.claude/collab/' || l === '.claude/collab' || l === '.claude/' || l === '.claude');
-  if (!alreadyIgnored) {
-    const newline = gitignoreContent.length > 0 && !gitignoreContent.endsWith('\n') ? '\n' : '';
-    fs.writeFileSync(gitignorePath, gitignoreContent + newline + '.claude/collab/\n', 'utf8');
+  if (gitignoreContent !== null) {
+    const lines = gitignoreContent.split('\n').map(l => l.trim());
+    const alreadyIgnored = lines.some(l => l === '.claude/collab/' || l === '.claude/collab' || l === '.claude/' || l === '.claude');
+    if (!alreadyIgnored) {
+      const newline = gitignoreContent.length > 0 && !gitignoreContent.endsWith('\n') ? '\n' : '';
+      // Atomic write: the user's .gitignore is their file, not ours. A crash
+      // mid-write would leave them with a truncated .gitignore they'd have to
+      // recover from git. atomicWriteText writes tmp+rename with EPERM retry.
+      atomicWriteText(gitignorePath, gitignoreContent + newline + '.claude/collab/\n');
+    }
   }
 
   return collabDir;

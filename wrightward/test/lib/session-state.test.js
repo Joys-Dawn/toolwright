@@ -6,9 +6,9 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { ensureCollabDir } = require('../../lib/collab-dir');
-const { registerAgent } = require('../../lib/agents');
+const { registerAgent, withAgentsLock } = require('../../lib/agents');
 const { writeContext, readContext } = require('../../lib/context');
-const { scavengeExpiredFiles } = require('../../lib/session-state');
+const { scavengeExpiredFiles, getAllClaimedFiles, isFileClaimedByAnySession } = require('../../lib/session-state');
 const { loadConfig } = require('../../lib/config');
 
 describe('scavengeExpiredFiles', () => {
@@ -142,5 +142,125 @@ describe('scavengeExpiredFiles', () => {
     scavengeExpiredFiles(collabDir, config);
     const ctx = readContext(collabDir, 'sess-1');
     assert.equal(ctx.files.length, 1);
+  });
+});
+
+describe('getAllClaimedFiles', () => {
+  let tmpDir;
+  let collabDir;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'collab-claims-'));
+    collabDir = ensureCollabDir(tmpDir);
+    registerAgent(collabDir, 'sess-A');
+    registerAgent(collabDir, 'sess-B');
+    writeContext(collabDir, 'sess-A', {
+      task: 'a', status: 'in-progress',
+      files: [
+        { path: 'a1.js', prefix: '+', source: 'planned', declaredAt: Date.now(), lastTouched: Date.now() },
+        { path: 'a2.js', prefix: '~', source: 'planned', declaredAt: Date.now(), lastTouched: Date.now() }
+      ]
+    });
+    writeContext(collabDir, 'sess-B', {
+      task: 'b', status: 'in-progress',
+      files: [
+        { path: 'b1.js', prefix: '~', source: 'planned', declaredAt: Date.now(), lastTouched: Date.now() }
+      ]
+    });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns every claimed file when excludeSessionIds is empty/omitted', () => {
+    withAgentsLock(collabDir, () => {
+      const claims = getAllClaimedFiles(collabDir);
+      assert.deepEqual([...claims].sort(), ['a1.js', 'a2.js', 'b1.js']);
+    });
+  });
+
+  it('omits claims from sessions in excludeSessionIds (Array form)', () => {
+    withAgentsLock(collabDir, () => {
+      const claims = getAllClaimedFiles(collabDir, ['sess-A']);
+      assert.deepEqual([...claims].sort(), ['b1.js']);
+    });
+  });
+
+  it('omits claims from sessions in excludeSessionIds (Set form)', () => {
+    withAgentsLock(collabDir, () => {
+      const claims = getAllClaimedFiles(collabDir, new Set(['sess-A']));
+      assert.deepEqual([...claims].sort(), ['b1.js']);
+    });
+  });
+
+  it('skips entries with prefix "-" (deletions are not claims)', () => {
+    writeContext(collabDir, 'sess-A', {
+      task: 'a', status: 'in-progress',
+      files: [
+        { path: 'deleted.js', prefix: '-', source: 'planned', declaredAt: Date.now(), lastTouched: Date.now() },
+        { path: 'a2.js', prefix: '~', source: 'planned', declaredAt: Date.now(), lastTouched: Date.now() }
+      ]
+    });
+    withAgentsLock(collabDir, () => {
+      const claims = getAllClaimedFiles(collabDir);
+      assert.ok(!claims.has('deleted.js'), 'prefix "-" should not count as a claim');
+      assert.ok(claims.has('a2.js'));
+    });
+  });
+});
+
+describe('isFileClaimedByAnySession', () => {
+  let tmpDir;
+  let collabDir;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'collab-isclaimed-'));
+    collabDir = ensureCollabDir(tmpDir);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns true when at least one session claims the file', () => {
+    registerAgent(collabDir, 'sess-A');
+    writeContext(collabDir, 'sess-A', {
+      task: 't', status: 'in-progress',
+      files: [{ path: 'x.js', prefix: '+', source: 'planned', declaredAt: Date.now(), lastTouched: Date.now() }]
+    });
+    withAgentsLock(collabDir, () => {
+      assert.equal(isFileClaimedByAnySession(collabDir, 'x.js'), true);
+    });
+  });
+
+  it('returns false when no session claims the file', () => {
+    registerAgent(collabDir, 'sess-A');
+    writeContext(collabDir, 'sess-A', {
+      task: 't', status: 'in-progress',
+      files: [{ path: 'other.js', prefix: '+', source: 'planned', declaredAt: Date.now(), lastTouched: Date.now() }]
+    });
+    withAgentsLock(collabDir, () => {
+      assert.equal(isFileClaimedByAnySession(collabDir, 'x.js'), false);
+    });
+  });
+
+  it('ignores entries with prefix "-"', () => {
+    registerAgent(collabDir, 'sess-A');
+    writeContext(collabDir, 'sess-A', {
+      task: 't', status: 'in-progress',
+      files: [{ path: 'x.js', prefix: '-', source: 'planned', declaredAt: Date.now(), lastTouched: Date.now() }]
+    });
+    withAgentsLock(collabDir, () => {
+      assert.equal(isFileClaimedByAnySession(collabDir, 'x.js'), false);
+    });
+  });
+
+  it('tolerates a malformed context file (returns false instead of throwing)', () => {
+    registerAgent(collabDir, 'sess-A');
+    fs.writeFileSync(path.join(collabDir, 'context', 'sess-A.json'), '{not json', 'utf8');
+    withAgentsLock(collabDir, () => {
+      assert.equal(isFileClaimedByAnySession(collabDir, 'x.js'), false);
+    });
   });
 });

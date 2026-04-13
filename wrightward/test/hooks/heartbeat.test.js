@@ -7,8 +7,12 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { ensureCollabDir } = require('../../lib/collab-dir');
-const { registerAgent, readAgents } = require('../../lib/agents');
+const { registerAgent, readAgents, withAgentsLock } = require('../../lib/agents');
 const { writeContext, readContext } = require('../../lib/context');
+const { fileEntryForPath } = require('../../lib/context');
+const { append, busPath, readBookmark } = require('../../lib/bus-log');
+const { createEvent } = require('../../lib/bus-schema');
+const interestIndex = require('../../lib/interest-index');
 
 const HOOK = path.resolve(__dirname, '../../hooks/heartbeat.js');
 
@@ -363,5 +367,225 @@ describe('heartbeat hook', () => {
     const ctx = readContext(collabDir, 'sess-1');
     assert.equal(ctx.files.length, 1);
     assert.equal(ctx.files[0].path, 'foo.js');
+  });
+
+  // === Bus integration tests ===
+
+  it('injects urgent inbox events as additionalContext', () => {
+    writeContext(collabDir, 'sess-1', { task: 'work', files: [], status: 'in-progress' });
+    // Seed an urgent event for sess-1
+    withAgentsLock(collabDir, (token) => {
+      append(token, collabDir, createEvent('sess-2', 'sess-1', 'handoff', 'please take over auth'));
+    });
+
+    const result = runHook({
+      session_id: 'sess-1',
+      cwd: tmpDir,
+      tool_name: 'Read',
+      tool_input: { file_path: path.join(tmpDir, 'anything.js') }
+    });
+    assert.equal(result.exitCode, 0);
+    assert.ok(result.stdout.length > 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.ok(parsed.hookSpecificOutput.additionalContext.includes('please take over auth'));
+  });
+
+  it('advances bookmark after inbox injection', () => {
+    writeContext(collabDir, 'sess-1', { task: 'work', files: [], status: 'in-progress' });
+    withAgentsLock(collabDir, (token) => {
+      append(token, collabDir, createEvent('sess-2', 'sess-1', 'handoff', 'msg'));
+    });
+
+    runHook({
+      session_id: 'sess-1',
+      cwd: tmpDir,
+      tool_name: 'Read',
+      tool_input: { file_path: path.join(tmpDir, 'x.js') }
+    });
+
+    const bm = readBookmark(collabDir, 'sess-1');
+    assert.ok(bm.lastDeliveredOffset > 0);
+    assert.ok(bm.lastScannedOffset > 0);
+  });
+
+  it('does not emit bus events when BUS_ENABLED is false', () => {
+    const claudeDir = path.join(tmpDir, '.claude');
+    fs.writeFileSync(path.join(claudeDir, 'wrightward.json'), JSON.stringify({ BUS_ENABLED: false }));
+    writeContext(collabDir, 'sess-1', { task: 'work', files: [], status: 'in-progress' });
+
+    // Seed an event — should be ignored
+    withAgentsLock(collabDir, (token) => {
+      append(token, collabDir, createEvent('sess-2', 'sess-1', 'handoff', 'msg'));
+    });
+
+    const result = runHook({
+      session_id: 'sess-1',
+      cwd: tmpDir,
+      tool_name: 'Read',
+      tool_input: { file_path: path.join(tmpDir, 'x.js') }
+    });
+    // Should exit cleanly with no bus injection
+    assert.equal(result.exitCode, 0);
+    // No bookmark should be written
+    const bm = readBookmark(collabDir, 'sess-1');
+    assert.equal(bm.lastDeliveredOffset, 0);
+  });
+
+  it('emits file_freed events when scavengeExpiredFiles removes files with interested agents', () => {
+    registerAgent(collabDir, 'sess-2');
+    const oldTime = Date.now() - 200000; // well past auto-track timeout
+    writeContext(collabDir, 'sess-2', {
+      task: 'other work',
+      files: [{ path: 'stale.js', prefix: '~', source: 'auto', declaredAt: oldTime, lastTouched: oldTime, reminded: false }],
+      status: 'in-progress'
+    });
+
+    // sess-1 is interested in stale.js
+    withAgentsLock(collabDir, (token) => {
+      interestIndex.upsert(token, collabDir, 'stale.js', {
+        sessionId: 'sess-1', busEventId: 'e1', declaredAt: Date.now(), expiresAt: null
+      });
+    });
+
+    writeContext(collabDir, 'sess-1', { task: 'my work', files: [], status: 'in-progress' });
+
+    runHook({
+      session_id: 'sess-1',
+      cwd: tmpDir,
+      tool_name: 'Read',
+      tool_input: { file_path: path.join(tmpDir, 'x.js') }
+    });
+
+    const bp = busPath(collabDir);
+    assert.ok(fs.existsSync(bp), 'bus.jsonl must exist after file_freed emission');
+    const events = fs.readFileSync(bp, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+    const freed = events.find(e => e.type === 'file_freed' && e.meta.file === 'stale.js' && e.to === 'sess-1');
+    assert.ok(freed, 'Expected file_freed event for interested agent');
+  });
+
+  it('skips file_freed for files that were re-claimed between scavenge and emit', () => {
+    // sess-2 holds a stale file that will be scavenged.
+    // Before the emit lock opens, sess-3 re-claims the same file.
+    // Heartbeat should NOT emit a misleading file_freed.
+    registerAgent(collabDir, 'sess-2');
+    registerAgent(collabDir, 'sess-3');
+    const oldTime = Date.now() - 200000;
+    writeContext(collabDir, 'sess-2', {
+      task: 'old work',
+      files: [{ path: 'contested.js', prefix: '~', source: 'auto', declaredAt: oldTime, lastTouched: oldTime, reminded: false }],
+      status: 'in-progress'
+    });
+    // sess-3 now also claims contested.js (simulating re-claim via collab-context)
+    writeContext(collabDir, 'sess-3', {
+      task: 'taking over',
+      files: [{ path: 'contested.js', prefix: '+', source: 'planned', declaredAt: Date.now(), lastTouched: Date.now(), reminded: false }],
+      status: 'in-progress'
+    });
+    // sess-1 is interested in contested.js
+    withAgentsLock(collabDir, (token) => {
+      interestIndex.upsert(token, collabDir, 'contested.js', {
+        sessionId: 'sess-1', busEventId: 'e1', declaredAt: Date.now(), expiresAt: null
+      });
+    });
+    writeContext(collabDir, 'sess-1', { task: 'my work', files: [], status: 'in-progress' });
+
+    runHook({
+      session_id: 'sess-1',
+      cwd: tmpDir,
+      tool_name: 'Read',
+      tool_input: { file_path: path.join(tmpDir, 'x.js') }
+    });
+
+    const bp = busPath(collabDir);
+    const events = fs.existsSync(bp)
+      ? fs.readFileSync(bp, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l))
+      : [];
+    const freed = events.find(e => e.type === 'file_freed' && e.meta.file === 'contested.js');
+    assert.ok(!freed, 'Should NOT emit file_freed — sess-3 still claims contested.js');
+  });
+
+  it('does not compact when bus is small', () => {
+    writeContext(collabDir, 'sess-1', { task: 'work', files: [], status: 'in-progress' });
+    // Write a few events — well under the compaction threshold
+    withAgentsLock(collabDir, (token) => {
+      append(token, collabDir, createEvent('sess-2', 'sess-1', 'note', 'hi'));
+      append(token, collabDir, createEvent('sess-2', 'sess-1', 'note', 'there'));
+    });
+
+    const bp = busPath(collabDir);
+    const sizeBefore = fs.statSync(bp).size;
+
+    runHook({
+      session_id: 'sess-1',
+      cwd: tmpDir,
+      tool_name: 'Read',
+      tool_input: { file_path: path.join(tmpDir, 'x.js') }
+    });
+
+    // Bus should still have the same content (not compacted away)
+    const content = fs.readFileSync(bp, 'utf8').trim();
+    const lines = content.split('\n');
+    assert.ok(lines.length >= 2, 'Events should not have been compacted away');
+  });
+
+  it('compacts bus when eventCount exceeds BUS_RETENTION_MAX_EVENTS', () => {
+    // Shrink the retention cap so a few events trigger compaction.
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude', 'wrightward.json'),
+      JSON.stringify({ BUS_RETENTION_MAX_EVENTS: 2 })
+    );
+    writeContext(collabDir, 'sess-1', { task: 'work', files: [], status: 'in-progress' });
+
+    withAgentsLock(collabDir, (token) => {
+      for (let i = 0; i < 4; i++) {
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'note', 'm' + i));
+      }
+      // Plant a stale interest-index entry. If the rebuildInterestIndex callback
+      // actually runs after compaction, this entry disappears (rebuild reconstructs
+      // solely from on-disk events, and no 'interest' events exist on the bus).
+      interestIndex.upsert(token, collabDir, 'phantom.js', {
+        sessionId: 'sess-1', busEventId: 'STALE', declaredAt: Date.now(), expiresAt: null
+      });
+    });
+
+    const bp = busPath(collabDir);
+    const beforeLines = fs.readFileSync(bp, 'utf8').trim().split('\n').filter(Boolean);
+    assert.ok(beforeLines.length > 2);
+
+    runHook({
+      session_id: 'sess-1',
+      cwd: tmpDir,
+      tool_name: 'Read',
+      tool_input: { file_path: path.join(tmpDir, 'x.js') }
+    });
+
+    const afterLines = fs.readFileSync(bp, 'utf8').trim().split('\n').filter(Boolean);
+    assert.ok(afterLines.length <= 2, 'Bus not trimmed to BUS_RETENTION_MAX_EVENTS: ' + afterLines.length);
+
+    const meta = JSON.parse(fs.readFileSync(path.join(collabDir, 'bus-meta.json'), 'utf8'));
+    assert.ok(meta.generation >= 1, 'generation not bumped after compact: ' + meta.generation);
+
+    const idx = interestIndex.read(collabDir);
+    assert.ok(!idx['phantom.js'], 'phantom.js should have been purged by rebuildInterestIndex callback');
+  });
+
+  it('force-compacts and clamps generation when bus-meta has CORRUPT_GENERATION (-1)', () => {
+    writeContext(collabDir, 'sess-1', { task: 'work', files: [], status: 'in-progress' });
+
+    // Plant the CORRUPT_GENERATION sentinel directly in bus-meta.json.
+    fs.writeFileSync(
+      path.join(collabDir, 'bus-meta.json'),
+      JSON.stringify({ generation: -1, eventCount: 0, lastTs: 0 })
+    );
+
+    runHook({
+      session_id: 'sess-1',
+      cwd: tmpDir,
+      tool_name: 'Read',
+      tool_input: { file_path: path.join(tmpDir, 'x.js') }
+    });
+
+    const meta = JSON.parse(fs.readFileSync(path.join(collabDir, 'bus-meta.json'), 'utf8'));
+    assert.ok(meta.generation >= 1, 'generation should be clamped to >=1 after force-compact, got ' + meta.generation);
   });
 });

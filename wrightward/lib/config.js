@@ -15,7 +15,17 @@ const DEFAULTS_MIN = {
 
 const DEFAULTS_BOOL = {
   ENABLED: true,
-  AUTO_TRACK: true
+  AUTO_TRACK: true,
+  BUS_ENABLED: true
+};
+
+// Bus-specific defaults — not _MIN keys; these have their own units.
+const BUS_DEFAULTS = {
+  BUS_RETENTION_DAYS: 7,         // days
+  BUS_RETENTION_MAX_EVENTS: 10000,
+  BUS_HANDOFF_TTL_MIN: 30,      // minutes
+  BUS_INTEREST_TTL_MIN: 60,     // minutes
+  BUS_URGENT_INJECTION_CAP: 5
 };
 
 function toMs(minutes) {
@@ -46,6 +56,23 @@ function loadConfig(cwd) {
     }
   }
 
+  // Merge bus-specific numeric defaults.
+  // Floor 1 for:
+  //   - BUS_URGENT_INJECTION_CAP: a cap of 0 would drop urgent events silently.
+  //   - BUS_RETENTION_MAX_EVENTS: a cap of 0 causes compact() to wipe the bus
+  //     on every heartbeat (surviving.slice(surviving.length - 0) = []).
+  // Time-based knobs (TTL, retention days) accept 0 meaning "disabled".
+  const FLOOR_ONE = new Set(['BUS_URGENT_INJECTION_CAP', 'BUS_RETENTION_MAX_EVENTS']);
+  const bus = { ...BUS_DEFAULTS };
+  for (const key of Object.keys(BUS_DEFAULTS)) {
+    if (typeof userConfig[key] === 'number') {
+      const floor = FLOOR_ONE.has(key) ? 1 : 0;
+      if (userConfig[key] >= floor) {
+        bus[key] = userConfig[key];
+      }
+    }
+  }
+
   return Object.freeze({
     PLANNED_FILE_TIMEOUT_MS: toMs(merged.PLANNED_FILE_TIMEOUT_MIN),
     PLANNED_FILE_GRACE_MS: toMs(merged.PLANNED_FILE_GRACE_MIN),
@@ -54,8 +81,14 @@ function loadConfig(cwd) {
     REMINDER_IDLE_MS: toMs(merged.REMINDER_IDLE_MIN),
     INACTIVE_THRESHOLD_MS: toMs(merged.INACTIVE_THRESHOLD_MIN),
     ENABLED: bools.ENABLED,
-    AUTO_TRACK: bools.AUTO_TRACK
+    AUTO_TRACK: bools.AUTO_TRACK,
+    BUS_ENABLED: bools.BUS_ENABLED,
+    BUS_RETENTION_DAYS_MS: bus.BUS_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    BUS_RETENTION_MAX_EVENTS: bus.BUS_RETENTION_MAX_EVENTS,
+    BUS_HANDOFF_TTL_MS: toMs(bus.BUS_HANDOFF_TTL_MIN),
+    BUS_INTEREST_TTL_MS: toMs(bus.BUS_INTEREST_TTL_MIN),
+    BUS_URGENT_INJECTION_CAP: bus.BUS_URGENT_INJECTION_CAP
   });
 }
 
-module.exports = { DEFAULTS_MIN, loadConfig };
+module.exports = { DEFAULTS_MIN, BUS_DEFAULTS, loadConfig };

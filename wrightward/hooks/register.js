@@ -5,10 +5,14 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { ensureCollabDir } = require('../lib/collab-dir');
-const { registerAgent } = require('../lib/agents');
+const { registerAgent, registerAgentInLock, withAgentsLock } = require('../lib/agents');
 const { loadConfig } = require('../lib/config');
 const { validateSessionId } = require('../lib/constants');
 const { scavengeExpiredFiles } = require('../lib/session-state');
+const { append } = require('../lib/bus-log');
+const { createEvent } = require('../lib/bus-schema');
+const { atomicWriteJson } = require('../lib/atomic-write');
+const { ticketPath } = require('../lib/mcp-ticket');
 
 function shellQuote(value) {
   return '\'' + String(value).replace(/'/g, '\'\\\'\'') + '\'';
@@ -58,7 +62,35 @@ async function main() {
   // enforce. Running scavenge here cleans the session's own (and any other
   // session's) expired entries before registration refreshes the heartbeat.
   scavengeExpiredFiles(collabDir, config);
-  registerAgent(collabDir, session_id);
+
+  if (config.BUS_ENABLED) {
+    // process.ppid is the direct parent (Claude CLI on POSIX, often an intermediate
+    // shell on Windows). Two sessions sharing one shell would collide on a pid-only
+    // ticket key, so we include this hook's own pid — two hooks in the same shell
+    // write distinct tickets. session-bind.mjs scans <claudePid>-*.json.
+    const claudePid = process.ppid;
+    const hookPid = process.pid;
+    withAgentsLock(collabDir, (token) => {
+      registerAgentInLock(collabDir, session_id);
+
+      atomicWriteJson(ticketPath(collabDir, claudePid, hookPid), {
+        session_id,
+        created_at: Date.now(),
+        hook_pid: hookPid,
+        claude_pid: claudePid
+      });
+
+      try {
+        append(token, collabDir, createEvent(session_id, 'all', 'session_started',
+          'Session started', { pid: claudePid }));
+      } catch (err) {
+        process.stderr.write('[collab/register] bus append failed: ' + (err.message || err) + '\n');
+      }
+    });
+  } else {
+    registerAgent(collabDir, session_id);
+  }
+
   persistSessionEnv(session_id, cwd);
 
   process.exit(0);

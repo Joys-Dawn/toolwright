@@ -54,6 +54,30 @@ function normalize(s) {
 
 function isApprovedWrightwardCommand(command) {
   if (typeof command !== 'string') return false;
+
+  // Split off a trailing heredoc body so we don't scan it for shell
+  // metacharacters — the JSON payload inside the heredoc can legitimately
+  // contain `;`, `&`, `|`, etc. as data. Heredoc must be anchored to end
+  // of string: <<'MARKER'\n...\nMARKER$ (quotes optional). Any commands
+  // appearing AFTER the heredoc close would not match this anchor and so
+  // get scanned by the metachar check below.
+  let commandProper = command;
+  const heredoc = command.match(/<<-?\s*(?:"([\w-]+)"|'([\w-]+)'|([\w-]+))\s*\n[\s\S]*?\n\s*(?:\1|\2|\3)\s*$/);
+  if (heredoc) {
+    commandProper = command.slice(0, heredoc.index);
+  }
+
+  // Reject shell chain/redirect metacharacters in the command proper.
+  // Any of these would allow an agent-supplied command to smuggle a second
+  // command past the Bash permission prompt:
+  //   ;  &  |     chain / pipe / background
+  //   `  $(       command substitution
+  //   >  <        redirects (heredoc `<<` was already stripped above)
+  //   \n          newline-as-chain
+  // This is intentionally strict — wrightward skills do not need any of
+  // these in their command line proper; stdin is fed via the heredoc.
+  if (/[;&|`><\n]|\$\(/.test(commandProper)) return false;
+
   // Match: optional whitespace, `node`, whitespace, then the first argument
   // (quoted or unquoted, stopping at whitespace/quote). We compare the
   // SCRIPT path specifically — not any substring of the command — so flag
@@ -63,7 +87,7 @@ function isApprovedWrightwardCommand(command) {
   // `i` flag: Windows path comparison is case-insensitive. On POSIX this
   // is irrelevant because the normalized comparison below is case-sensitive
   // and the captured path casing is preserved.
-  const m = command.match(/^\s*node\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i);
+  const m = commandProper.match(/^\s*node\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i);
   if (!m) return false;
 
   const scriptPath = normalize(m[1] || m[2] || m[3]);

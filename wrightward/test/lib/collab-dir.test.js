@@ -26,13 +26,17 @@ describe('ensureCollabDir', () => {
     assert.ok(fs.existsSync(path.join(tmpDir, '.claude', 'collab', 'context-hash')));
   });
 
-  it('creates .gitignore with .claude/collab/ entry', () => {
+  it('does not create .gitignore when none exists', () => {
+    // Launching Claude in a non-VCS directory must not leave a .gitignore
+    // behind. Two sessions still share .claude/collab/ for coordination —
+    // they just don't pollute the parent. If the user later creates a
+    // .gitignore, the next ensureCollabDir call will append.
     ensureCollabDir(tmpDir);
-    const content = fs.readFileSync(path.join(tmpDir, '.gitignore'), 'utf8');
-    assert.ok(content.includes('.claude/collab/'));
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.gitignore')));
   });
 
   it('does not duplicate .gitignore entry', () => {
+    fs.writeFileSync(path.join(tmpDir, '.gitignore'), '', 'utf8');
     ensureCollabDir(tmpDir);
     ensureCollabDir(tmpDir);
     const content = fs.readFileSync(path.join(tmpDir, '.gitignore'), 'utf8');

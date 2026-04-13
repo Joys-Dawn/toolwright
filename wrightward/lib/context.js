@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { atomicWriteJson } = require('./atomic-write');
 const { validateSessionId } = require('./constants');
+const { normalizeFilePath } = require('./path-normalize');
 
 function contextPath(collabDir, sessionId) {
   validateSessionId(sessionId);
@@ -12,11 +13,13 @@ function contextPath(collabDir, sessionId) {
 
 /**
  * Creates a new file entry object for a given path.
+ * Normalizes the path so that context entries, interest-index keys, and
+ * bus-event meta.file all agree on format (POSIX separators, no leading ./).
  */
 function fileEntryForPath(filePath, prefix, source) {
   const now = Date.now();
   return {
-    path: filePath,
+    path: normalizeFilePath(filePath),
     prefix: prefix || '~',
     source: source || 'auto',
     declaredAt: now,
