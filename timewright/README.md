@@ -63,6 +63,16 @@ timewright respects your `.gitignore` and also excludes:
 
 Non-secret dotenv files like `.env.example` and `.env.template` are included normally.
 
+## What `/undo` does NOT cover
+
+`/undo` rewinds your **project directory**, not your machine. Anything outside the git repo is out of scope:
+
+- Files in `~`, `C:\`, or other user/system directories that Claude touched via Bash (e.g., `echo x > ~/.bashrc`, edits to `C:\Users\you\AppData\...`)
+- Global package installs, system configuration changes, or side effects of Bash commands that live outside the repo
+- Commits, pushes, or branch operations on a different repository Claude may have `cd`'d into mid-session
+
+The snapshot is bounded to the git repo where Claude was launched. Only files inside that repo (that git would list via `ls-files` or that are dirty) are captured — and only those are restored on `/undo`.
+
 ## Head drift warning
 
 If you (or another tool) run git commands that move HEAD between the snapshot and the undo (e.g., `git checkout`, `git reset`, `git rebase`), timewright warns you before applying. The undo would restore files to a state that assumed the old HEAD — which may not be what you want.

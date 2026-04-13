@@ -6,11 +6,15 @@
 // flag so the next UserPromptSubmit takes a fresh snapshot.
 //
 // Must be fast and must never block the tool call. We do no git operations
-// here — just touch a flag file under .claude/timewright/stale.
+// beyond resolving the repo root. If the caller is not inside a git repo,
+// we silently no-op — timewright doesn't support non-git projects, and
+// creating .claude/timewright/ in non-git dirs would just litter state
+// that no snapshot/undo path will ever consume.
 
 const fs = require('fs');
 
 const { markStale } = require('../lib/state');
+const { resolveRepoRoot } = require('../lib/root');
 
 function readHookInput() {
   try {
@@ -34,8 +38,17 @@ function main() {
     return;
   }
 
+  // Resolve the project root via walk-up + git-toplevel fallback. `establish`
+  // writes the anchor if one doesn't exist yet — covers the case where
+  // SessionStart didn't run (e.g. plugin just installed) or the root file
+  // was deleted. Non-git projects return null and opt out.
+  const repoRoot = resolveRepoRoot(cwd, { establish: true });
+  if (!repoRoot) {
+    return;
+  }
+
   try {
-    markStale(cwd);
+    markStale(repoRoot);
   } catch (err) {
     process.stderr.write(`timewright: ${err.message}\n`);
   }

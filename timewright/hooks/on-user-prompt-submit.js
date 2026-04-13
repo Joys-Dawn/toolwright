@@ -21,7 +21,8 @@
 const fs = require('fs');
 
 const { isStale, markFresh, markStale } = require('../lib/state');
-const { createSnapshot, isGitRepo } = require('../lib/snapshot');
+const { createSnapshot } = require('../lib/snapshot');
+const { resolveRepoRoot } = require('../lib/root');
 
 function readHookInput() {
   try {
@@ -62,12 +63,14 @@ function main() {
     return;
   }
 
-  // timewright requires a git repo. Non-git projects silently opt out.
-  if (!isGitRepo(cwd)) {
+  // Resolve the project root via walk-up + git-toplevel fallback. Non-git
+  // projects return null and opt out silently.
+  const repoRoot = resolveRepoRoot(cwd, { establish: true });
+  if (!repoRoot) {
     return;
   }
 
-  if (!isStale(cwd)) {
+  if (!isStale(repoRoot)) {
     return;
   }
 
@@ -78,13 +81,13 @@ function main() {
   // PostToolUse and silently lose an entire turn's worth of protection.
   //
   // On failure, re-assert stale so the next turn tries again.
-  markFresh(cwd);
+  markFresh(repoRoot);
   try {
-    createSnapshot(cwd);
+    createSnapshot(repoRoot);
   } catch (err) {
     process.stderr.write(`timewright: snapshot failed: ${err.message}\n`);
     try {
-      markStale(cwd);
+      markStale(repoRoot);
     } catch {
       // best-effort; log already happened above
     }

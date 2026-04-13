@@ -205,13 +205,18 @@ function ensureGitignored(cwd) {
   const check = runGit(cwd, ['check-ignore', '-q', '.claude/timewright/']);
   if (check.status === 0) return; // already ignored
 
-  // Append to the project root .gitignore.
+  // Only append to an existing .gitignore — never manifest one from scratch.
+  // Creating a .gitignore in a repo that didn't have one imposes git-tracking
+  // conventions on a project that may have deliberately opted out. If the
+  // user wants the entry, they can add it manually; in the meantime, the
+  // snapshot directory is still safe from recursion because EXCLUDED_ROOTS
+  // in lib/excludes.js filters `.claude` from the snapshot itself.
   const gitignorePath = path.join(cwd, '.gitignore');
-  let content = '';
+  let content;
   try {
     content = fs.readFileSync(gitignorePath, 'utf8');
   } catch {
-    // No .gitignore yet — we'll create one.
+    return;
   }
 
   const entry = '.claude/timewright/';

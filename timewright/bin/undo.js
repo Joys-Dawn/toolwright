@@ -11,7 +11,7 @@
 // confirm. See the audit finding in the source history for details.
 
 const { computeDiff, restoreSnapshot } = require('../lib/restore');
-const { isGitRepo } = require('../lib/snapshot');
+const { resolveRepoRoot } = require('../lib/root');
 
 function die(msg, code = 1) {
   process.stderr.write(`timewright: ${msg}\n`);
@@ -78,15 +78,19 @@ function main() {
   const args = process.argv.slice(2);
   const cwd = process.cwd();
 
-  if (!isGitRepo(cwd)) {
+  // Resolve the project root via the same walk-up + git-toplevel pattern the
+  // hooks use. If Claude `cd`'d into a subdirectory before invoking /undo,
+  // this still lands on the repo root where the snapshot lives.
+  const repoRoot = resolveRepoRoot(cwd);
+  if (!repoRoot) {
     die('not inside a git repository');
   }
 
   const mode = args[0];
   if (mode === '--diff') {
-    cmdDiff(cwd);
+    cmdDiff(repoRoot);
   } else if (mode === '--apply') {
-    cmdApply(cwd);
+    cmdApply(repoRoot);
   } else {
     die('usage: undo.js --diff | --apply');
   }

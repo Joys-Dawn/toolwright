@@ -233,8 +233,12 @@ describe('on-user-prompt-submit hook', () => {
 describe('on-post-tool-use hook', () => {
   let cwd;
 
-  beforeEach(() => {
-    cwd = makeTmpDir('tw-hook-post-');
+  beforeEach((t) => {
+    // PostToolUse now requires a resolvable git repo root to avoid
+    // littering .claude/timewright/ in non-git directories. Tests that
+    // exercise the stale-marker path must run inside a git repo.
+    if (!isGitAvailable()) return;
+    ({ cwd } = initRepoWithCommit({ 'a.txt': 'a\n' }));
   });
 
   afterEach(() => {
@@ -242,34 +246,40 @@ describe('on-post-tool-use hook', () => {
     cwd = null;
   });
 
-  it('creates a stale marker on Bash tool use', () => {
+  it('creates a stale marker on Bash tool use', (t) => {
+    if (!isGitAvailable()) { t.skip(); return; }
     const result = runHook('on-post-tool-use.js', cwd, { tool_name: 'Bash' });
 
     assert.equal(result.status, 0);
     assert.equal(staleMarkerCount(cwd), 1);
   });
 
-  it('creates a stale marker on Write tool use', () => {
+  it('creates a stale marker on Write tool use', (t) => {
+    if (!isGitAvailable()) { t.skip(); return; }
     runHook('on-post-tool-use.js', cwd, { tool_name: 'Write' });
     assert.equal(staleMarkerCount(cwd), 1);
   });
 
-  it('creates a stale marker on Edit tool use', () => {
+  it('creates a stale marker on Edit tool use', (t) => {
+    if (!isGitAvailable()) { t.skip(); return; }
     runHook('on-post-tool-use.js', cwd, { tool_name: 'Edit' });
     assert.equal(staleMarkerCount(cwd), 1);
   });
 
-  it('creates a stale marker on MultiEdit tool use', () => {
+  it('creates a stale marker on MultiEdit tool use', (t) => {
+    if (!isGitAvailable()) { t.skip(); return; }
     runHook('on-post-tool-use.js', cwd, { tool_name: 'MultiEdit' });
     assert.equal(staleMarkerCount(cwd), 1);
   });
 
-  it('creates a stale marker on NotebookEdit tool use', () => {
+  it('creates a stale marker on NotebookEdit tool use', (t) => {
+    if (!isGitAvailable()) { t.skip(); return; }
     runHook('on-post-tool-use.js', cwd, { tool_name: 'NotebookEdit' });
     assert.equal(staleMarkerCount(cwd), 1);
   });
 
-  it('does NOT create a stale marker for Read tool', () => {
+  it('does NOT create a stale marker for Read tool', (t) => {
+    if (!isGitAvailable()) { t.skip(); return; }
     // Read is not a mutating tool — defense in depth, since the matcher
     // in hooks.json should already prevent this, but a reconfiguration
     // shouldn't break correctness.
@@ -277,18 +287,39 @@ describe('on-post-tool-use hook', () => {
     assert.equal(staleMarkerCount(cwd), 0);
   });
 
-  it('does NOT create a stale marker for Grep tool', () => {
+  it('does NOT create a stale marker for Grep tool', (t) => {
+    if (!isGitAvailable()) { t.skip(); return; }
     runHook('on-post-tool-use.js', cwd, { tool_name: 'Grep' });
     assert.equal(staleMarkerCount(cwd), 0);
   });
 
-  it('appends distinct markers on repeated calls (not overwrite)', () => {
+  it('appends distinct markers on repeated calls (not overwrite)', (t) => {
+    if (!isGitAvailable()) { t.skip(); return; }
     runHook('on-post-tool-use.js', cwd, { tool_name: 'Bash' });
     runHook('on-post-tool-use.js', cwd, { tool_name: 'Bash' });
     runHook('on-post-tool-use.js', cwd, { tool_name: 'Bash' });
 
     assert.equal(staleMarkerCount(cwd), 3,
       'each hook invocation must produce a unique marker');
+  });
+
+  it('is a no-op in a non-git directory (no stale leak)', () => {
+    // Regression: PostToolUse used to create .claude/timewright/stale.d/ in
+    // any cwd, including dirs that were not git repos. Since timewright can
+    // never snapshot/restore those dirs anyway, that state was pure litter.
+    const nonGit = makeTmpDir('tw-hook-post-nongit-');
+    try {
+      runHook('on-post-tool-use.js', nonGit, { tool_name: 'Bash' });
+      assert.equal(staleMarkerCount(nonGit), 0,
+        'non-git dir must not get a stale marker');
+      assert.equal(
+        fs.existsSync(path.join(nonGit, '.claude', 'timewright')),
+        false,
+        'non-git dir must not get a .claude/timewright/ directory'
+      );
+    } finally {
+      cleanup(nonGit);
+    }
   });
 });
 
@@ -339,6 +370,12 @@ describe('hook robustness (edge cases)', () => {
 
     assert.equal(result.status, 0,
       'empty stdin must not crash the hook');
+    // Non-git dir — no state should be created even though the hook ran.
+    assert.equal(
+      fs.existsSync(path.join(cwd, '.claude', 'timewright')),
+      false,
+      'empty stdin in a non-git dir must not create timewright state'
+    );
   });
 
   it('on-user-prompt-submit exits 0 when input has no cwd field', (t) => {
@@ -363,8 +400,9 @@ describe('hook robustness (edge cases)', () => {
       'hook must use process.cwd() fallback when input.cwd is missing');
   });
 
-  it('on-post-tool-use with missing tool_name defaults to marking stale (fail-safe)', () => {
-    cwd = makeTmpDir('tw-hook-notool-');
+  it('on-post-tool-use with missing tool_name defaults to marking stale (fail-safe)', (t) => {
+    if (!isGitAvailable()) { t.skip(); return; }
+    ({ cwd } = initRepoWithCommit({ 'a.txt': 'a\n' }));
 
     // No tool_name at all — the guard defaults to the safe path (mark stale)
     // rather than silently skipping. This is defense-in-depth: an unknown

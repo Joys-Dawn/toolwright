@@ -400,9 +400,73 @@ describe('createSnapshot', () => {
 
       const meta = createSnapshot(cwd);
 
-      // 3 = a.txt (modified) + new.txt (untracked) + .gitignore (created by
-      // ensureGitignored, which auto-adds .claude/timewright/ on first run)
-      assert.equal(meta.dirtyFileCount, 3);
+      // 2 = a.txt (modified) + new.txt (untracked). ensureGitignored no
+      // longer manifests a .gitignore from scratch — if one didn't exist,
+      // it stays absent, so the overlay count only reflects real dirty files.
+      assert.equal(meta.dirtyFileCount, 2);
+    });
+  });
+
+  describe('ensureGitignored behavior', () => {
+    it('appends .claude/timewright/ to an existing .gitignore', (t) => {
+      if (!isGitAvailable()) { t.skip(); return; }
+      ({ cwd } = initRepoWithCommit({
+        '.gitignore': 'node_modules/\n',
+        'a.txt': 'a\n'
+      }));
+
+      createSnapshot(cwd);
+
+      const content = fs.readFileSync(
+        path.join(cwd, '.gitignore'),
+        'utf8'
+      );
+      assert.ok(
+        content.includes('.claude/timewright/'),
+        'existing .gitignore must be appended with the timewright entry'
+      );
+      assert.ok(
+        content.includes('node_modules/'),
+        'existing .gitignore content must be preserved'
+      );
+    });
+
+    it('does NOT create a .gitignore when one does not exist', (t) => {
+      if (!isGitAvailable()) { t.skip(); return; }
+      // Fresh repo with NO .gitignore. Creating one ourselves would impose
+      // git-tracking conventions on a project that may have deliberately
+      // opted out. The snapshot dir is still safe from recursion via
+      // EXCLUDED_ROOTS in lib/excludes.js.
+      ({ cwd } = initRepoWithCommit({ 'a.txt': 'a\n' }));
+      assert.equal(
+        fs.existsSync(path.join(cwd, '.gitignore')), false,
+        'precondition: no .gitignore before snapshot'
+      );
+
+      createSnapshot(cwd);
+
+      assert.equal(
+        fs.existsSync(path.join(cwd, '.gitignore')), false,
+        'ensureGitignored must not manifest a .gitignore that did not exist'
+      );
+    });
+
+    it('does not double-append when entry is already present', (t) => {
+      if (!isGitAvailable()) { t.skip(); return; }
+      ({ cwd } = initRepoWithCommit({
+        '.gitignore': '.claude/timewright/\n',
+        'a.txt': 'a\n'
+      }));
+
+      createSnapshot(cwd);
+
+      const content = fs.readFileSync(
+        path.join(cwd, '.gitignore'),
+        'utf8'
+      );
+      const matches = content.match(/\.claude\/timewright\//g) || [];
+      assert.equal(matches.length, 1,
+        'entry must not be duplicated when git-check-ignore already sees it');
     });
   });
 });
