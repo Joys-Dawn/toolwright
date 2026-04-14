@@ -50,6 +50,60 @@ If an agent believes another agent's claim is stale, the instructions in every c
 
 If an agent hasn't touched a file in **5 minutes**, a one-time reminder suggests releasing it. This nudges agents to free files they've moved on from without waiting for the timeout.
 
+## Message bus (v3.0)
+
+On top of file coordination, wrightward runs a file-based peer-to-peer message bus so sessions can hand off work, watch files, and notify each other.
+
+- Events are appended to `.claude/collab/bus.jsonl` and fanned out to the target session via an injected context block on the next tool call (Path 1).
+- Per-session delivery bookmarks in `.claude/collab/bus-delivered/<sessionId>.json` track what each session has already seen.
+- A bundled MCP server (`wrightward-bus`) exposes six tools — `wrightward_list_inbox`, `wrightward_ack`, `wrightward_send_note`, `wrightward_send_handoff`, `wrightward_watch_file`, `wrightward_bus_status` — wrapped by four skills: `/wrightward:inbox`, `/wrightward:ack`, `/wrightward:handoff`, `/wrightward:watch`.
+
+No daemon, no IPC, no CLI — every agent is a filesystem reader/writer. The bus is strictly additive: with an older Claude Code or the MCP server disabled, file coordination still works exactly as before.
+
+## Channel push — wake idle sessions (v3.1, research preview)
+
+By default, peer messages surface on a session's next tool call. If you want idle sessions to wake between turns — without a new user prompt — launch Claude Code with the `--channels` flag. wrightward's MCP server emits a single summary `notifications/claude/channel` (the **doorbell**) when urgent events arrive; the woken session's next tool call then runs Path 1, which injects the full event content as additional context.
+
+```
+claude --channels plugin:wrightward@<marketplace>
+```
+
+Path 1 (next-tool-call injection) remains the source of truth for event content — the doorbell just wakes the session earlier. If channels are unsupported or the notification is silently dropped (a known Claude Code issue on some platforms), the plugin still works: the user's next interaction surfaces the event via Path 1, as in the default behavior.
+
+### Allowlist / dev-mode workaround
+
+The `--channels` flag requires the plugin to be on the Claude Code channel allowlist. Until wrightward is allowlisted, use the development flag:
+
+```
+claude --dangerously-load-development-channels plugin:wrightward@<marketplace>
+```
+
+### Launching from VS Code / Cursor
+
+The Claude Code VS Code / Cursor extension has no direct "extra CLI args" setting, but it supports [`claudeCode.claudeProcessWrapper`](https://code.claude.com/docs/en/vs-code) — an "Executable path used to launch the Claude process." Point it at a shim that prepends the flag and forwards the remaining args.
+
+**Windows — `claude-dev.cmd`:**
+```cmd
+@echo off
+claude --dangerously-load-development-channels plugin:wrightward@<marketplace> %*
+```
+
+**POSIX — `claude-dev.sh`:**
+```sh
+#!/usr/bin/env sh
+exec claude --dangerously-load-development-channels plugin:wrightward@<marketplace> "$@"
+```
+
+Then in VS Code / Cursor `settings.json`:
+
+```json
+{
+  "claudeCode.claudeProcessWrapper": "C:\\Users\\<you>\\bin\\claude-dev.cmd"
+}
+```
+
+Use the wrapper only while actively testing channels — otherwise every session unnecessarily loads dev-mode channels.
+
 ## Skills
 
 | Skill | Description |
@@ -57,6 +111,10 @@ If an agent hasn't touched a file in **5 minutes**, a one-time reminder suggests
 | `/wrightward:collab-context` | Declare or update the current task and claimed files (`+` create, `~` modify, `-` delete) |
 | `/wrightward:collab-release` | Release specific files so other agents can work on them immediately |
 | `/wrightward:collab-done` | Release all file claims and exit coordination |
+| `/wrightward:inbox` | List pending urgent messages from other agents |
+| `/wrightward:ack` | Acknowledge a handoff or other urgent event |
+| `/wrightward:handoff` | Hand a task off to another agent, releasing listed files |
+| `/wrightward:watch` | Register interest in a file — get notified when it frees up |
 
 ## Hooks
 
@@ -125,7 +183,8 @@ All coordination state lives in `.claude/collab/` (auto-gitignored). No state pe
 
 ## Requirements
 
-- Node.js >= 18 (no external dependencies)
+- Node.js >= 18
+- One runtime dependency: `@modelcontextprotocol/sdk` (required for the bundled MCP server; bundled with the plugin's `node_modules/`)
 - Cross-platform (Windows + Unix)
 
 ## License

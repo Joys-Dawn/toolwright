@@ -11,6 +11,9 @@ import { spawnSync } from 'child_process';
 const require = createRequire(import.meta.url);
 const { ensureCollabDir } = require('../../lib/collab-dir');
 const { atomicWriteJson } = require('../../lib/atomic-write');
+const { withAgentsLock, registerAgent } = require('../../lib/agents');
+const { append } = require('../../lib/bus-log');
+const { createEvent } = require('../../lib/bus-schema');
 
 const SERVER_PATH = path.resolve(
   path.dirname(new URL(import.meta.url).pathname.replace(/^\//, '')),
@@ -79,6 +82,15 @@ describe('integration: MCP server handshake', () => {
       'wrightward_watch_file'
     ]);
 
+    // Phase 2: the experimental `claude/channel` capability must be advertised
+    // so conforming MCP clients know the server can emit notifications/claude/channel.
+    // Silent removal would leave notifications being sent but ignored by clients.
+    const caps = client.getServerCapabilities();
+    assert.ok(caps, 'server must advertise capabilities');
+    assert.ok(caps.experimental, 'server must advertise experimental capabilities');
+    assert.ok(caps.experimental['claude/channel'],
+      'server must advertise experimental.claude/channel capability — clients need this to honor channel notifications');
+
     await client.close();
     await transport.close();
   });
@@ -128,5 +140,59 @@ describe('integration: MCP server handshake', () => {
     });
     assert.equal(res.status, 0, 'expected exit code 0, got ' + res.status + ' stderr=' + res.stderr);
     assert.match(res.stderr, /BUS_ENABLED=false, shutting down/);
+  });
+
+  it('emits notifications/claude/channel when an urgent event is appended to bus.jsonl', async () => {
+    // End-to-end coverage of the Phase 2 doorbell wire-up:
+    //   file-watcher (bus.jsonl) → binder.getSessionId() → ring() → server.notification
+    // Unit tests cover each module in isolation; this test pins the composition.
+    //
+    // Binding: seed a ticket with claude_pid = this test's pid so the server's
+    // ppid (which is our pid) matches on the first poll (tryClaimByPpid).
+    const sessionId = 'sess-doorbell-e2e';
+    const ticketPath = path.join(collabDir, 'mcp-bindings', `${process.pid}-0.json`);
+    atomicWriteJson(ticketPath, {
+      session_id: sessionId,
+      created_at: Date.now(),
+      hook_pid: 0,
+      claude_pid: process.pid
+    });
+    registerAgent(collabDir, sessionId);
+    registerAgent(collabDir, 'sess-doorbell-sender');
+
+    const received = [];
+    const { client, transport } = await connectClient();
+    client.fallbackNotificationHandler = async (n) => {
+      received.push(n);
+    };
+
+    // Give the server a beat to finish binding and start the watcher.
+    await new Promise((r) => setTimeout(r, 250));
+
+    // Append an urgent handoff event to bus.jsonl. The server's watcher should
+    // pick this up within one poll interval (default 1000ms) + 50ms debounce.
+    withAgentsLock(collabDir, (token) => {
+      append(token, collabDir, createEvent('sess-doorbell-sender', sessionId, 'handoff', 'integration-test handoff'));
+    });
+
+    // Wait long enough to cover: poll interval (1s) + debounce (50ms) + ring
+    // (lock, read, notify) + notification roundtrip. 2500ms is generous.
+    const deadline = Date.now() + 2500;
+    while (Date.now() < deadline && !received.some(n => n.method === 'notifications/claude/channel')) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    const channelNotifs = received.filter(n => n.method === 'notifications/claude/channel');
+    assert.equal(channelNotifs.length, 1,
+      'expected exactly one channel notification, got ' + channelNotifs.length +
+      ' (all received: ' + JSON.stringify(received.map(n => n.method)) + ')');
+    const params = channelNotifs[0].params;
+    assert.ok(typeof params.content === 'string' && params.content.includes('1 new wrightward bus event'),
+      'content should describe 1 new event, got: ' + params.content);
+    assert.equal(params.meta.source, 'wrightward-bus');
+    assert.equal(params.meta.pending_count, '1');
+
+    await client.close();
+    await transport.close();
   });
 });

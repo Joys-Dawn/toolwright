@@ -33,7 +33,7 @@ wrightward already has all the primitives this feature needs:
 
 So:
 
-- **Phase 1 and Phase 2 have no daemon.** Hooks and per-session MCP servers talk through `.claude/collab/bus.jsonl` (append-only JSONL) and `.claude/collab/bus-delivered/<sessionId>.json` (per-session delivery bookmark). The MCP server watches the log with `fs.watch` (+ polling fallback) and emits `notifications/claude/channel` for Path 2 push. Hooks scan the log on every tool call for Path 1 fallback injection. Both paths coordinate through the bookmark file, serialized with `withAgentsLock`.
+- **Phase 1 and Phase 2 have no daemon.** Hooks and per-session MCP servers talk through `.claude/collab/bus.jsonl` (append-only JSONL) and `.claude/collab/bus-delivered/<sessionId>.json` (per-session delivery bookmark). Hooks scan the log on every tool call for Path 1 injection — the sole content-delivery mechanism. The MCP server watches the log with `fs.watch` (+ polling fallback) and emits a single summary `notifications/claude/channel` as a doorbell when urgent events are pending, to wake idle sessions between turns. Path 2 writes nothing — the bookmark is Path-1-owned.
 - **Phase 3 introduces exactly one daemon — the "Discord bridge."** Its entire job is to sit on one side of `bus.jsonl` as a reader/writer and on the other side of a Discord gateway websocket. It is not a router. It holds no agent connections. It has no IPC with local agents. It participates in bus I/O the same way every other process does.
 
 This collapses an enormous amount of originally-planned surface area. No CLI in Phase 1, no IPC layer, no broker routing table, no connection heartbeat, no per-agent fallback mode. Phase 1 adds a handful of library modules, one MCP server, four skills, and a few hook extensions. Phase 3 is the first time wrightward has a long-lived process at all, and that process exists only because Discord requires one.
@@ -46,9 +46,9 @@ The scratchpad from earlier in this conversation is subsumed: `bus.jsonl` is the
 2. **Addressing** — `to` field supports: specific `agentId`, `all` (broadcast), `role:<name>` (reserved for future), or `discord` (Phase 3 transport tag).
 3. **Handoff protocol** — `type: "handoff"` carries `task_ref`, `files_unlocked` (released from the sender's claims as part of the handoff), `next_action`. Implicit ack when the recipient claims or writes one of the released files; explicit ack via `/wrightward:ack`. Expires after configurable TTL.
 4. **Interest + file-freed notifications** — guard.js records an `interest` event when B's Write is blocked by A's claim. On release (via skill, scavenge, handoff, or session end), `lib/session-state.js` emits a targeted `file_freed` event for every interested agent.
-5. **Two delivery modes for incoming events, both file-based**:
-   - **Path 1 (always works, no opt-in)**: guard.js and heartbeat.js read pending urgent events targeted at this session from `bus.jsonl` (starting from the session's delivery bookmark) and inject them as `additionalContext` on the next tool call.
-   - **Path 2 (opt-in push)**: when Claude Code is launched with `--channels plugin:wrightward@<marketplace>`, the bundled MCP server's file watcher detects new events targeted at this session between turns and emits them as `notifications/claude/channel` to wake the idle session. Path 2 and Path 1 coordinate via the per-session delivery bookmark — whichever processes an event first advances the bookmark, and the other path skips it.
+5. **One delivery path, one wake-up path, both file-based**:
+   - **Path 1 (always works, no opt-in) — sole source of truth for event content**: guard.js and heartbeat.js read pending urgent events targeted at this session from `bus.jsonl` (starting from the session's delivery bookmark) and inject them as `additionalContext` on the next tool call. Advances the bookmark under `withAgentsLock`.
+   - **Path 2 (opt-in doorbell)**: when Claude Code is launched with `--channels plugin:wrightward@<marketplace>`, the bundled MCP server's file watcher detects new events targeted at this session between turns. If anything is pending, it emits exactly one summary `notifications/claude/channel` to wake the idle session — "You have N new wrightward bus events." Path 2 writes no state (no bookmark advance, no sidecar). The woken session's next tool call fires Path 1, which delivers the content. Failure of Path 2 silently degrades — the user's next interaction still triggers Path 1 as today.
 6. **No daemon, no IPC, no CLI in Phase 1 or Phase 2.** Every agent-side actor is a filesystem reader/writer. The MCP server is spawned by Claude Code itself per session via `plugin.json:mcpServers` — wrightward does not manage any long-lived process.
 7. **Phase 3 introduces exactly one long-lived process — the Discord bridge daemon** — whose sole purpose is to hold a Discord gateway connection and translate bus events ↔ Discord messages according to a mirror policy. The bridge daemon is a peer on the bus like everything else; it reads `bus.jsonl`, writes `bus.jsonl`, and takes `withAgentsLock` when updating shared state. It does not route between local agents.
 8. **Bundled MCP server in one plugin** — hooks, skills, lib, MCP server, and (in Phase 3) the bridge daemon all ship inside `wrightward`. One `/plugin install wrightward@<marketplace>` — no sub-plugins.
@@ -117,9 +117,9 @@ The scratchpad from earlier in this conversation is subsumed: `bus.jsonl` is the
   6. Edge case: **session resume** — when a user resumes a session via `--resume` or `--continue`, Claude Code may reuse the MCP server subprocess but fire a new SessionStart hook with a different `session_id`. The hook overwrites the binding ticket (same `claudePid`, new `session_id`). The MCP server detects this by **re-reading the ticket on every tool call** (cheap: one small JSON read) and comparing `session_id` against the cached value. If it changed, the server re-binds and logs `[wrightward-mcp] re-bound to session <new_id> (resume detected)`.
 
   This mechanism is isolated to one small module with its own test, so if Anthropic later ships `${CLAUDE_SESSION_ID}` as a substitution token (tracked in the plan's "Open questions"), we replace `session-bind.js` wholesale without touching the rest of the MCP server.
-- `wrightward/mcp/capabilities.js` — capability declaration. Phase 1 ships `tools: {}` only. Phase 2 adds `experimental: { 'claude/channel': {} }`. Phase 3 optionally adds `experimental: { 'claude/channel/permission': {} }` (deferred).
+- **Capability declaration lives inline in `mcp/server.mjs`** at the `new Server(...)` call site — no separate `capabilities.js` file. Phase 1 ships `tools: {}` only. Phase 2 adds `experimental: { 'claude/channel': {} }`. Phase 3 optionally adds `experimental: { 'claude/channel/permission': {} }` (deferred).
 - `wrightward/mcp/tools.js` — the six MCP tools (see API section).
-- `wrightward/mcp/file-watcher.js` — `fs.watch(bus.jsonl)` with unconditional 1 s polling fallback for reliability. Debounced (50 ms). **Before acquiring `withAgentsLock`, checks `fs.statSync(bus.jsonl).mtimeMs` against a cached value — if unchanged, skips the lock entirely.** This eliminates phantom contention from idle buses (N sessions × 1 poll/sec × lock acquisition each = N unnecessary lock-holds/sec without this check). On mtime change, acquires the lock and calls `bus-query.listInbox(boundSessionId)`; if there are new urgent events targeted at me, calls into `mcp/channel-push.js` (Phase 2) or is a no-op in Phase 1. If the server is in unbound mode, the watcher is inert.
+- `wrightward/mcp/file-watcher.js` — **new in Phase 2** (no Phase 1 stub). `fs.watch(bus.jsonl)` with unconditional 1 s polling fallback for reliability. Debounced (50 ms). **Before invoking the onActivity callback, checks `fs.statSync(bus.jsonl).mtimeMs` against a cached value — if unchanged, skips the work entirely.** On mtime change, calls `onActivity()`; the callback re-reads `binder.getSessionId()` and dispatches to `mcp/channel-doorbell.mjs` (Phase 2 only). If the server is in unbound mode, the doorbell no-ops without acquiring any lock.
 
 Note: there is no `mcp/fallback.js` — there is nothing to fall back from. The file-based path is the normal path.
 
@@ -153,15 +153,16 @@ No `/wrightward:bus` skill yet — there's no daemon to query in Phase 1. Defers
 
 ### Files added — Phase 2 (v3.1.0)
 
-- `wrightward/mcp/channel-push.js` — given a list of urgent events targeted at my session, emit `mcp.notification({ method: 'notifications/claude/channel', params: { content, meta } })` and advance the delivery bookmark.
-- `wrightward/test/mcp/channel-push.test.js` — mock the MCP `notification` path, verify channel messages emitted correctly (primary automated test for channel push)
-- `wrightward/test/integration/channel-push.test.js` — spawn MCP server over stdio, perform handshake, append bus event, assert `notification()` called internally via spy. Does NOT test end-to-end delivery into a Claude Code session (requires interactive mode; verified manually)
+- `wrightward/mcp/channel-doorbell.mjs` — exports `ring(server, collabDir, sessionId)`. Under `withAgentsLock`, calls `lib/bus-delivery.readInboxFresh` as a **read-only** consumer to count pending urgent events. Releases the lock. If `pendingCount > 0`, emits exactly one `server.notification({ method: 'notifications/claude/channel', params: { content, meta } })` with a summary frame ("You have N new wrightward bus events"). Does **not** call `advanceBookmark`, does **not** write any sidecar, does **not** touch the delivery bookmark in any way — Path 1 remains the sole bookmark owner. `try/catch` around `server.notification`; throws are logged to stderr and the function resolves normally.
+- `wrightward/mcp/file-watcher.mjs` — **new in Phase 2** (no Phase 1 stub exists). `fs.watch(bus.jsonl)` + unconditional 1 s polling fallback, 50 ms debounce, mtime skip before `onActivity`, inert when the binder is unbound or when `BUS_ENABLED` is false (`onActivity` re-reads `binder.getSessionId()` on every fire — session-resume safe).
+- `wrightward/test/mcp/channel-doorbell.test.mjs` — spy on `server.notification`. Empty inbox → zero calls. N urgent events → exactly one call with summary content and `meta.pending_count === String(N)`. Singular vs plural wording. Unbound sessionId → zero calls, zero lock acquisitions (spy on `withAgentsLock`). `server.notification` throws → stderr logged, function resolves normally. **Load-bearing assertion: snapshot `readFileSync('.claude/collab/bus-delivered/<sid>.json')` bytes before and after `ring()`; bytes must be byte-identical** (pins the invariant that Path 2 never writes bookmark). Events for OTHER sessions ignored via `matchesSession`. Non-urgent events (e.g., `note`) filtered out by `isUrgent`.
+- `wrightward/test/mcp/file-watcher.test.mjs` — fires `onActivity` on append after debounce; skips work when mtime unchanged; polling fallback fires when `fs.watch` never emits (stub to no-op FSWatcher); inert when binder `getSessionId()` returns null (watcher stays subscribed, doorbell no-ops); `close()` disposes watcher + interval + pending debounce timer.
 
 Phase 2 also updates:
 
-- `mcp/capabilities.js` — add `'claude/channel': {}` to experimental capabilities
-- `mcp/file-watcher.js` — wire up the channel-push call path (previously a no-op in Phase 1)
-- `.claude-plugin/plugin.json` — add `channels: [{ server: "wrightward-bus" }]`
+- `mcp/server.mjs` — add `experimental: { 'claude/channel': {} }` to the capabilities literal at line 43. Bump `new Server({ version: '3.1.0', ... })`. Start the file watcher after `await server.connect(transport)` and `binder.bind()`; register `watcher.close()` in the SIGTERM handler alongside `binder.cleanup()`. Stderr log `[wrightward-mcp] channel doorbell watcher started` once on successful start (not per fire).
+- `.claude-plugin/plugin.json` — add `channels: [{ server: "wrightward-bus" }]`; bump version to `3.1.0`.
+- `package.json` — bump version to `3.1.0`. No new dependencies.
 
 ### Files added — Phase 3 (v3.2.0, the Discord bridge)
 
@@ -255,7 +256,7 @@ No daemon to manage. No CLI. No IPC. Everything is a file read or append.
 
 **Phase 2 — MCP server + `--channels`**
 
-User launches Claude Code with `claude --channels plugin:wrightward@<marketplace>`. The bundled MCP server's channel capability activates. When a peer sends a handoff or a file frees up, the target session wakes between turns — no tool call needed — and processes the event. User sees Claude start responding on its own: "Agent A released src/auth.ts — I can now edit it."
+User launches Claude Code with `claude --channels plugin:wrightward@<marketplace>`. The bundled MCP server's channel capability activates. When a peer sends a handoff or a file frees up, the target session wakes between turns via a single summary `<channel>` notification ("You have 1 new wrightward bus event. Your next tool call or /wrightward:inbox will surface it."). Claude wakes, issues a tool call or runs `/wrightward:inbox`, and the PreToolUse hook (Path 1) injects the full event as `additionalContext`. User sees Claude start responding on its own: "Agent A released src/auth.ts — I can now edit it." Without `--channels`, the plugin still works — idle sessions just don't wake until the user's next interaction, at which point Path 1 delivers as normal.
 
 **Phase 3 — Discord bridge active**
 
@@ -373,10 +374,11 @@ Bot token is **not** in `wrightward.json` — it goes through `userConfig.sensit
       ▼             ▼                         ▼            ▼
    hooks (5)   MCP server                  hooks (5)   MCP server
       │             │                         │            │
-      │             │ fs.watch + polling      │            │
-      │             ▼                         │            ▼
-      │       channel push                    │       channel push
-      │       (Phase 2)                       │       (Phase 2)
+      │ Path 1      │ Path 2 doorbell         │ Path 1     │ Path 2 doorbell
+      │ (delivers   │ (wakes idle; no writes) │ (delivers  │ (wakes idle; no writes)
+      │  content +  │                         │  content + │
+      │  advances   │                         │  advances  │
+      │  bookmark)  │                         │  bookmark) │
       │             │                         │            │
       └──────┬──────┘                         └─────┬──────┘
              │  append + read                       │
@@ -388,7 +390,7 @@ Bot token is **not** in `wrightward.json` — it goes through `userConfig.sensit
    └────────────────────────────────────────────────────┘
 ```
 
-Two Node.js processes per session — five hook subprocesses (one per Claude Code hook event, same as today) and one long-lived MCP server subprocess spawned by Claude Code itself via `plugin.json:mcpServers`. Both communicate through filesystem state. The MCP server is the only process that watches `bus.jsonl` continuously; hooks read on demand during tool calls.
+Two Node.js processes per session — five hook subprocesses (one per Claude Code hook event, same as today) and one long-lived MCP server subprocess spawned by Claude Code itself via `plugin.json:mcpServers`. Both communicate through filesystem state. The MCP server is the only process that watches `bus.jsonl` continuously; hooks read on demand during tool calls. **Path 1 is the sole content-delivery path and sole bookmark writer.** Path 2 is a stateless doorbell — it reads under lock to count pending events and emits a single wake-up notification when any exist.
 
 No IPC. No daemon. No CLI. No broker.
 
@@ -427,18 +429,18 @@ What the bridge does **not** own:
 
 If the bridge crashes, local agents are unaffected — the bus keeps flowing. They just lose Discord mirroring until the user restarts the daemon.
 
-#### Path 1 / Path 2 dedupe
+#### Bookmark ownership and Path 2 invariant
 
-Both paths read from `bus.jsonl` and both update the same per-session bookmark at `.claude/collab/bus-delivered/<sessionId>.json`. The bookmark's authoritative ordering key is the **byte offset into `bus.jsonl`**, not the event ID — ULIDs have undefined lex order within the same millisecond (spec: `github.com/ulid/spec` "Within the same millisecond, sort order is not guaranteed"), so ID-based comparison can silently skip events. Offset is monotonic and reflects actual append order regardless of clock.
+Path 1 is the sole writer of the per-session bookmark at `.claude/collab/bus-delivered/<sessionId>.json`. The bookmark's authoritative ordering key is the **byte offset into `bus.jsonl`**, not the event ID — ULIDs have undefined lex order within the same millisecond (spec: `github.com/ulid/spec` "Within the same millisecond, sort order is not guaranteed"), so ID-based comparison can silently skip events. Offset is monotonic and reflects actual append order regardless of clock.
 
-Dedupe:
+Path 1 delivery (simplified):
 
 ```js
-// simplified — runs inside guard.js (Path 1) and mcp/file-watcher.js (Path 2)
+// runs inside guard.js / heartbeat.js
 // caller holds withAgentsLock; all bus-log calls happen within this scope
 withAgentsLock(collabDir, () => {
   const bookmark = readBookmark(sessionId);
-    // initial shape: { lastDeliveredOffset: 0, lastScannedOffset: 0, lastDeliveredId: "", lastDeliveredTs: 0 }
+    // initial shape: { lastDeliveredOffset: 0, lastScannedOffset: 0, lastDeliveredId: "", lastDeliveredTs: 0, generation: 0 }
   const { events, endOffset } = tailBusLog(busLog, bookmark.lastScannedOffset);
   const urgent = events.filter(e => isUrgent(e) && matchesSession(e, sessionId));
   if (urgent.length === 0) {
@@ -448,26 +450,40 @@ withAgentsLock(collabDir, () => {
     }
     return;
   }
-  // deliver: Path 1 returns additionalContext, Path 2 calls mcp.notification()
-  deliver(urgent);
+  // inject as additionalContext; then advance bookmark
+  inject(urgent);
   const last = urgent[urgent.length - 1];
   writeBookmark(sessionId, {
-    lastDeliveredOffset: last._offset,   // byte offset where this event ends
-    lastScannedOffset: endOffset,         // byte offset where the tail read stopped
-    lastDeliveredId: last.id,             // retained for audit/debug only
-    lastDeliveredTs: last.ts
+    lastDeliveredOffset: last._offset,
+    lastScannedOffset: endOffset,
+    lastDeliveredId: last.id,
+    lastDeliveredTs: last.ts,
+    generation: currentGeneration
   });
 });
 ```
 
-Key invariants:
+**Path 2 invariant — no bookmark writes.** The doorbell reads under lock but never writes. It counts pending urgent events targeted at this session and releases the lock:
+
+```js
+// mcp/channel-doorbell.mjs — the full hot path
+withAgentsLock(collabDir, (token) => {
+  const { events } = readInboxFresh(token, collabDir, sessionId);
+  pendingCount = events.length;
+});
+// Lock released. Notification emitted outside the lock.
+// bus-delivered/<sessionId>.json is untouched.
+```
+
+If Path 2 wrote the bookmark, Path 1 would skip events Path 2 thought it "delivered" — reintroducing event loss, because Path 2's "delivery" is just a wake-up notification with no event content. This invariant is load-bearing and pinned by the `channel-doorbell.test.mjs` "bookmark bytes unchanged after ring()" assertion.
+
+Key invariants (Path 1 unchanged from Phase 1):
 
 1. **Callers hold `withAgentsLock` for every bus operation.** No bus-log function acquires the lock internally — this keeps the API composable so callers can do `append + index update + bookmark write` in a single critical section. The lock is the sole serialization point on every platform. Locks are cheap (<1 ms median per existing `agents.js` benchmarks).
 2. **`tailBusLog` returns `{ events, endOffset }`.** The reader tracks the offset where parsing actually stopped — after the last complete line successfully consumed. A partial trailing line (from a process killed mid-append) is skipped, logged to stderr, and the offset advances past it on the next compaction pass, not this one.
 3. **Bookmark advances even when the urgent filter is empty** — as long as we've scanned past new events. Otherwise a flood of irrelevant events (notes, session_started broadcasts the session is filtered out of) would force a re-scan every tool call.
 4. **Ordering key is offset, not ID.** `lastDeliveredOffset` is the primary. ID and ts are retained in the bookmark for audit logs only.
-
-Whichever path runs first advances the bookmark. The other path sees an empty urgent list (or a smaller one, if more events arrived in between) and does nothing.
+5. **Path 2 never writes bookmark state.** Doorbell is stateless.
 
 **`matchesSession(event, sessionId)` — exact semantics:**
 
@@ -488,19 +504,23 @@ function matchOne(to, sessionId) {
 }
 ```
 
-Both readers (guard.js Path 1, file-watcher.js Path 2) import this exact function from `bus-query.js` — never inlined. `bus-query.listInbox` and every other read path also run events through `matchesSession`. No semantic drift possible between callers.
+Both readers (guard.js Path 1, channel-doorbell.mjs Path 2) import this exact function from `bus-schema.js` — never inlined. `bus-query.listInbox`, `readInboxFresh`, and every other read path also run events through `matchesSession`. No semantic drift possible between callers.
 
 Semantic acks remain as bus events. An `ack` event means "the model accepted/rejected/dismissed this handoff" — audit data, separate from "wrightward delivered this event to the model." Delivery = bookmark file; semantic = bus event.
 
-#### Why the MCP server also handles channel push (Path 2)
+#### Why Path 2 is a doorbell, not a content-delivery path
 
-The MCP server is the only process in the per-session model that runs continuously between tool calls. Claude Code spawns it via stdio, keeps it alive for the session, and routes `notifications/claude/channel` emissions from it straight into the session's conversation stream. Hooks can't do channel push — they're short-lived subprocesses that exit before any notification could be delivered between turns.
+The MCP server is the only process in the per-session model that runs continuously between tool calls. Claude Code spawns it via stdio, keeps it alive for the session, and routes `notifications/claude/channel` emissions from it straight into the session's conversation stream. Hooks can't emit between turns — they're short-lived subprocesses that exit before any notification could be sent. So the division is forced by Claude Code's architecture:
 
-So the division is forced by Claude Code's architecture:
-- Path 1 (tool-call injection) = hooks
-- Path 2 (idle session wake) = MCP server
+- **Content delivery (tool-call injection)** = hooks → Path 1 → `additionalContext`. Battle-tested in Phase 1. Runs under `withAgentsLock`, synchronously advances the bookmark. Single source of truth.
+- **Idle session wake-up** = MCP server → Path 2 doorbell → one `notifications/claude/channel`. Stateless — reads to count, releases lock, emits. No bookmark advance, no sidecar, no state file. The woken session's next tool call fires Path 1, which delivers the content.
 
-Both produce the same end result from the user's perspective: an urgent event lands in the session's conversation. Path 2 is faster; Path 1 is the permanent fallback.
+Why not have Path 2 deliver content too? Two operational reasons:
+
+1. **`Server.notification()` returns `Promise<void>` that resolves when bytes hit the OS pipe, not when Claude Code actually delivers the notification to the conversation.** Documented silent-drop bugs exist on Claude Code stdio channels (GitHub issues `#41733`, `#36802`, `#38110`, `#39653`). Treating a resolved `notification()` as proof of delivery is unsafe. If Path 2 advanced the bookmark on `notification()` resolve, a silently-dropped notification would cause Path 1 to skip the event permanently — silent event loss. The doorbell design makes dropped notifications safe: the user just doesn't wake early.
+2. **Coordinating two content-delivery paths sharing a per-session bookmark requires either at-least-once + consumer dedup (MCP Channel clients don't dedup), a separate in-flight sidecar (new state file, new lock sections, orphan recovery), or accepting silent event loss.** Industry analogues (Kafka consumer groups, SQS visibility timeout, Redis Streams XREADGROUP+XACK, RabbitMQ ack, Postgres LISTEN+NOTIFY + outbox) all converge on at-least-once + consumer dedup. The doorbell collapses this problem — Path 2 delivers nothing, so there is nothing to dedup. The pattern matches Brandur's "Notifier Pattern" ([brandur.org/notifier](https://brandur.org/notifier)): NOTIFY is low-latency wake-up, the durable polling path (Path 1 here) is the correctness guarantee.
+
+The cost of this design is one round-trip of latency for idle sessions (Path 2 wakes → tool call fires → Path 1 delivers) vs. direct injection in the channel frame. The saving is all of the dedup complexity, plus graceful degradation at every layer of the channel stack.
 
 ### API & Integration Points
 
@@ -559,18 +579,20 @@ The MCP server imports from `@modelcontextprotocol/sdk`, so wrightward ships a `
 | `wrightward_watch_file` | `{ file: string }` | `{ id: string }` | Appends an `interest` event and updates `bus-index/interest.json` in the same lock. |
 | `wrightward_bus_status` | `{}` | `{ pending_urgent: number, last_ts, retention_entries: number, bound_session_id: string\|null }` | Diagnostic. Does not query a daemon — reads bus log directly. Reports the MCP server's bound session ID (or null if in unbound mode). |
 
-#### Channel push format (Phase 2)
+#### Channel doorbell format (Phase 2)
+
+Path 2 emits one summary frame per fire — not per event. Content is deliberately minimal: the doorbell's job is to wake the idle session, and Path 1 will inject the actual event content on the next tool call. `meta` values are all strings per the MCP channel reference (`Record<string, string>`).
 
 ```js
-mcp.notification({
+await server.notification({
   method: 'notifications/claude/channel',
   params: {
-    content: buildChannelBody(event),
+    content: pendingCount === 1
+      ? 'You have 1 new wrightward bus event. Your next tool call (or /wrightward:inbox) will surface it.'
+      : `You have ${pendingCount} new wrightward bus events. Your next tool call (or /wrightward:inbox) will surface them.`,
     meta: {
-      bus_id: event.id,
-      event_type: event.type,
-      from: event.from,
-      severity: event.severity || 'info'
+      source: 'wrightward-bus',
+      pending_count: String(pendingCount)
     }
   }
 });
@@ -579,12 +601,12 @@ mcp.notification({
 Rendered to the session as:
 
 ```
-<channel source="wrightward-bus" bus_id="01HV5FZ..." event_type="handoff" from="agentA" severity="info">
-Agent agentA handed off the auth refactor to you. Files unlocked: src/auth.ts, src/jwt.ts.
-Next action: run the migration test suite.
-Ack with /wrightward:ack <id> or accept implicitly by editing one of the released files.
+<channel source="wrightward-bus" pending_count="3">
+You have 3 new wrightward bus events. Your next tool call (or /wrightward:inbox) will surface them.
 </channel>
 ```
+
+There are no per-event ids in the frame and nothing to dedup on the client side — the doorbell is content-free by design. The frame names no specific event; the session must still call Path 1 (via any tool call or `/wrightward:inbox`) to read what the events are.
 
 ### State Management
 
@@ -637,10 +659,12 @@ All tests use the existing `node:test` + `node:assert/strict` pattern with `fs.m
 - `integration/path-dedupe.test.js` — simulate Path 1 (hook run) and Path 2 (MCP watcher) processing the same event concurrently; verify exactly one delivery, bookmark offset consistent afterwards; includes same-millisecond ULID case
 - `integration/mcp-binding-race.test.js` — spawn two fake SessionStart hooks with distinct ppids in quick succession, spawn two MCP servers with matching ppids; assert each binds to the correct session
 
-**Phase 2 — channel push**
+**Phase 2 — channel doorbell**
 
-- `mcp/channel-push.test.js` — mock the MCP `Server.notification()` method, call `channelPush(events)`, assert correct `notifications/claude/channel` frames produced. This is the primary automated test — it verifies the serialization and formatting without needing a real Claude Code session.
-- `integration/channel-push.test.js` — spawn MCP server over stdio, perform MCP handshake, append a bus event to test `bus.jsonl`, assert the server calls `notification()` internally (via spy on the Server instance). **Cannot test end-to-end delivery** — Channel notifications require Claude Code running in interactive mode (piped stdin causes the session to exit before notifications fire, confirmed during pre-implementation testing on Windows). End-to-end channel delivery is verified manually per the Phase 2 verification checklist (step 8).
+- `mcp/channel-doorbell.test.mjs` — spy on `Server.notification()`. Empty inbox → zero calls. N urgent events → exactly one call with `meta.pending_count === String(N)` and the summary content (singular vs plural wording branch). Unbound sessionId → zero calls, zero lock acquisitions. `server.notification` throws → stderr logged, `ring()` resolves normally. **Load-bearing "bookmark invariant" test: snapshot bookmark file bytes before and after `ring()`; assert byte-identical** — if this regresses, Path 1 would start skipping events Path 2 "delivered," reintroducing the loss problem. Events for other sessions and non-urgent events are filtered out by `matchesSession` + `isUrgent`.
+- `mcp/file-watcher.test.mjs` — fires `onActivity` on append after debounce; skips work when mtime unchanged; polling fallback fires when `fs.watch` never emits; inert when binder `getSessionId()` returns null; `close()` disposes watcher + interval + any pending debounce timer cleanly.
+- **No dedup integration test** — there is nothing to dedup because Path 2 never delivers content. The existing Phase 1 `integration/path-dedupe.test.js` still covers the Path-1-only fan-out case.
+- **No automated end-to-end channel delivery test** — Channel notifications require Claude Code running in interactive mode (piped stdin causes the session to exit before notifications fire, confirmed during pre-implementation testing on Windows). End-to-end channel delivery is verified manually per the Phase 2 verification checklist (step 8).
 
 **Phase 3 — bridge + Discord**
 
@@ -690,15 +714,48 @@ Phases ship independently. Each step is a single commit.
 
 Ship as wrightward 3.0.0. Every existing feature still works; the bus is additive.
 
-#### Phase 2 — channel push (v3.1.0)
+#### Phase 2 — channel doorbell (v3.1.0)
 
-23. Add `'claude/channel': {}` to `mcp/capabilities.js`.
-24. Add `mcp/channel-push.js`. Wire it into `mcp/file-watcher.js` so new urgent events for the bound session emit `notifications/claude/channel` and advance the bookmark. Add tests.
-25. Extend path-dedupe integration test: now Path 1 (hook) and Path 2 (MCP channel push) can race. Verify single delivery, bookmark consistent.
-26. Add `channels: [{ server: "wrightward-bus" }]` to `plugin.json`.
-27. Integration test: spawn the MCP server over stdio, perform MCP handshake, append a targeted urgent event to `bus.jsonl`, assert `Server.notification()` is called with the correct channel frame (spy-based — cannot test end-to-end delivery because Channel notifications require interactive mode). Manual smoke test per verification step 8.
-28. README section: running with `--channels plugin:wrightward@...`, research preview caveat, `--dangerously-load-development-channels` workaround.
-29. Document the IDE launch wrapper for the Cursor / VS Code extension. The extension has no direct "extra CLI args" setting, but `claudeCode.claudeProcessWrapper` (documented at `code.claude.com/docs/en/vs-code` as "Executable path used to launch the Claude process") lets users point at a shim that prepends the flag and forwards the remaining args. Ship two wrapper examples in the README:
+23. Add `experimental: { 'claude/channel': {} }` to the capabilities literal in `mcp/server.mjs` (inline — Phase 1 kept capabilities inline at the `new Server(...)` call site; no separate `capabilities.js` file to create). Bump the `new Server({ version: '3.1.0', ... })` string. Add `channels: [{ server: "wrightward-bus" }]` to `.claude-plugin/plugin.json`; bump version to `3.1.0` there and in `package.json`. Run `npm test` — adding the capability without using it is a no-op; all Phase 1 tests should still pass.
+24. Add `mcp/channel-doorbell.mjs` + `test/mcp/channel-doorbell.test.mjs`. Module contract:
+    ```js
+    export async function ring(server, collabDir, sessionId) {
+      if (!sessionId) return { pinged: false, reason: 'unbound' };
+      let pendingCount = 0;
+      withAgentsLock(collabDir, (token) => {
+        const { events } = readInboxFresh(token, collabDir, sessionId);
+        pendingCount = events.length;
+      });
+      if (pendingCount === 0) return { pinged: false, reason: 'empty' };
+      try {
+        await server.notification({
+          method: 'notifications/claude/channel',
+          params: {
+            content: buildSummary(pendingCount),
+            meta: { source: 'wrightward-bus', pending_count: String(pendingCount) }
+          }
+        });
+        return { pinged: true, pendingCount };
+      } catch (err) {
+        process.stderr.write('[wrightward-mcp] doorbell ring failed: ' + (err.message || err) + '\n');
+        return { pinged: false, reason: 'notification-error', error: err.message };
+      }
+    }
+    ```
+    `readInboxFresh` is the read-only Phase 1 primitive (no advance). **The doorbell must never call `advanceBookmark`** — include the "bookmark bytes unchanged" assertion as the load-bearing check in the test suite.
+25. Add `mcp/file-watcher.mjs` + `test/mcp/file-watcher.test.mjs`. Constructor: `createWatcher(busPath, onActivity, { debounceMs = 50, pollMs = 1000 } = {})`. `start()` registers `fs.watch` (try/catch — some filesystems don't support it; fall back to polling-only), plus a `setInterval(pollMs)`. `close()` disposes both and clears any pending debounce timer. mtime cache on the instance; `fs.statSync(busPath).mtimeMs` comparison before calling `onActivity`. Watcher fires `onActivity()` with no args — the callback re-reads `binder.getSessionId()` so session resume is handled correctly.
+26. Wire the watcher into `mcp/server.mjs`:
+    ```js
+    const watcher = createWatcher(path.join(collabDir, 'bus.jsonl'), () => {
+      const sid = binder.getSessionId();
+      if (!sid) return;
+      ring(server, collabDir, sid).catch(() => {}); // errors already logged inside
+    });
+    watcher.start();
+    ```
+    Construct after `await server.connect(transport)` and `binder.bind()` resolve. Register `watcher.close()` in the SIGTERM handler alongside `binder.cleanup()`. Stderr log `[wrightward-mcp] channel doorbell watcher started` once.
+27. README section: running with `--channels plugin:wrightward@...`, research preview caveat, `--dangerously-load-development-channels` workaround, explicit note that the plugin works without `--channels` (you just lose the faster-wake-up path; Path 1 still delivers).
+28. Document the IDE launch wrapper for the Cursor / VS Code extension. The extension has no direct "extra CLI args" setting, but `claudeCode.claudeProcessWrapper` (documented at `code.claude.com/docs/en/vs-code` as "Executable path used to launch the Claude process") lets users point at a shim that prepends the flag and forwards the remaining args. Ship two wrapper examples in the README:
 
     - Windows `claude-dev.cmd`:
       ```cmd
@@ -712,24 +769,25 @@ Ship as wrightward 3.0.0. Every existing feature still works; the bus is additiv
       ```
 
     Point the user at `claudeCode.claudeProcessWrapper` in VS Code / Cursor `settings.json`, e.g. `"claudeCode.claudeProcessWrapper": "C:\\Users\\<you>\\bin\\claude-dev.cmd"`. Caveat to document: set the wrapper only while actively testing Phase 2, otherwise every session unnecessarily loads dev-mode channels. Verify `%*` / `"$@"` argument forwarding end-to-end when writing the README — the setting's forwarding behavior is documented only at the "executable path" level, not explicitly for passed arguments.
+29. **Verify end-to-end manually** with the Phase 2 smoke test: two sessions in the same repo, both launched with `claude --dangerously-load-development-channels plugin:wrightward@<marketplace>`. Session A claims `foo.ts` via `/wrightward:collab-context`. Session B attempts to Edit `foo.ts` → blocked + `interest` event. Session A (idle at a prompt): wait. B runs `/wrightward:collab-done`. Expected: A's session wakes within ~1 s with a `<channel>` block saying "1 new event." A's next message / tool call pulls the `file_freed` content via Path 1. **If channel delivery fails on Windows** (known silent-drop bug), Path 1 still works — roll back only step 26 (the server-side wiring) to ship 3.1.0 without the watcher while the client bug is investigated. Doorbell is designed for graceful degradation at every level.
 
 Ship as 3.1.0.
 
 #### Phase 3 — Discord bridge daemon (v3.2.0)
 
-29. Add `lib/mirror-policy.js` with default policy + tests. Pure function.
-30. Add `broker/lifecycle.js` with tests (PID, log, ready marker, stale detection).
-31. Add `broker/bridge-delivery.js` with tests — bridge's own bookmark I/O. First-start seeds to tail; restart resumes from stored bookmark.
-32. Add `broker/file-watcher.js` — same pattern as `mcp/file-watcher.js` (with mtime skip), filtering by mirror policy. Tests with a fake sink.
-33. Add `discord/api.js` with tests — thin REST wrapper around `fetch()`. Mock `fetch()` in tests; verify auth header, rate-limit retry, error handling.
-34. Add `discord/formatter.js` with tests.
-35. Add `discord/threads.js` with tests — forum thread lifecycle via REST. Create/rename/archive.
-36. Add `broker/bridge.js` — the main daemon loop. Outbound: file-watcher → mirror policy → REST POST. Inbound: poll broadcast channel via REST GET every 3 s → parse @-mentions → write to bus.jsonl. Tests with mocked REST. First-start test: pre-populate bus.jsonl with 100 historical events, assert zero mirroring of history.
-37. Add `bin/wrightward` + `bin/wrightward.cmd`. Subcommands: `daemon start|stop|status|logs`, `doctor`.
-38. Add `/wrightward:bus` skill. Shells out to `wrightward status`.
-39. Add `userConfig.discord_bot_token` to `plugin.json`. Update `lib/config.js` with `discord` section and mirror policy merging.
-40. Integration test: bridge daemon + two sessions + mocked Discord REST. Assert outbound mirroring and inbound user_message routing.
-41. Update README: Discord setup walkthrough, `wrightward daemon` CLI reference, complementary relationship with stock `discord@claude-plugins-official`, no additional dependencies beyond `@modelcontextprotocol/sdk`.
+30. Add `lib/mirror-policy.js` with default policy + tests. Pure function.
+31. Add `broker/lifecycle.js` with tests (PID, log, ready marker, stale detection).
+32. Add `broker/bridge-delivery.js` with tests — bridge's own bookmark I/O. First-start seeds to tail; restart resumes from stored bookmark.
+33. Add `broker/file-watcher.js` — same pattern as `mcp/file-watcher.mjs` (with mtime skip), filtering by mirror policy. Tests with a fake sink.
+34. Add `discord/api.js` with tests — thin REST wrapper around `fetch()`. Mock `fetch()` in tests; verify auth header, rate-limit retry, error handling.
+35. Add `discord/formatter.js` with tests.
+36. Add `discord/threads.js` with tests — forum thread lifecycle via REST. Create/rename/archive.
+37. Add `broker/bridge.js` — the main daemon loop. Outbound: file-watcher → mirror policy → REST POST. Inbound: poll broadcast channel via REST GET every 3 s → parse @-mentions → write to bus.jsonl. Tests with mocked REST. First-start test: pre-populate bus.jsonl with 100 historical events, assert zero mirroring of history.
+38. Add `bin/wrightward` + `bin/wrightward.cmd`. Subcommands: `daemon start|stop|status|logs`, `doctor`.
+39. Add `/wrightward:bus` skill. Shells out to `wrightward status`.
+40. Add `userConfig.discord_bot_token` to `plugin.json`. Update `lib/config.js` with `discord` section and mirror policy merging.
+41. Integration test: bridge daemon + two sessions + mocked Discord REST. Assert outbound mirroring and inbound user_message routing.
+42. Update README: Discord setup walkthrough, `wrightward daemon` CLI reference, complementary relationship with stock `discord@claude-plugins-official`, no additional dependencies beyond `@modelcontextprotocol/sdk`.
 
 Ship as 3.2.0.
 
@@ -817,9 +875,15 @@ Out of scope for v3.2. Inbound attachments logged as a warning and dropped.
 
 - **`@modelcontextprotocol/sdk` is a runtime dependency.** wrightward was previously zero-dep. The MCP SDK is required — there is no way to implement MCP tools or Channel push without it, and reimplementing the JSON-RPC protocol would be fragile and wasteful. The SDK is maintained by Anthropic and is the canonical way to build MCP servers. Mitigation: it is the *only* dependency; `package.json` is minimal; `node_modules/` is gitignored.
 
-- **Channels feature is a research preview** (Phase 2 dependency). Mitigation: Path 1 is the permanent first-class fallback. Users without Channels still get a working plugin via next-tool-call injection. Document preview status.
+- **Channels feature is a research preview** (Phase 2 dependency). Mitigation: Path 1 is the permanent first-class content-delivery path, not a fallback. The doorbell is strictly additive — users without Channels still get a fully working plugin via next-tool-call injection. Document preview status.
 
-- **Channel push cannot be tested end-to-end in automation.** Claude Code exits immediately when stdin is piped (non-interactive), so Channel notifications never fire in a test harness. Confirmed during pre-implementation testing on Windows. Mitigation: Phase 2 automated tests verify that `Server.notification()` is called with correct frames (spy-based). End-to-end delivery is verified manually per the verification checklist. Path 1 (hook injection) is fully automatable and is the permanent fallback.
+- **Channel push cannot be tested end-to-end in automation.** Claude Code exits immediately when stdin is piped (non-interactive), so Channel notifications never fire in a test harness. Confirmed during pre-implementation testing on Windows. Mitigation: Phase 2 automated tests verify that `Server.notification()` is called with the expected summary frame (spy-based). End-to-end delivery is verified manually per the verification checklist. Path 1 (hook injection) is fully automatable and is the permanent content-delivery path.
+
+- **Known Claude Code stdio channel silent-drop bugs** (GitHub issues `#41733`, `#36802`, `#38110`, `#39653`, especially on Windows). `server.notification()` resolves successfully — the Promise completes when bytes hit the OS pipe — but the notification never surfaces in the session. Mitigation: the doorbell design absorbs this by treating Path 2 as a best-effort wake-up signal only. If a notification is silently dropped, the user simply does not wake early; their next interaction still triggers Path 1 as today. The original "content in channel frame" design would have *lost* events here. No server-side retry needed.
+
+- **Wake-up storm from rapid bus.jsonl appends**. If 20 events are appended in one second, the 50 ms debounce coalesces the watcher fires but each fire still rings once — potentially many rings per second at sustained high rates. Mitigation: the 50 ms debounce covers typical bursts; sustained high-rate appends are a characteristic of whatever workflow is producing them, and the user will see at most (appends / 50ms) rings. Acceptable for v3.1.0; add per-ring rate-limiting in v3.1.1 if anyone hits it.
+
+- **Session resume changes session ID mid-watcher-lifetime**. `binder.refreshBinding()` reads the ticket on every tool call, and the doorbell's callback re-reads `binder.getSessionId()` on every fire. Watcher holds no session ID state; the `onActivity` callback always queries the current binder value. No race.
 
 - **Allowlist blocks `--channels plugin:wrightward`** until Anthropic approval. Mitigation: document `--dangerously-load-development-channels plugin:wrightward@<marketplace>` workaround. Submit for allowlist after Phase 2 stabilizes.
 
@@ -892,18 +956,19 @@ The following ride defaults unless the user says otherwise:
 
 **After Phase 2 (3.1.0):**
 
-8. Repeat the handoff smoke test (Phase 1 step 5) with the second session started via `claude --dangerously-load-development-channels plugin:wrightward@<marketplace>`. Verify the target session wakes between turns and processes the handoff *without* a new user prompt.
-9. Verify Path 1 / Path 2 race integration test passes.
+8. Repeat the handoff smoke test (Phase 1 step 5) with the second session started via `claude --dangerously-load-development-channels plugin:wrightward@<marketplace>`. Verify the target session wakes between turns, receives one summary `<channel>` block saying "1 new wrightward bus event," and then issues a tool call / runs `/wrightward:inbox` whose PreToolUse hook (Path 1) surfaces the actual handoff content as `additionalContext` — all *without* a new user prompt.
+9. Verify the "bookmark bytes unchanged after `ring()`" invariant test in `test/mcp/channel-doorbell.test.mjs` passes. If this test regresses, Path 2 is writing state and the doorbell guarantee is broken — Phase 2 is not shippable until it passes.
+10. If step 8 fails due to a known Claude Code channel silent-drop bug (notification emitted but never surfaced), confirm the plugin still delivers via Path 1 on the user's next interaction — graceful degradation must hold.
 
 **After Phase 3 (3.2.0):**
 
-10. Configure Discord bot token via `userConfig`, enable in wrightward.json, `wrightward daemon start`. No npm install needed — bridge connects via REST immediately. Verify `bridge.ready` marker.
-11. First-start seed test: with existing bus.jsonl containing 100 historical events, start bridge — verify no Discord posts for historical events.
-12. Smoke test: start two Claude Code sessions. Verify two threads appear in the Discord forum channel, named after each agent's task.
-13. Send `@agent-<a> run the test suite` in the broadcast channel. Verify only session A's inbox receives it (via `/wrightward:inbox` or on next tool call).
-14. Session A replies via a bus event. Verify the reply posts to A's Discord thread.
-15. `wrightward daemon stop` exits cleanly; `bridge.ready` removed, PID file removed.
-16. Complementary test: install stock `discord@claude-plugins-official` on one session alongside wrightward bridge. Verify DM→session works via stock plugin while wrightward bridge mirrors bus events to forum threads. No conflicts.
+11. Configure Discord bot token via `userConfig`, enable in wrightward.json, `wrightward daemon start`. No npm install needed — bridge connects via REST immediately. Verify `bridge.ready` marker.
+12. First-start seed test: with existing bus.jsonl containing 100 historical events, start bridge — verify no Discord posts for historical events.
+13. Smoke test: start two Claude Code sessions. Verify two threads appear in the Discord forum channel, named after each agent's task.
+14. Send `@agent-<a> run the test suite` in the broadcast channel. Verify only session A's inbox receives it (via `/wrightward:inbox` or on next tool call).
+15. Session A replies via a bus event. Verify the reply posts to A's Discord thread.
+16. `wrightward daemon stop` exits cleanly; `bridge.ready` removed, PID file removed.
+17. Complementary test: install stock `discord@claude-plugins-official` on one session alongside wrightward bridge. Verify DM→session works via stock plugin while wrightward bridge mirrors bus events to forum threads. No conflicts.
 
 ## Out of scope
 

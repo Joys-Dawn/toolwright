@@ -1,6 +1,6 @@
 {
   "name": "wrightward",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Multi-agent coordination and message bus for Claude Code",
   "author": {
     "name": "yiann"
@@ -8,5 +8,8 @@
   "license": "Apache-2.0",
   "keywords": ["multi-agent", "collaboration", "bus", "coordination"],
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json"
+  "mcpServers": "./.mcp.json",
+  "channels": [
+    { "server": "wrightward-bus" }
+  ]
 }

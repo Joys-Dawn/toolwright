@@ -2,16 +2,22 @@
 /**
  * wrightward MCP server — spawned by Claude Code per session via plugin.json.
  *
- * Phase 1: tools only (no channel capability).
- * Phase 2 will add experimental: { 'claude/channel': {} } for push notifications.
+ * Phase 2: tools + experimental claude/channel for between-turn doorbell
+ * notifications. The bundled file watcher fires the channel doorbell when
+ * bus.jsonl changes; see mcp/file-watcher.mjs and mcp/channel-doorbell.mjs.
+ * The doorbell writes no state — Path 1 (hooks) remains the sole deliverer
+ * of event content, so dropped notifications degrade gracefully.
  */
 
+import path from 'path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createRequire } from 'module';
 import { createSessionBinder } from './session-bind.mjs';
 import { getToolDefinitions, handleToolCall } from './tools.mjs';
+import { createWatcher } from './file-watcher.mjs';
+import { ring } from './channel-doorbell.mjs';
 
 const require = createRequire(import.meta.url);
 const { resolveCollabDir } = require('../lib/collab-dir');
@@ -38,9 +44,12 @@ async function main() {
 
   // Create MCP server
   const server = new Server(
-    { name: 'wrightward-bus', version: '3.0.0' },
+    { name: 'wrightward-bus', version: '3.1.0' },
     {
-      capabilities: { tools: {} },
+      capabilities: {
+        tools: {},
+        experimental: { 'claude/channel': {} }
+      },
       instructions: 'wrightward bus: peer-to-peer messaging between Claude Code sessions. Use wrightward_list_inbox to check for messages, wrightward_send_handoff to hand off work, wrightward_watch_file to watch a file, wrightward_ack to acknowledge events.'
     }
   );
@@ -76,9 +85,23 @@ async function main() {
     process.stderr.write('[wrightward-mcp] bind failed: ' + (err.stack || err.message || err) + '\n');
   });
 
+  // Phase 2 channel doorbell: watch bus.jsonl between turns and wake the
+  // idle session when urgent events are pending. Path 2 writes no state —
+  // Path 1 (hooks) remains the sole deliverer of event content. If binder
+  // hasn't bound yet, the callback no-ops; session resume is handled by
+  // re-reading the binder on every fire.
+  const watcher = createWatcher(path.join(collabDir, 'bus.jsonl'), () => {
+    const sid = binder.getSessionId();
+    if (!sid) return;
+    ring(server, collabDir, sid).catch(() => {}); // errors already logged inside ring()
+  });
+  watcher.start();
+  process.stderr.write('[wrightward-mcp] channel doorbell watcher started\n');
+
   // Graceful shutdown
   process.on('SIGTERM', () => {
     process.stderr.write('[wrightward-mcp] SIGTERM received, shutting down\n');
+    watcher.close();
     binder.cleanup();
     process.exit(0);
   });
