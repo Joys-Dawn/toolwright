@@ -3,6 +3,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { createEvent, isUrgent, matchesSession, validateEvent, EVENT_TYPES, URGENT_TYPES, SYNTHETIC_SENDER } = require('../../lib/bus-schema');
+const { BRIDGE_SESSION_ID } = require('../../lib/constants');
 
 describe('bus-schema', () => {
   describe('createEvent', () => {
@@ -76,6 +77,28 @@ describe('bus-schema', () => {
     it('passes severity through', () => {
       const e = createEvent('sess-1', 'all', 'blocker', '', {}, 'critical');
       assert.equal(e.severity, 'critical');
+    });
+
+    it('accepts Phase 3 rate_limited event type', () => {
+      const e = createEvent(SYNTHETIC_SENDER, 'all', 'rate_limited', 'Dropped 3 posts',
+        { destination_channel: 'broadcast', dropped_count: 3, first_event_id: 'evt-x' });
+      assert.equal(e.type, 'rate_limited');
+    });
+
+    it('accepts Phase 3 context_updated event type', () => {
+      const e = createEvent('sess-1', 'all', 'context_updated', 'new task',
+        { prev_task: 'old task', new_task: 'new task' });
+      assert.equal(e.type, 'context_updated');
+    });
+
+    it('rejects BRIDGE_SESSION_ID as event from — bridge is not a real sender', () => {
+      // Events originating from the bridge use SYNTHETIC_SENDER (runtime sender).
+      // __bridge__ is a bookmark-only identifier; allowing it as `from` would
+      // let a real session impersonate the bridge on bus.jsonl.
+      assert.throws(
+        () => createEvent(BRIDGE_SESSION_ID, 'all', 'note', 'hi'),
+        /Invalid session ID/
+      );
     });
   });
 

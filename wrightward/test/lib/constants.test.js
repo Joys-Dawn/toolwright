@@ -2,7 +2,14 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { validateSessionId, SESSION_ID_PATTERN } = require('../../lib/constants');
+const {
+  validateSessionId,
+  SESSION_ID_PATTERN,
+  RESERVED_SYNTHETIC_SENDER,
+  BRIDGE_SESSION_ID,
+  RESERVED_SESSION_IDS,
+  SHORT_ID_LEN
+} = require('../../lib/constants');
 
 describe('validateSessionId', () => {
   it('accepts alphanumeric session IDs', () => {
@@ -62,5 +69,59 @@ describe('validateSessionId', () => {
     assert.ok(SESSION_ID_PATTERN instanceof RegExp);
     assert.equal(SESSION_ID_PATTERN.test('ok-id_1'), true);
     assert.equal(SESSION_ID_PATTERN.test('bad/id'), false);
+  });
+
+  it('rejects RESERVED_SYNTHETIC_SENDER', () => {
+    // The runtime sender identifier must not be usable as a real session ID —
+    // otherwise an agent could impersonate the bus runtime on bus.jsonl.
+    // Fails the SESSION_ID_PATTERN first (colon isn't in [a-zA-Z0-9_-]) — this
+    // is the defense-in-depth layer; the explicit reserved-set check below
+    // catches same-shape reserved names like BRIDGE_SESSION_ID.
+    assert.throws(() => validateSessionId(RESERVED_SYNTHETIC_SENDER), /Invalid session ID/);
+  });
+
+  it('rejects BRIDGE_SESSION_ID for real session paths', () => {
+    // The bridge bookmark uses __bridge__ as its key, but validateSessionId
+    // (called by context paths, agent registration, createEvent `from`) must
+    // reject it so no real session can masquerade as the bridge.
+    assert.throws(() => validateSessionId(BRIDGE_SESSION_ID), /reserved/);
+  });
+});
+
+describe('RESERVED_SESSION_IDS', () => {
+  it('includes RESERVED_SYNTHETIC_SENDER', () => {
+    assert.ok(RESERVED_SESSION_IDS.has(RESERVED_SYNTHETIC_SENDER));
+  });
+
+  it('includes BRIDGE_SESSION_ID', () => {
+    assert.ok(RESERVED_SESSION_IDS.has(BRIDGE_SESSION_ID));
+  });
+
+  it('BRIDGE_SESSION_ID is a syntactically valid session-id shape', () => {
+    // The bookmark path builder uses sessionId as a filename component and
+    // does not re-validate — so __bridge__ must match SESSION_ID_PATTERN to
+    // form a legal path, even though validateSessionId rejects it.
+    assert.equal(SESSION_ID_PATTERN.test(BRIDGE_SESSION_ID), true);
+  });
+});
+
+describe('SHORT_ID_LEN', () => {
+  // SHORT_ID_LEN drives display-only truncation for Discord thread titles,
+  // @agent-<shortId> mention parsing, and formatter suffixes. If the value
+  // drifts between modules, a user's short-ID mention won't match the
+  // short-ID suffix in the thread title — a pure usability regression.
+  // These tests pin the exported value so accidental changes break CI.
+
+  it('is a positive integer', () => {
+    assert.equal(typeof SHORT_ID_LEN, 'number');
+    assert.ok(Number.isInteger(SHORT_ID_LEN));
+    assert.ok(SHORT_ID_LEN > 0);
+  });
+
+  it('is 8 — keep thread/mention/formatter short-ID displays symmetric', () => {
+    // Changing this value is a cross-module contract break — expected to
+    // force a conscious update to this test and to Discord users' muscle
+    // memory of the short-ID format.
+    assert.equal(SHORT_ID_LEN, 8);
   });
 });

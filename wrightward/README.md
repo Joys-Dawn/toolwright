@@ -6,7 +6,8 @@ Claude Code plugin for multi-agent coordination. When multiple Claude Code sessi
 - **Awareness context** — injects short summaries of other agents' active work into the guard hook's output.
 - **Message bus** — six MCP tools for sending notes, handoffs, file-watch registrations, and inbox checks between sessions.
 - **Channel push** (research preview) — optional wake-up `notifications/claude/channel` ping when an idle session receives an urgent bus event.
-- **Zero network I/O** — all state is local files in `.claude/collab/` (auto-gitignored). No daemon, no IPC, no external services.
+- **Zero network I/O by default** — all state is local files in `.claude/collab/` (auto-gitignored). No daemon, no IPC, no external services unless the optional Discord bridge (v3.2) is explicitly enabled.
+- **Optional Discord observability** — opt-in bridge that mirrors bus events to a Discord forum (thread per agent) and relays `@agent-…` mentions back into the bus.
 
 ## Installation
 
@@ -137,6 +138,75 @@ Then in `settings.json`:
 { "claudeCode.claudeProcessWrapper": "C:\\Users\\<you>\\bin\\claude-dev.cmd" }
 ```
 
+## Discord bridge (v3.2, opt-in)
+
+An optional subprocess that mirrors bus events to a Discord server in near-real-time. It runs on the same machine as your Claude Code sessions, shares the same `bus.jsonl`, and is REST-only — no gateway connection — so it **coexists with the stock `discord@claude-plugins-official` plugin on the same bot token**. The stock plugin handles per-session DMs via gateway; wrightward's bridge handles multi-session observability via REST.
+
+When enabled, the bridge:
+
+- creates one Discord **forum thread per agent** named `<task> (<shortId>)` and posts per-session events there;
+- mirrors `session_started` / `session_ended` / broadcast handoffs / `user_message` targeted at `"all"` into a shared **broadcast text channel**;
+- watches that broadcast channel for `@agent-<shortId>` mentions and routes them back into `bus.jsonl` as `user_message` events targeted at the matching session;
+- renames a thread when `/wrightward:collab-context` updates the session's task string (throttled by Discord's own per-bucket rate limits).
+
+When the bridge is disabled (default), Phases 1–2 behave identically to prior versions.
+
+### Setup
+
+1. **Create a Discord bot** at `discord.com/developers/applications`. Scope: `bot`. Permissions: `View Channels`, `Send Messages`, `Send Messages in Threads`, `Manage Threads`, `Read Message History`. (`Create Public Threads` is **not** required for forum-channel thread creation — Discord's own docs note that only `SEND_MESSAGES` gates that operation.)
+2. **Create channels** in your server: one forum channel for agent threads, one text channel for the shared broadcast.
+3. **Install the plugin** (or reload it): `/plugin install wrightward@Joys-Dawn/toolwright`. When prompted, paste the bot token into the `discord_bot_token` field. It is stored as a `sensitive: true` user-config value (goes to your system keychain on supported platforms).
+4. **Configure the channels** in `.claude/wrightward.json`:
+
+   ```json
+   {
+     "discord": {
+       "ENABLED": true,
+       "FORUM_CHANNEL_ID": "1234567890",
+       "BROADCAST_CHANNEL_ID": "1234567891",
+       "ALLOWED_SENDERS": ["your-discord-user-id"]
+     }
+   }
+   ```
+
+5. **Next Claude session started in the repo spawns the bridge automatically** under a single-owner lockfile at `.claude/collab/bridge/bridge.lock`. Other sessions in the same repo observe the existing owner and do nothing — exactly one bridge runs per repo.
+
+### Configuration keys (`discord` block)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `ENABLED` | `false` | Master switch for the bridge |
+| `FORUM_CHANNEL_ID` | — | Forum channel ID where per-agent threads are created |
+| `BROADCAST_CHANNEL_ID` | — | Text channel ID for session-wide announcements and inbound @-mentions |
+| `ALLOWED_SENDERS` | `[]` | Array of Discord **user IDs** permitted to route inbound mentions. Empty blocks all inbound — send-only mode |
+| `POLL_INTERVAL_MS` | `3000` | How often to poll the broadcast channel for new messages |
+| `THREAD_RENAME_ON_CONTEXT_UPDATE` | `true` | Whether `/wrightward:collab-context` task changes rename the Discord thread |
+| `BOT_USER_AGENT` | (default `DiscordBot (…, 3.2.0)`) | Override only if you have a reason; must start with the literal `DiscordBot` to avoid Cloudflare blocking |
+| `mirrorPolicy` | (see below) | Per-event-type override of what gets mirrored where |
+
+**Mirror policy defaults** (user overrides merge on top):
+
+- `user_message`, `handoff`, `blocker`, `file_freed` → post into the recipient's thread.
+- `session_started`, `session_ended` → post into the broadcast channel.
+- `note`, `finding`, `decision` → silent by default.
+- `interest`, `ack`, `delivery_failed`, `rate_limited` → **never mirrored** (hard rail; user cannot elevate these to a mirror action).
+
+### Security model
+
+- **`ALLOWED_SENDERS` gates on Discord user ID, not channel membership.** Giving someone access to the broadcast channel alone does **not** let them inject into your bus — only IDs explicitly listed in `ALLOWED_SENDERS` can route mentions. Empty list = send-only.
+- **Token redaction.** Bot tokens, `Bot <token>` headers, and Discord webhook URLs (incl. `canary.discord.com`, `ptb.discord.com`, `discordapp.com`, versioned `/api/v10/webhooks/...`) are scrubbed from every `bridge.log` write and every inbound message body before it reaches `bus.jsonl`.
+- **UTF-8 + length cap on inbound.** Inbound message content is clamped at 4000 bytes on a UTF-8 boundary before append, preventing pathological payloads.
+- **The bridge is a subprocess**, not a sender: events originating from Discord use the reserved `system` sender with `meta.source: "discord"`. A loop-guard prevents the bridge from re-mirroring Discord-sourced events back to Discord.
+- **Local operation is never blocked by Discord.** If Discord API is down, the bridge logs and retries; `bus.jsonl` flow and local agents are unaffected. Auth failures (401) trip a persistent 1-hour circuit breaker across all sessions to prevent spawn loops after token rotation.
+
+### Diagnostics
+
+`wrightward_bus_status` returns a `bridge` sub-object with `running`, `owner_session_id`, `child_pid`, `last_error`, and the `circuit_breaker` trip state when present. Tail `.claude/collab/bridge/bridge.log` for rotated diagnostic logs (1 MB rotation, keep 3).
+
+### Dependency note: the bridge does NOT require the Channels research-preview flag
+
+Phase 2's channel doorbell requires Claude Code ≥ 2.1.80 and either approved-allowlist inclusion or launching with `--dangerously-load-development-channels server:wrightward-bus`. The Discord bridge is **independent of this** — it is a subprocess that posts via REST and has no `notifications/claude/channel` dependency. The bridge functions fully even if channels are disabled; you just won't get between-turn wake-ups locally.
+
 ## Skills
 
 | Skill | Description |
@@ -215,11 +285,16 @@ Set `ENABLED` to `false` in `.claude/wrightward.json` to fully disable wrightwar
 
 ## State
 
-All coordination state lives in `.claude/collab/` (auto-gitignored). No state persists between sessions.
+All coordination state lives in `.claude/collab/` (auto-gitignored). No state persists between sessions. Subdirectories used:
+
+- `context/`, `context-hash/` — per-session task/file claims (Phase 1)
+- `mcp/` — MCP server binding tickets (Phase 2)
+- `bus-delivered/`, `bus-index/` — bus bookmarks and derived indices (Phase 1–2)
+- `bridge/` — lockfile, log, circuit breaker, last-polled marker (Phase 3, only when the Discord bridge is enabled)
 
 ## Security
 
-- **No network I/O.** The plugin and bundled MCP server make zero outbound HTTP/DNS/socket calls. All state is file reads and writes under `.claude/collab/`.
+- **No network I/O by default.** The plugin and bundled MCP server make zero outbound HTTP/DNS/socket calls out of the box. All coordination state is file reads and writes under `.claude/collab/`. Outbound network traffic happens **only** when the optional Discord bridge is explicitly enabled (§ "Discord bridge" above), in which case the bridge's subprocess talks to `discord.com/api/v10` via REST.
 - **Channel notifications carry no payload.** The doorbell emits a fixed short string (`"You have N new wrightward bus event(s)..."`) plus a `pending_count` attribute. Event content is always delivered through Path 1's hook-injected `additionalContext`, which is standard Claude Code context injection.
 - **Bus messages originate only from co-located sessions.** There is no external sender. The bus carries only events written by other wrightward sessions running in the same repo.
 - **Edit/Write to collab state are hard-blocked.** The guard hook unconditionally rejects Edit and Write tool calls targeting any file under `.claude/collab/`, including from the agent itself. Bash is not intercepted — the block message and skill instructions tell the agent never to escalate to shell commands (`rm`, `sed`, redirects) to modify collab files, but this is a prompt-level directive, not an enforced block. State changes should always go through wrightward's skills.

@@ -2,7 +2,10 @@
   "mcpServers": {
     "wrightward-bus": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/server.mjs"]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/server.mjs"],
+      "env": {
+        "DISCORD_BOT_TOKEN": "${user_config.discord_bot_token}"
+      }
     }
   }
 }

@@ -458,4 +458,102 @@ describe('context script', () => {
     assert.equal(result.exitCode, 1);
     assert.match(result.stderr, /No existing collab context/);
   });
+
+  describe('context_updated bus emission', () => {
+    function readBusEvents(tmpDir) {
+      const busPath = path.join(tmpDir, '.claude', 'collab', 'bus.jsonl');
+      if (!fs.existsSync(busPath)) return [];
+      return fs.readFileSync(busPath, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+    }
+
+    it('emits context_updated on first context set (prev_task=null)', () => {
+      runScript([], {
+        cwd: tmpDir,
+        env: { COLLAB_SESSION_ID: 'sess-1', COLLAB_PROJECT_CWD: tmpDir },
+        input: JSON.stringify({ task: 'Initial task', files: [], status: 'in-progress' })
+      });
+
+      const events = readBusEvents(tmpDir);
+      const updated = events.find(e => e.type === 'context_updated' && e.from === 'sess-1');
+      assert.ok(updated, 'expected a context_updated event on first context set');
+      assert.equal(updated.meta.prev_task, null);
+      assert.equal(updated.meta.new_task, 'Initial task');
+      assert.equal(updated.to, 'all');
+    });
+
+    it('emits context_updated when task string changes between writes', () => {
+      runScript([], {
+        cwd: tmpDir,
+        env: { COLLAB_SESSION_ID: 'sess-1', COLLAB_PROJECT_CWD: tmpDir },
+        input: JSON.stringify({ task: 'First task', files: [], status: 'in-progress' })
+      });
+      runScript([], {
+        cwd: tmpDir,
+        env: { COLLAB_SESSION_ID: 'sess-1', COLLAB_PROJECT_CWD: tmpDir },
+        input: JSON.stringify({ task: 'Second task', files: [], status: 'in-progress' })
+      });
+
+      const events = readBusEvents(tmpDir).filter(e => e.type === 'context_updated');
+      assert.equal(events.length, 2, 'expected exactly two context_updated events, got ' + events.length);
+      assert.equal(events[0].meta.prev_task, null);
+      assert.equal(events[0].meta.new_task, 'First task');
+      assert.equal(events[1].meta.prev_task, 'First task');
+      assert.equal(events[1].meta.new_task, 'Second task');
+    });
+
+    it('does NOT emit context_updated when task is unchanged', () => {
+      runScript([], {
+        cwd: tmpDir,
+        env: { COLLAB_SESSION_ID: 'sess-1', COLLAB_PROJECT_CWD: tmpDir },
+        input: JSON.stringify({ task: 'Same task', files: [], status: 'in-progress' })
+      });
+      runScript([], {
+        cwd: tmpDir,
+        env: { COLLAB_SESSION_ID: 'sess-1', COLLAB_PROJECT_CWD: tmpDir },
+        input: JSON.stringify({ task: 'Same task', files: ['~new-file.js'], status: 'in-progress' })
+      });
+
+      const events = readBusEvents(tmpDir).filter(e => e.type === 'context_updated');
+      assert.equal(events.length, 1, 'expected exactly one context_updated event (the first one only), got ' + events.length);
+    });
+
+    it('does NOT emit context_updated when BUS_ENABLED is false', () => {
+      fs.mkdirSync(path.join(tmpDir, '.claude'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'wrightward.json'), JSON.stringify({ BUS_ENABLED: false }));
+
+      runScript([], {
+        cwd: tmpDir,
+        env: { COLLAB_SESSION_ID: 'sess-1', COLLAB_PROJECT_CWD: tmpDir },
+        input: JSON.stringify({ task: 'task', files: [], status: 'in-progress' })
+      });
+
+      const events = readBusEvents(tmpDir);
+      assert.equal(events.length, 0, 'no bus events expected when BUS_ENABLED=false, got ' + events.length);
+    });
+
+    it('exits 0 and writes context when context_updated append throws (bus write failure)', () => {
+      // Simulate a bus append failure by creating bus.jsonl as a DIRECTORY
+      // before the script runs — any subsequent fs.appendFileSync hits EISDIR.
+      // The script's try/catch at scripts/context.js:167-175 must swallow
+      // the error and continue: context write is load-bearing, bus emission
+      // is advisory.
+      const collabDir = path.join(tmpDir, '.claude', 'collab');
+      fs.mkdirSync(collabDir, { recursive: true });
+      fs.mkdirSync(path.join(collabDir, 'bus.jsonl'));
+
+      const result = runScript([], {
+        cwd: tmpDir,
+        env: { COLLAB_SESSION_ID: 'sess-1', COLLAB_PROJECT_CWD: tmpDir },
+        input: JSON.stringify({ task: 'Probe task', files: [], status: 'in-progress' })
+      });
+
+      assert.equal(result.exitCode, 0,
+        'script must exit 0 despite bus write failure; stderr=' + result.stderr);
+      assert.match(result.stderr, /\[collab\/context\] context_updated append failed:/,
+        'stderr must carry the advisory warning');
+      const ctx = readContext(collabDir, 'sess-1');
+      assert.ok(ctx, 'context file must be written even when bus emission fails');
+      assert.equal(ctx.task, 'Probe task');
+    });
+  });
 });

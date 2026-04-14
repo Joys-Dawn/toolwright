@@ -310,6 +310,54 @@ describe('mcp/tools', () => {
       assert.equal(data.pending_urgent, 1);
       assert.equal(data.retention_entries, 1);
     });
+
+    describe('bridge sub-object', () => {
+      it('exposes bridge status with running=false and null circuit_breaker when no bridge has run', () => {
+        const result = handleToolCall('wrightward_bus_status', {}, collabDir, 'sess-1', config, tmpDir);
+        const data = JSON.parse(result.content[0].text);
+        assert.ok(data.bridge, 'bridge sub-object must be present');
+        assert.equal(data.bridge.running, false);
+        assert.equal(data.bridge.owned_by_this_session, false);
+        assert.equal(data.bridge.owner_session_id, null);
+        assert.equal(data.bridge.owner_pid, null);
+        assert.equal(data.bridge.child_pid, null);
+        assert.equal(data.bridge.last_error, null);
+        assert.equal(data.bridge.circuit_breaker, null);
+      });
+
+      it('reports owner_pid/owner_session_id/child_pid when a lockfile exists', () => {
+        const bridgeSubdir = path.join(collabDir, 'bridge');
+        fs.mkdirSync(bridgeSubdir, { recursive: true });
+        fs.writeFileSync(path.join(bridgeSubdir, 'bridge.lock'), JSON.stringify({
+          owner_pid: process.pid,
+          owner_session_id: 'sess-owner',
+          started_at: Date.now(),
+          bridge_child_pid: null
+        }));
+        const result = handleToolCall('wrightward_bus_status', {}, collabDir, 'sess-1', config, tmpDir);
+        const data = JSON.parse(result.content[0].text);
+        assert.equal(data.bridge.owner_session_id, 'sess-owner');
+        assert.equal(data.bridge.owner_pid, process.pid);
+        assert.equal(data.bridge.owned_by_this_session, true);
+      });
+
+      it('surfaces the circuit breaker when trip state is present', () => {
+        const bridgeSubdir = path.join(collabDir, 'bridge');
+        fs.mkdirSync(bridgeSubdir, { recursive: true });
+        fs.writeFileSync(path.join(bridgeSubdir, 'circuit-breaker.json'), JSON.stringify({
+          disabled_until_ts: Date.now() + 60_000,
+          last_error: 'HTTP 401',
+          consecutive_failures: 2
+        }));
+        const result = handleToolCall('wrightward_bus_status', {}, collabDir, 'sess-1', config, tmpDir);
+        const data = JSON.parse(result.content[0].text);
+        assert.ok(data.bridge.circuit_breaker, 'circuit_breaker must be reported');
+        assert.equal(data.bridge.circuit_breaker.consecutive_failures, 2);
+        assert.equal(data.bridge.circuit_breaker.last_error, 'HTTP 401');
+        assert.ok(data.bridge.circuit_breaker.disabled_until_ts > Date.now());
+        assert.equal(data.bridge.last_error, 'HTTP 401');
+      });
+    });
   });
 
   describe('input validation', () => {

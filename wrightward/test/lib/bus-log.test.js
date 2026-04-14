@@ -230,6 +230,27 @@ describe('bus-log', () => {
     it('deleteBookmark on missing file does not throw', () => {
       assert.doesNotThrow(() => deleteBookmark(collabDir, 'nonexistent'));
     });
+
+    it('accepts BRIDGE_SESSION_ID (__bridge__) as a bookmark key', () => {
+      // validateSessionId rejects __bridge__ for real session paths, but the
+      // bookmark path builder is permissive so the Phase 3 Discord bridge can
+      // maintain its own offset in bus-delivered/__bridge__.json. Verifies the
+      // bookmark file-shape carve-out documented in the plan.
+      const { BRIDGE_SESSION_ID } = require('../../lib/constants');
+      const bookmark = {
+        lastDeliveredOffset: 42,
+        lastScannedOffset: 42,
+        lastDeliveredId: 'bridge-evt-1',
+        lastDeliveredTs: 1700000000
+      };
+      withAgentsLock(collabDir, (token) => {
+        writeBookmark(token, collabDir, BRIDGE_SESSION_ID, bookmark);
+      });
+      const read = readBookmark(collabDir, BRIDGE_SESSION_ID);
+      assert.deepEqual(read, bookmark);
+      // File must literally be bus-delivered/__bridge__.json, not escaped.
+      assert.ok(fs.existsSync(path.join(collabDir, 'bus-delivered', '__bridge__.json')));
+    });
   });
 
   describe('compact', () => {

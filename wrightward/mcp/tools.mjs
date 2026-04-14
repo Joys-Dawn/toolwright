@@ -4,6 +4,11 @@
  */
 
 import { createRequire } from 'module';
+import {
+  readLock,
+  readCircuitBreaker,
+  isProcessAlive
+} from '../broker/lifecycle.mjs';
 const require = createRequire(import.meta.url);
 
 const { withAgentsLock } = require('../lib/agents');
@@ -368,8 +373,34 @@ function handleBusStatus(collabDir, sessionId) {
       pending_urgent: events.length,
       last_ts: meta.lastTs,
       retention_entries: meta.eventCount,
-      bound_session_id: sessionId
+      bound_session_id: sessionId,
+      bridge: readBridgeStatus(collabDir)
     };
   });
   return { content: [{ type: 'text', text: JSON.stringify(status) }] };
+}
+
+/**
+ * Summarizes the bridge daemon's state for diagnostic output. Consumed by
+ * `wrightward_bus_status`. All fields are safe to stringify; when no bridge
+ * has ever run the shape is still well-formed (`running: false`, null fields).
+ */
+function readBridgeStatus(collabDir) {
+  const lock = readLock(collabDir);
+  const cb = readCircuitBreaker(collabDir);
+  const hasCircuit = cb.consecutive_failures > 0 || cb.disabled_until_ts > 0;
+  const childAlive = !!(lock && lock.bridge_child_pid && isProcessAlive(lock.bridge_child_pid));
+  return {
+    running: childAlive,
+    owned_by_this_session: !!(lock && lock.owner_pid === process.pid),
+    owner_session_id: lock ? lock.owner_session_id : null,
+    owner_pid: lock ? lock.owner_pid : null,
+    child_pid: lock ? lock.bridge_child_pid : null,
+    last_error: cb.last_error || null,
+    circuit_breaker: hasCircuit ? {
+      disabled_until_ts: cb.disabled_until_ts,
+      consecutive_failures: cb.consecutive_failures,
+      last_error: cb.last_error
+    } : null
+  };
 }

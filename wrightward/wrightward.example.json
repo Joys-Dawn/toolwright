@@ -12,5 +12,18 @@
   "BUS_RETENTION_MAX_EVENTS": 10000,
   "BUS_HANDOFF_TTL_MIN": 30,
   "BUS_INTEREST_TTL_MIN": 60,
-  "BUS_URGENT_INJECTION_CAP": 5
+  "BUS_URGENT_INJECTION_CAP": 5,
+  "discord": {
+    "ENABLED": false,
+    "FORUM_CHANNEL_ID": "paste-your-forum-channel-id-here",
+    "BROADCAST_CHANNEL_ID": "paste-your-broadcast-channel-id-here",
+    "ALLOWED_SENDERS": [],
+    "POLL_INTERVAL_MS": 3000,
+    "THREAD_RENAME_ON_CONTEXT_UPDATE": true,
+    "mirrorPolicy": {
+      "note": { "action": "silent" },
+      "finding": { "action": "silent" },
+      "decision": { "action": "silent" }
+    }
+  }
 }

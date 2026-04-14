@@ -8,6 +8,8 @@ const { readContext, writeContext, fileEntryForPath } = require('../lib/context'
 const { removeSessionState } = require('../lib/session-state');
 const { loadConfig } = require('../lib/config');
 const { writeInterest } = require('../lib/bus-query');
+const { append } = require('../lib/bus-log');
+const { createEvent } = require('../lib/bus-schema');
 
 function parseArgs(argv) {
   const args = {};
@@ -149,8 +151,29 @@ async function main() {
     return true;
   });
 
+  // Capture prior task before overwriting so we can emit context_updated
+  // if (and only if) the task string materially changed.
+  const prevContext = readContext(collabDir, sessionId);
+  const prevTask = prevContext ? (prevContext.task || null) : null;
+
   registerAgent(collabDir, sessionId);
   writeContext(collabDir, sessionId, payload);
+
+  // Emit context_updated when the task string changes (first set OR rename).
+  // Phase 3 bridge subscribes to this to rename Discord threads without
+  // diffing context files. Non-urgent, broadcast; default mirror policy
+  // routes it to 'rename_thread'. Pre-Phase-3 consumers ignore unknown types.
+  if (config.BUS_ENABLED && prevTask !== payload.task) {
+    try {
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent(sessionId, 'all', 'context_updated',
+          payload.task,
+          { prev_task: prevTask, new_task: payload.task }));
+      });
+    } catch (err) {
+      process.stderr.write('[collab/context] context_updated append failed: ' + (err.message || err) + '\n');
+    }
+  }
   if (stripped.length > 0) {
     const formatted = stripped.map(e => e.prefix + e.path).join(', ');
     let message = `Removed files already claimed by other agents: ${formatted}.`;

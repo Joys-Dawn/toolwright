@@ -11,7 +11,13 @@ const SYNTHETIC_SENDER = RESERVED_SYNTHETIC_SENDER;
 const EVENT_TYPES = new Set([
   'note', 'finding', 'decision', 'blocker', 'handoff', 'file_freed',
   'user_message', 'interest', 'ack',
-  'session_started', 'session_ended', 'delivery_failed'
+  'session_started', 'session_ended', 'delivery_failed',
+  // Phase 3 (Discord bridge):
+  //   'rate_limited'    — diagnostic, emitted by bridge when Discord 429 bucket overflows
+  //   'context_updated' — emitted by scripts/context.js when a session's task string changes;
+  //                       bridge subscribes to this for thread-rename decisions without diffing
+  //                       context files. Both are non-urgent (observability-oriented).
+  'rate_limited', 'context_updated'
 ]);
 
 const URGENT_TYPES = new Set([

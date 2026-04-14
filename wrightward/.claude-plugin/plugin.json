@@ -1,15 +1,21 @@
 {
   "name": "wrightward",
-  "version": "3.1.1",
+  "version": "3.2.0",
   "description": "Multi-agent coordination and message bus for Claude Code",
   "author": {
     "name": "yiann"
   },
   "license": "Apache-2.0",
-  "keywords": ["multi-agent", "collaboration", "bus", "coordination"],
+  "keywords": ["multi-agent", "collaboration", "bus", "coordination", "discord"],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "channels": [
     { "server": "wrightward-bus" }
-  ]
+  ],
+  "userConfig": {
+    "discord_bot_token": {
+      "description": "Discord bot token. Leave blank to run wrightward without Discord (Phases 1-2 behavior unchanged).",
+      "sensitive": true
+    }
+  }
 }

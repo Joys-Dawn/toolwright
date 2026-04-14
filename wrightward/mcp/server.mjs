@@ -18,10 +18,12 @@ import { createSessionBinder } from './session-bind.mjs';
 import { getToolDefinitions, handleToolCall } from './tools.mjs';
 import { createWatcher } from './file-watcher.mjs';
 import { ring } from './channel-doorbell.mjs';
+import { createBridgeOrchestrator } from '../broker/bridge-orchestrator.mjs';
 
 const require = createRequire(import.meta.url);
 const { resolveCollabDir } = require('../lib/collab-dir');
 const { loadConfig } = require('../lib/config');
+const { resolveBotToken } = require('../lib/discord-token');
 
 async function main() {
   // Resolve project root by walking up from cwd
@@ -44,7 +46,7 @@ async function main() {
 
   // Create MCP server
   const server = new Server(
-    { name: 'wrightward-bus', version: '3.1.1' },
+    { name: 'wrightward-bus', version: '3.2.0' },
     {
       capabilities: {
         tools: {},
@@ -102,9 +104,23 @@ async function main() {
   watcher.start();
   process.stderr.write('[wrightward-mcp] channel doorbell watcher started\n');
 
+  // Phase 3 Discord bridge: spawn the bridge child if discord is ENABLED and
+  // the bot token is available. Respects the persistent circuit breaker and
+  // the single-owner lockfile. If another MCP already owns the bridge, we
+  // simply observe. Heartbeat retakes an orphaned lock within ~5s.
+  const bridgeOrchestrator = createBridgeOrchestrator(collabDir, () => ({
+    sessionId: binder.getSessionId(),
+    cwd: root,
+    discordEnabled: Boolean(config.discord && config.discord.ENABLED),
+    busEnabled: config.BUS_ENABLED,
+    botToken: resolveBotToken()
+  }));
+  bridgeOrchestrator.start();
+
   // Graceful shutdown
   process.on('SIGTERM', () => {
     process.stderr.write('[wrightward-mcp] SIGTERM received, shutting down\n');
+    try { bridgeOrchestrator.shutdown(); } catch (_) {}
     watcher.close();
     binder.cleanup();
     process.exit(0);
