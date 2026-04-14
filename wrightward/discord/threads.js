@@ -127,12 +127,51 @@ function createThreads(collabDir, api, forumChannelId) {
     return Object.keys(readIndex(collabDir));
   }
 
+  /**
+   * Deletes archived threads whose archived_at is older than `olderThanTs`
+   * (a ms epoch). Entries without archived_at are skipped — only archived
+   * threads are candidates. Returns { deleted: string[], failed: {sid, error}[], skipped: string[] }.
+   *
+   * Idempotent per-thread: 404 (already deleted) and 403 (missing permission
+   * on a thread we no longer own) are treated as "done" and remove the entry
+   * from the local index so we don't keep retrying a dead reference.
+   */
+  async function pruneArchivedBefore(olderThanTs) {
+    const idx = readIndex(collabDir);
+    const deleted = [];
+    const failed = [];
+    const skipped = [];
+    for (const [sid, entry] of Object.entries(idx)) {
+      if (!entry || !entry.thread_id) { skipped.push(sid); continue; }
+      if (!entry.archived_at || entry.archived_at > olderThanTs) {
+        skipped.push(sid);
+        continue;
+      }
+      try {
+        await api.deleteThread(entry.thread_id);
+        delete idx[sid];
+        deleted.push(sid);
+      } catch (err) {
+        const status = err && err.status;
+        if (err instanceof DiscordApiError && (status === 404 || status === 403)) {
+          delete idx[sid];
+          deleted.push(sid);
+        } else {
+          failed.push({ sid, error: (err && err.message) || String(err) });
+        }
+      }
+    }
+    writeIndex(collabDir, idx);
+    return { deleted, failed, skipped };
+  }
+
   return {
     ensureThreadForSession,
     renameThread,
     archiveThread: archiveThreadForSession,
     getThreadIdFor,
-    listSessions
+    listSessions,
+    pruneArchivedBefore
   };
 }
 

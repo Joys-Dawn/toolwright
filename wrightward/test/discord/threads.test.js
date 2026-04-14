@@ -13,7 +13,8 @@ function makeMockApi() {
   const calls = {
     createForumThread: [],
     editChannel: [],
-    archiveThread: []
+    archiveThread: [],
+    deleteThread: []
   };
   let threadCounter = 100;
   const api = {
@@ -26,6 +27,9 @@ function makeMockApi() {
     },
     async archiveThread(threadId) {
       calls.archiveThread.push({ threadId });
+    },
+    async deleteThread(threadId) {
+      calls.deleteThread.push({ threadId });
     }
   };
   api.calls = calls;
@@ -279,6 +283,158 @@ describe('discord/threads', () => {
         await threads.ensureThreadForSession('sess-a', 'task');
         await assert.rejects(() => threads.archiveThread('sess-a'),
           (err) => err.status === 500);
+      });
+    });
+
+    describe('pruneArchivedBefore', () => {
+      it('deletes archived threads older than the cutoff and removes them from the index', async () => {
+        const api = makeMockApi();
+        const threads = createThreads(collabDir, api, 'forum-1');
+        await threads.ensureThreadForSession('sess-old', 'long-finished');
+        await threads.archiveThread('sess-old');
+
+        // Pretend the archive happened in the past — bridge.archiveThread
+        // stamps Date.now(); back-date by mutating the index directly.
+        const idxPath = indexPath(collabDir);
+        const idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
+        const originalThreadId = idx['sess-old'].thread_id;
+        idx['sess-old'].archived_at = Date.now() - 30 * 24 * 60 * 60 * 1000; // 30 days ago
+        fs.writeFileSync(idxPath, JSON.stringify(idx));
+
+        const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000; // older than 7 days
+        const result = await threads.pruneArchivedBefore(cutoff);
+
+        assert.deepEqual(result.deleted, ['sess-old']);
+        assert.deepEqual(result.failed, []);
+        assert.deepEqual(result.skipped, []);
+        assert.equal(api.calls.deleteThread.length, 1);
+        assert.equal(api.calls.deleteThread[0].threadId, originalThreadId);
+        // Index entry must be removed so we don't keep retrying a dead thread.
+        assert.equal(readIndex(collabDir)['sess-old'], undefined);
+      });
+
+      it('skips entries that are not archived', async () => {
+        // Live (un-archived) threads must never be deleted by prune — only
+        // archived_at-stamped entries are candidates.
+        const api = makeMockApi();
+        const threads = createThreads(collabDir, api, 'forum-1');
+        await threads.ensureThreadForSession('sess-live', 'in-progress');
+
+        const result = await threads.pruneArchivedBefore(Date.now());
+        assert.deepEqual(result.deleted, []);
+        assert.deepEqual(result.skipped, ['sess-live']);
+        assert.equal(api.calls.deleteThread.length, 0);
+        assert.ok(readIndex(collabDir)['sess-live'], 'live entry must remain');
+      });
+
+      it('skips archived entries newer than the cutoff', async () => {
+        const api = makeMockApi();
+        const threads = createThreads(collabDir, api, 'forum-1');
+        await threads.ensureThreadForSession('sess-recent', 'task');
+        await threads.archiveThread('sess-recent');
+
+        // Cutoff = 1 hour ago; entry archived just now → newer than cutoff → skip.
+        const result = await threads.pruneArchivedBefore(Date.now() - 60 * 60 * 1000);
+        assert.deepEqual(result.deleted, []);
+        assert.deepEqual(result.skipped, ['sess-recent']);
+        assert.equal(api.calls.deleteThread.length, 0);
+      });
+
+      it('treats Discord 404 (already deleted) as success and removes the index entry', async () => {
+        // Discord may have purged the thread under us. Idempotent path: we
+        // don't keep retrying a dead reference — drop it from the local map.
+        const api = makeMockApi();
+        api.deleteThread = async () => { throw new DiscordApiError(404, 'Unknown Channel'); };
+        const threads = createThreads(collabDir, api, 'forum-1');
+        await threads.ensureThreadForSession('sess-gone', 'task');
+        await threads.archiveThread('sess-gone');
+        const idxPath = indexPath(collabDir);
+        const idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
+        idx['sess-gone'].archived_at = 1; // way before cutoff
+        fs.writeFileSync(idxPath, JSON.stringify(idx));
+
+        const result = await threads.pruneArchivedBefore(Date.now());
+        assert.deepEqual(result.deleted, ['sess-gone']);
+        assert.deepEqual(result.failed, []);
+        assert.equal(readIndex(collabDir)['sess-gone'], undefined);
+      });
+
+      it('treats Discord 403 (lost permission) as success and removes the index entry', async () => {
+        // If the bot was kicked or its role was downgraded, DELETE returns
+        // 403 — we can't manage the thread anymore, so drop it locally.
+        const api = makeMockApi();
+        api.deleteThread = async () => { throw new DiscordApiError(403, 'Missing Access'); };
+        const threads = createThreads(collabDir, api, 'forum-1');
+        await threads.ensureThreadForSession('sess-noperm', 'task');
+        await threads.archiveThread('sess-noperm');
+        const idxPath = indexPath(collabDir);
+        const idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
+        idx['sess-noperm'].archived_at = 1;
+        fs.writeFileSync(idxPath, JSON.stringify(idx));
+
+        const result = await threads.pruneArchivedBefore(Date.now());
+        assert.deepEqual(result.deleted, ['sess-noperm']);
+        assert.equal(readIndex(collabDir)['sess-noperm'], undefined);
+      });
+
+      it('records other API errors in failed[] without removing the entry', async () => {
+        // 500/network/etc. are transient — keep the entry so a future prune
+        // can retry. Anything we can't classify as "permanently gone" stays.
+        const api = makeMockApi();
+        api.deleteThread = async () => { throw new DiscordApiError(500, 'server error'); };
+        const threads = createThreads(collabDir, api, 'forum-1');
+        await threads.ensureThreadForSession('sess-flaky', 'task');
+        await threads.archiveThread('sess-flaky');
+        const idxPath = indexPath(collabDir);
+        const idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
+        idx['sess-flaky'].archived_at = 1;
+        fs.writeFileSync(idxPath, JSON.stringify(idx));
+
+        const result = await threads.pruneArchivedBefore(Date.now());
+        assert.deepEqual(result.deleted, []);
+        assert.equal(result.failed.length, 1);
+        assert.equal(result.failed[0].sid, 'sess-flaky');
+        assert.match(result.failed[0].error, /server error/);
+        // Entry remains so the next prune can retry.
+        assert.ok(readIndex(collabDir)['sess-flaky']);
+      });
+
+      it('processes a mixed batch — deleted, skipped, failed reported separately', async () => {
+        let callIdx = 0;
+        const api = makeMockApi();
+        api.deleteThread = async () => {
+          // First archived candidate: succeeds. Second: 500.
+          callIdx++;
+          if (callIdx === 2) throw new DiscordApiError(500, 'transient');
+          return null;
+        };
+        const threads = createThreads(collabDir, api, 'forum-1');
+        await threads.ensureThreadForSession('sess-1', 't');
+        await threads.ensureThreadForSession('sess-2', 't');
+        await threads.ensureThreadForSession('sess-3', 't');
+        await threads.archiveThread('sess-1');
+        await threads.archiveThread('sess-2');
+        // sess-3 stays live (un-archived) → must be skipped, not deleted.
+
+        const idxPath = indexPath(collabDir);
+        const idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
+        idx['sess-1'].archived_at = 1;
+        idx['sess-2'].archived_at = 1;
+        fs.writeFileSync(idxPath, JSON.stringify(idx));
+
+        const result = await threads.pruneArchivedBefore(Date.now());
+        assert.deepEqual(result.deleted, ['sess-1']);
+        assert.equal(result.failed.length, 1);
+        assert.equal(result.failed[0].sid, 'sess-2');
+        assert.deepEqual(result.skipped, ['sess-3']);
+      });
+
+      it('returns empty arrays when the index is empty', async () => {
+        const api = makeMockApi();
+        const threads = createThreads(collabDir, api, 'forum-1');
+        const result = await threads.pruneArchivedBefore(Date.now());
+        assert.deepEqual(result, { deleted: [], failed: [], skipped: [] });
+        assert.equal(api.calls.deleteThread.length, 0);
       });
     });
 

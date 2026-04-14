@@ -7,6 +7,8 @@ const {
   SESSION_ID_PATTERN,
   RESERVED_SYNTHETIC_SENDER,
   BRIDGE_SESSION_ID,
+  USER_AUDIENCE,
+  BROADCAST_TARGETS,
   RESERVED_SESSION_IDS,
   SHORT_ID_LEN
 } = require('../../lib/constants');
@@ -86,6 +88,14 @@ describe('validateSessionId', () => {
     // reject it so no real session can masquerade as the bridge.
     assert.throws(() => validateSessionId(BRIDGE_SESSION_ID), /reserved/);
   });
+
+  it('rejects USER_AUDIENCE for real session paths', () => {
+    // wrightward_send_message uses to:"user" as a Discord-only audience. The
+    // literal string "user" passes SESSION_ID_PATTERN, so without an explicit
+    // reservation a session could register under sessionId="user" and have
+    // matchesSession route every Discord-only reply into its inbox.
+    assert.throws(() => validateSessionId(USER_AUDIENCE), /reserved/);
+  });
 });
 
 describe('RESERVED_SESSION_IDS', () => {
@@ -97,11 +107,34 @@ describe('RESERVED_SESSION_IDS', () => {
     assert.ok(RESERVED_SESSION_IDS.has(BRIDGE_SESSION_ID));
   });
 
+  it('includes USER_AUDIENCE', () => {
+    assert.ok(RESERVED_SESSION_IDS.has(USER_AUDIENCE));
+  });
+
   it('BRIDGE_SESSION_ID is a syntactically valid session-id shape', () => {
     // The bookmark path builder uses sessionId as a filename component and
     // does not re-validate — so __bridge__ must match SESSION_ID_PATTERN to
     // form a legal path, even though validateSessionId rejects it.
     assert.equal(SESSION_ID_PATTERN.test(BRIDGE_SESSION_ID), true);
+  });
+
+  it('USER_AUDIENCE = "user" — pin the wire-format value', () => {
+    // Changing this string is a cross-module break: wrightward_send_message's
+    // tool description, README docs, and mirror-policy's BROADCAST_TARGETS
+    // all advertise the literal "user". Pin it.
+    assert.equal(USER_AUDIENCE, 'user');
+  });
+});
+
+describe('BROADCAST_TARGETS', () => {
+  it('contains "all" and USER_AUDIENCE — single source of truth', () => {
+    // mirror-policy uses this set to decide thread-vs-broadcast routing in
+    // decide(); mcp/tools.mjs imports the same set instead of redeclaring it.
+    // If a third broadcast-only target is added in the future, BOTH consumers
+    // pick it up automatically.
+    assert.ok(BROADCAST_TARGETS.has('all'));
+    assert.ok(BROADCAST_TARGETS.has(USER_AUDIENCE));
+    assert.equal(BROADCAST_TARGETS.size, 2);
   });
 });
 

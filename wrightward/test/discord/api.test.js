@@ -213,6 +213,29 @@ describe('discord/api', () => {
       await api.archiveThread('thread-1');
       assert.deepEqual(JSON.parse(fetch.calls[0].init.body), { archived: true });
     });
+
+    it('deleteThread DELETEs /channels/:id with no body', async () => {
+      // Permanent thread delete is irreversible, so verify the wire shape:
+      // DELETE method, channel-scoped path, NO body. The bridge prune flow
+      // calls this on user-confirmed cleanup of old archived threads.
+      const fetch = makeMockFetch([{ status: 204, headers: {} }]);
+      const api = createApi('tok', { fetch });
+      await api.deleteThread('thread-old');
+      assert.equal(fetch.calls[0].init.method, 'DELETE');
+      assert.match(fetch.calls[0].url, /\/channels\/thread-old$/);
+      assert.equal(fetch.calls[0].init.body, undefined,
+        'DELETE must not include a request body');
+    });
+
+    it('deleteThread URL-encodes the thread id', async () => {
+      const fetch = makeMockFetch([{ status: 204, headers: {} }]);
+      const api = createApi('tok', { fetch });
+      // Discord IDs are snowflakes (digits) so encoding is normally a no-op,
+      // but pin the encoding behavior so a future caller passing a path-shape
+      // string can't slip a traversal past the wrapper.
+      await api.deleteThread('a/b');
+      assert.match(fetch.calls[0].url, /\/channels\/a%2Fb$/);
+    });
   });
 
   describe('rate-limit handling', () => {

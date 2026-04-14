@@ -20,7 +20,7 @@
 const DEFAULT_BASE = 'https://discord.com/api/v10';
 // User-Agent MUST start with 'DiscordBot' per Discord's API reference —
 // generic UAs are Cloudflare-blocked with misleading errors.
-const USER_AGENT = 'DiscordBot (https://github.com/Joys-Dawn/toolwright, 3.2.1)';
+const USER_AGENT = 'DiscordBot (https://github.com/Joys-Dawn/toolwright, 3.3.0)';
 const MAX_RETRIES = 5;
 // Auto-archive duration is an enum — arbitrary values are rejected with 400.
 const ALLOWED_AUTO_ARCHIVE = new Set([60, 1440, 4320, 10080]);
@@ -296,12 +296,20 @@ function createApi(botToken, options) {
     return editChannel(threadId, { archived: true });
   }
 
+  // Permanent delete — use for purging old archived threads. Unlike archive
+  // this cannot be undone; intended for operator-driven cleanup via the
+  // wrightward_bridge_prune_threads MCP tool, not automatic lifecycle.
+  async function deleteThread(threadId) {
+    return request('DELETE', '/channels/' + encodeURIComponent(threadId));
+  }
+
   return {
     postMessage,
     getMessagesAfter,
     createForumThread,
     editChannel,
     archiveThread,
+    deleteThread,
     // For testability + diagnostics — do not expose publicly.
     _state: {
       getBuckets: () => new Map(buckets),

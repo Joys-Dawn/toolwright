@@ -326,7 +326,14 @@ async function main() {
     try { watcher.close(); } catch (_) {}
     try { inbound.stop(); } catch (_) {}
     try { clearInterval(parentTimer); } catch (_) {}
-    // Give the queue a brief moment to flush so in-flight mirrors complete.
+    // Drain: cleanup.js appends session_ended to bus.jsonl in parallel with
+    // MCP shutdown, so the file-watcher may never fire for it before we're
+    // told to exit. Enqueue one final tick to catch + mirror it (and archive
+    // the thread) before shutting down.
+    queue = queue.then(() => runOutboundTick(collabDir, policy, api, threads, config)
+      .catch((err) => appendLog(collabDir, '[bridge] drain tick: ' +
+        redactTokens(err.message || String(err)))));
+    // Give the queue a brief moment to flush in-flight + drain tick.
     Promise.race([
       queue,
       new Promise((r) => setTimeout(r, 2000))

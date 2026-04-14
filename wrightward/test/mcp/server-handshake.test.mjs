@@ -71,13 +71,14 @@ describe('integration: MCP server handshake', () => {
 
     const result = await client.listTools();
     assert.ok(Array.isArray(result.tools), 'tools/list should return an array');
-    assert.equal(result.tools.length, 6, 'expected 6 tools');
+    assert.equal(result.tools.length, 7, 'expected 7 tools');
     const names = result.tools.map(t => t.name).sort();
     assert.deepEqual(names, [
       'wrightward_ack',
       'wrightward_bus_status',
       'wrightward_list_inbox',
       'wrightward_send_handoff',
+      'wrightward_send_message',
       'wrightward_send_note',
       'wrightward_watch_file'
     ]);
@@ -103,7 +104,7 @@ describe('integration: MCP server handshake', () => {
     assert.ok(elapsed < 2000, 'handshake took ' + elapsed + 'ms (should be <2000)');
 
     const result = await client.listTools();
-    assert.equal(result.tools.length, 6);
+    assert.equal(result.tools.length, 7);
 
     await client.close();
     await transport.close();

@@ -17,9 +17,24 @@ const RESERVED_SYNTHETIC_SENDER = 'wrightward:runtime';
 // real session paths (context, agent registration, createEvent `from`).
 const BRIDGE_SESSION_ID = '__bridge__';
 
+// Reserved audience target for wrightward_send_message: routes a bus event
+// to the Discord broadcast channel only, never matching any real session in
+// matchesSession. Reserved here (not just in mirror-policy) so a misconfigured
+// or hostile session cannot register under sessionId="user" and intercept
+// agent_message events meant for the human user. SESSION_ID_PATTERN happily
+// accepts "user", so an explicit reservation is required.
+const USER_AUDIENCE = 'user';
+
+// Reserved `to` values that route a bus event to the Discord broadcast
+// channel rather than a per-session thread. 'all' is the bus's pre-existing
+// broadcast target; 'user' is the Discord-only audience added in v3.3.0.
+// Single source of truth — mirror-policy uses it for thread-vs-broadcast
+// routing, and mcp/tools.mjs uses it to label agent_message audiences.
+const BROADCAST_TARGETS = new Set(['all', USER_AUDIENCE]);
+
 // Peer set of IDs that are syntactically valid session-id shapes but are
 // reserved for wrightward-internal use. validateSessionId walks this set.
-const RESERVED_SESSION_IDS = new Set([RESERVED_SYNTHETIC_SENDER, BRIDGE_SESSION_ID]);
+const RESERVED_SESSION_IDS = new Set([RESERVED_SYNTHETIC_SENDER, BRIDGE_SESSION_ID, USER_AUDIENCE]);
 
 function validateSessionId(sessionId) {
   if (!sessionId || !SESSION_ID_PATTERN.test(sessionId)) {
@@ -52,6 +67,8 @@ module.exports = {
   SESSION_ID_PATTERN,
   RESERVED_SYNTHETIC_SENDER,
   BRIDGE_SESSION_ID,
+  USER_AUDIENCE,
+  BROADCAST_TARGETS,
   RESERVED_SESSION_IDS,
   validateSessionId,
   isWriteTool,

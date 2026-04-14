@@ -34,7 +34,7 @@ describe('mcp/tools', () => {
   });
 
   describe('getToolDefinitions', () => {
-    it('returns 6 tools', () => {
+    it('returns 7 tools', () => {
       const tools = getToolDefinitions();
       const names = tools.map(t => t.name).sort();
       assert.deepEqual(names, [
@@ -42,6 +42,7 @@ describe('mcp/tools', () => {
         'wrightward_bus_status',
         'wrightward_list_inbox',
         'wrightward_send_handoff',
+        'wrightward_send_message',
         'wrightward_send_note',
         'wrightward_watch_file',
       ]);
@@ -291,6 +292,89 @@ describe('mcp/tools', () => {
     });
   });
 
+  describe('wrightward_send_message', () => {
+    function readEvents() {
+      return fs.readFileSync(busPath(collabDir), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+    }
+
+    it('appends agent_message to bus with audience="user"', () => {
+      const result = handleToolCall('wrightward_send_message',
+        { body: 'hi user', audience: 'user' }, collabDir, 'sess-1', config, tmpDir);
+      const data = JSON.parse(result.content[0].text);
+      assert.ok(data.id);
+
+      const evt = readEvents().find(e => e.type === 'agent_message');
+      assert.ok(evt);
+      assert.equal(evt.from, 'sess-1');
+      assert.equal(evt.to, 'user');
+      assert.equal(evt.body, 'hi user');
+    });
+
+    it('appends agent_message with audience="all"', () => {
+      handleToolCall('wrightward_send_message',
+        { body: 'broadcast', audience: 'all' }, collabDir, 'sess-1', config, tmpDir);
+      const evt = readEvents().find(e => e.type === 'agent_message');
+      assert.equal(evt.to, 'all');
+    });
+
+    it('appends agent_message with audience as a sessionId', () => {
+      handleToolCall('wrightward_send_message',
+        { body: 'hey peer', audience: 'sess-2' }, collabDir, 'sess-1', config, tmpDir);
+      const evt = readEvents().find(e => e.type === 'agent_message');
+      assert.equal(evt.to, 'sess-2');
+    });
+
+    it('audience="all" lands in another agent\'s urgent inbox', () => {
+      // The whole point of audience:"all" is that other agents see it via
+      // Path 1 (inbox listing). agent_message must therefore be URGENT, and
+      // matchesSession must accept "all" — pin both with one round-trip test.
+      registerAgent(collabDir, 'sess-2');
+      handleToolCall('wrightward_send_message',
+        { body: 'team status', audience: 'all' }, collabDir, 'sess-1', config, tmpDir);
+      const result = handleToolCall('wrightward_list_inbox', {}, collabDir, 'sess-2', config, tmpDir);
+      const data = JSON.parse(result.content[0].text);
+      const found = data.events.find(e => e.type === 'agent_message');
+      assert.ok(found, 'sess-2 should see agent_message broadcast in inbox');
+      assert.equal(found.body, 'team status');
+    });
+
+    it('audience="user" does NOT appear in any other agent\'s inbox', () => {
+      // Reserved "user" audience must be invisible to bus consumers — only
+      // the Discord bridge mirrors it, and that's verified in mirror-policy
+      // tests, not here.
+      registerAgent(collabDir, 'sess-2');
+      handleToolCall('wrightward_send_message',
+        { body: 'private reply', audience: 'user' }, collabDir, 'sess-1', config, tmpDir);
+      const result = handleToolCall('wrightward_list_inbox', {}, collabDir, 'sess-2', config, tmpDir);
+      const data = JSON.parse(result.content[0].text);
+      assert.equal(data.events.filter(e => e.type === 'agent_message').length, 0);
+    });
+
+    it('audience=<sessionId> lands in that session\'s inbox only', () => {
+      registerAgent(collabDir, 'sess-2');
+      registerAgent(collabDir, 'sess-3');
+      handleToolCall('wrightward_send_message',
+        { body: 'just for you', audience: 'sess-2' }, collabDir, 'sess-1', config, tmpDir);
+
+      const r2 = handleToolCall('wrightward_list_inbox', {}, collabDir, 'sess-2', config, tmpDir);
+      assert.equal(JSON.parse(r2.content[0].text).events.filter(e => e.type === 'agent_message').length, 1);
+
+      const r3 = handleToolCall('wrightward_list_inbox', {}, collabDir, 'sess-3', config, tmpDir);
+      assert.equal(JSON.parse(r3.content[0].text).events.filter(e => e.type === 'agent_message').length, 0);
+    });
+
+    it('sender does not see their own agent_message in their inbox', () => {
+      // matchesSession excludes events whose `from` equals the asker — pin
+      // that here so a future audience-routing rewrite doesn't accidentally
+      // create an inbox echo loop.
+      handleToolCall('wrightward_send_message',
+        { body: 'self', audience: 'all' }, collabDir, 'sess-1', config, tmpDir);
+      const result = handleToolCall('wrightward_list_inbox', {}, collabDir, 'sess-1', config, tmpDir);
+      const data = JSON.parse(result.content[0].text);
+      assert.equal(data.events.filter(e => e.type === 'agent_message').length, 0);
+    });
+  });
+
   describe('wrightward_bus_status', () => {
     it('returns status with bound session', () => {
       const result = handleToolCall('wrightward_bus_status', {}, collabDir, 'sess-1', config, tmpDir);
@@ -403,6 +487,30 @@ describe('mcp/tools', () => {
 
     it('watch_file rejects missing file', () => {
       assert.ok(callError('wrightward_watch_file', {}));
+    });
+
+    it('send_message rejects missing body', () => {
+      const err = callError('wrightward_send_message', { audience: 'user' });
+      assert.ok(err);
+      assert.match(err, /body/);
+    });
+
+    it('send_message rejects empty body', () => {
+      const err = callError('wrightward_send_message', { body: '', audience: 'user' });
+      assert.ok(err);
+      assert.match(err, /body/);
+    });
+
+    it('send_message rejects missing audience', () => {
+      const err = callError('wrightward_send_message', { body: 'hi' });
+      assert.ok(err);
+      assert.match(err, /audience/);
+    });
+
+    it('send_message rejects empty audience', () => {
+      const err = callError('wrightward_send_message', { body: 'hi', audience: '' });
+      assert.ok(err);
+      assert.match(err, /audience/);
     });
   });
 

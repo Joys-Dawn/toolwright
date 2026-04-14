@@ -9,6 +9,7 @@ const {
   mergePolicy,
   decide
 } = require('../../lib/mirror-policy');
+const { BROADCAST_TARGETS } = require('../../lib/constants');
 
 describe('mirror-policy', () => {
   describe('DEFAULT_POLICY', () => {
@@ -105,6 +106,39 @@ describe('mirror-policy', () => {
       const r = decide(ev('context_updated', 'all', 'sess-A'));
       assert.equal(r.action, 'rename_thread');
       assert.equal(r.target_session_id, 'sess-A');
+    });
+
+    it('agent_message to a sessionId → post_thread targeted at recipient', () => {
+      const r = decide(ev('agent_message', 'sess-A', 'sess-B'));
+      assert.equal(r.action, 'post_thread');
+      assert.equal(r.target_session_id, 'sess-A');
+    });
+
+    it('agent_message to "all" → post_broadcast (broadcast fallback)', () => {
+      const r = decide(ev('agent_message', 'all', 'sess-A'));
+      assert.equal(r.action, 'post_broadcast');
+      assert.equal(r.target_session_id, undefined);
+    });
+
+    it('agent_message to "user" → post_broadcast (Discord-only reply)', () => {
+      // "user" is a reserved audience that no real session matches in
+      // matchesSession, so the bridge MUST fall through to the broadcast
+      // channel rather than try to ensure a thread for sessionId="user".
+      const r = decide(ev('agent_message', 'user', 'sess-A'));
+      assert.equal(r.action, 'post_broadcast');
+      assert.equal(r.target_session_id, undefined);
+    });
+
+    it('post_thread fallback respects every BROADCAST_TARGETS entry', () => {
+      // Pin the contract: any string in BROADCAST_TARGETS must NOT be treated
+      // as a sessionId — it has to fall through to broadcast. Adding a new
+      // broadcast target without updating decide() would break this.
+      for (const target of BROADCAST_TARGETS) {
+        const r = decide(ev('user_message', target, 'sess-A'));
+        assert.equal(r.action, 'post_broadcast',
+          `target "${target}" should fall through to broadcast`);
+        assert.equal(r.target_session_id, undefined);
+      }
     });
 
     it('interest/ack/delivery_failed/rate_limited → never', () => {

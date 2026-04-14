@@ -17,11 +17,15 @@ const EVENT_TYPES = new Set([
   //   'context_updated' — emitted by scripts/context.js when a session's task string changes;
   //                       bridge subscribes to this for thread-rename decisions without diffing
   //                       context files. Both are non-urgent (observability-oriented).
-  'rate_limited', 'context_updated'
+  //   'agent_message'   — emitted by wrightward_send_message; mirrors to Discord and (when
+  //                       audience='all' or a sessionId) appears in recipient inboxes. URGENT
+  //                       so the inbox-listing + doorbell paths actually surface it.
+  'rate_limited', 'context_updated', 'agent_message'
 ]);
 
 const URGENT_TYPES = new Set([
-  'handoff', 'file_freed', 'user_message', 'blocker', 'delivery_failed'
+  'handoff', 'file_freed', 'user_message', 'blocker', 'delivery_failed',
+  'agent_message'
 ]);
 
 /**

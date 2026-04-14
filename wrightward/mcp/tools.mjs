@@ -14,7 +14,7 @@ const require = createRequire(import.meta.url);
 const { withAgentsLock } = require('../lib/agents');
 const { readBookmark, append, appendBatch } = require('../lib/bus-log');
 const { listInbox, writeInterest, writeAck, buildFileFreedEvents } = require('../lib/bus-query');
-const { createEvent } = require('../lib/bus-schema');
+const { createEvent, URGENT_TYPES } = require('../lib/bus-schema');
 const { readContext, writeContext } = require('../lib/context');
 const { getAllClaimedFiles } = require('../lib/session-state');
 const { projectRelative } = require('../lib/path-normalize');
@@ -23,11 +23,6 @@ const { readInboxFresh, advanceBookmark } = require('../lib/bus-delivery');
 
 // Path canonicalization now lives in lib/path-normalize.projectRelative so
 // MCP tools, guard.js, and any future caller all converge on the same key.
-
-// Urgent event types accepted by wrightward_list_inbox. Mirrored from the tool
-// description so the validator can reject unknown filter types up-front
-// instead of silently returning [].
-const URGENT_TYPES = new Set(['handoff', 'file_freed', 'user_message', 'blocker', 'delivery_failed']);
 
 function validateListInboxArgs(args) {
   if (args.limit !== undefined) {
@@ -89,6 +84,15 @@ function validateSendHandoffArgs(args) {
 function validateWatchFileArgs(args) {
   if (typeof args.file !== 'string' || args.file.length === 0) {
     throw new Error('file must be a non-empty string');
+  }
+}
+
+function validateSendMessageArgs(args) {
+  if (typeof args.body !== 'string' || args.body.length === 0) {
+    throw new Error('body must be a non-empty string');
+  }
+  if (typeof args.audience !== 'string' || args.audience.length === 0) {
+    throw new Error('audience must be a non-empty string ("user", "all", or a sessionId)');
   }
 }
 
@@ -159,6 +163,18 @@ const TOOL_DEFINITIONS = [
     name: 'wrightward_bus_status',
     description: 'Get bus diagnostic information.',
     inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'wrightward_send_message',
+    description: 'Send a message via Discord. Use this to reply to the user when they have spoken to you in a Discord channel/thread (rather than the CLI). The Discord bridge must be running. Audience controls who else receives it: "user" replies to Discord only; "all" also broadcasts to every other active wrightward agent\'s inbox; a sessionId posts into that specific agent\'s Discord thread AND notifies them via the bus.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        body: { type: 'string', description: 'Message text. Truncated to 1800 chars in Discord.' },
+        audience: { type: 'string', description: '"user" (Discord-only reply), "all" (Discord broadcast + every active agent\'s inbox), or a target sessionId (that agent\'s thread + inbox)' }
+      },
+      required: ['body', 'audience']
+    }
   }
 ];
 
@@ -188,6 +204,8 @@ export function handleToolCall(toolName, args, collabDir, sessionId, config, pro
         return handleWatchFile(args, collabDir, sessionId, config, projectRoot);
       case 'wrightward_bus_status':
         return handleBusStatus(collabDir, sessionId);
+      case 'wrightward_send_message':
+        return handleSendMessage(args, collabDir, sessionId);
       default:
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown tool: ' + toolName }) }] };
     }
@@ -276,6 +294,23 @@ function handleSendNote(args, collabDir, sessionId, _config, projectRoot) {
   let id;
   withAgentsLock(collabDir, (token) => {
     const event = createEvent(sessionId, args.to || 'all', 'note', args.body, { files });
+    append(token, collabDir, event);
+    id = event.id;
+  });
+  return { content: [{ type: 'text', text: JSON.stringify({ id }) }] };
+}
+
+function handleSendMessage(args, collabDir, sessionId) {
+  validateSendMessageArgs(args);
+  // `audience` is passed straight to event.to. Reserved values "user" and
+  // "all" (constants.BROADCAST_TARGETS) route to the Discord broadcast channel
+  // via mirror-policy; any other string is treated as a sessionId and routed
+  // to that thread + inbox. Self-targeting (audience === own sessionId) is
+  // allowed: matchesSession suppresses inbox echo, and the bridge will post
+  // into the session's own thread, which is harmless.
+  let id;
+  withAgentsLock(collabDir, (token) => {
+    const event = createEvent(sessionId, args.audience, 'agent_message', args.body);
     append(token, collabDir, event);
     id = event.id;
   });

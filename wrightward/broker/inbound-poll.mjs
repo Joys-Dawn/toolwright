@@ -134,12 +134,19 @@ export function createInboundPoller(collabDir, api, options) {
 
   function processMessage(msg) {
     if (!msg || !msg.author) return 'skipped';
+    const msgId = msg.id || '?';
     // Bots never route — prevents the bridge from ingesting its own posts
     // OR other bots in the channel. Covers a big class of loop bugs.
     if (msg.author.bot === true) return 'skipped';
     // Empty allowlist means inbound is fully disabled — send-only mode.
-    if (allowedSenders.size === 0) return 'skipped';
-    if (!allowedSenders.has(msg.author.id)) return 'skipped';
+    if (allowedSenders.size === 0) {
+      log('[inbound] skip msg=' + msgId + ' reason=empty_allowlist (send-only mode)');
+      return 'skipped';
+    }
+    if (!allowedSenders.has(msg.author.id)) {
+      log('[inbound] skip msg=' + msgId + ' reason=sender_not_allowed author_id=' + msg.author.id);
+      return 'skipped';
+    }
 
     const roster = readAgents(collabDir);
     const raw = typeof msg.content === 'string' ? msg.content : '';
@@ -147,7 +154,15 @@ export function createInboundPoller(collabDir, api, options) {
     const redacted = redactTokens(raw);
     const clamped = clampUtf8(redacted, MAX_INBOUND_CONTENT_BYTES);
     const { routedTo, stripped, ambiguous } = parseMentions(clamped, roster);
-    if (!routedTo) return 'skipped';
+    if (!routedTo) {
+      // Most common cause: Message Content Intent is disabled in the dev
+      // portal, so Discord returns content='' for messages that don't
+      // natively mention the bot. Log content length so operators can tell
+      // "no @agent-<id> in message" apart from "empty payload".
+      log('[inbound] skip msg=' + msgId + ' reason=no_mention content_len=' +
+        raw.length + ' roster_size=' + roster.length);
+      return 'skipped';
+    }
 
     const body = stripped || '(empty)';
     const meta = {

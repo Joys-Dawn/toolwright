@@ -1,5 +1,7 @@
 'use strict';
 
+const { BROADCAST_TARGETS } = require('./constants');
+
 /**
  * Mirror policy for Phase 3 Discord bridge.
  *
@@ -24,6 +26,7 @@ const DEFAULT_POLICY = Object.freeze({
   file_freed:      { action: 'post_thread_if_targeted', severity: 'info' },
   session_started: { action: 'post_broadcast', severity: 'info' },
   session_ended:   { action: 'post_broadcast', severity: 'info' },
+  agent_message:   { action: 'post_thread', severity: 'info' },
   note:            { action: 'silent' },
   finding:         { action: 'silent' },
   decision:        { action: 'silent' },
@@ -108,7 +111,7 @@ function decide(event, policyConfig) {
     //   post_thread              → promote to broadcast (event stays visible)
     //   post_thread_if_targeted  → silent (e.g. file_freed to "all" is noise;
     //                              only targeted file_freed matters)
-    if (typeof event.to === 'string' && event.to !== 'all') {
+    if (typeof event.to === 'string' && !BROADCAST_TARGETS.has(event.to)) {
       return { action: 'post_thread', severity, target_session_id: event.to };
     }
     return {

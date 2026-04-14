@@ -91,6 +91,24 @@ describe('bus-schema', () => {
       assert.equal(e.type, 'context_updated');
     });
 
+    it('accepts Phase 3 agent_message event type with audience "user"', () => {
+      const e = createEvent('sess-1', 'user', 'agent_message', 'reply');
+      assert.equal(e.type, 'agent_message');
+      assert.equal(e.to, 'user');
+    });
+
+    it('accepts Phase 3 agent_message event type with audience "all"', () => {
+      const e = createEvent('sess-1', 'all', 'agent_message', 'broadcast');
+      assert.equal(e.type, 'agent_message');
+      assert.equal(e.to, 'all');
+    });
+
+    it('accepts Phase 3 agent_message event type targeted at a sessionId', () => {
+      const e = createEvent('sess-1', 'sess-2', 'agent_message', 'targeted');
+      assert.equal(e.type, 'agent_message');
+      assert.equal(e.to, 'sess-2');
+    });
+
     it('rejects BRIDGE_SESSION_ID as event from — bridge is not a real sender', () => {
       // Events originating from the bridge use SYNTHETIC_SENDER (runtime sender).
       // __bridge__ is a bookmark-only identifier; allowing it as `from` would
@@ -161,6 +179,15 @@ describe('bus-schema', () => {
 
     it('returns false for unrecognized to value', () => {
       const e = { from: 'sess-2', to: 'discord' };
+      assert.equal(matchesSession(e, 'sess-1'), false);
+    });
+
+    it('does not match reserved "user" audience (Discord-only target)', () => {
+      // wrightward_send_message uses to:"user" for Discord-only replies. The
+      // string is also reserved in constants.RESERVED_SESSION_IDS so no real
+      // session can register under it (see constants.test.js) — meaning
+      // matchesSession can never see sessionId="user" against this `to`.
+      const e = { from: 'sess-2', to: 'user' };
       assert.equal(matchesSession(e, 'sess-1'), false);
     });
   });
