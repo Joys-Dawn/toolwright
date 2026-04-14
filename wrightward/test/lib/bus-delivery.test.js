@@ -32,8 +32,8 @@ describe('bus-delivery', () => {
 
         const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
         assert.ok(result.text);
-        assert.ok(result.text.includes('Urgent messages'));
-        assert.ok(result.text.includes('take this over'));
+        assert.match(result.text, /Urgent messages/);
+        assert.match(result.text, /take this over/);
         assert.equal(result.eventCount, 1);
       });
     });
@@ -79,7 +79,7 @@ describe('bus-delivery', () => {
         const result = scanAndFormatInbox(token, collabDir, 'sess-1', { BUS_URGENT_INJECTION_CAP: 3 });
         assert.ok(result.text);
         assert.equal(result.eventCount, 10);
-        assert.ok(result.text.includes('7 more'));
+        assert.match(result.text, /7 more/);
       });
     });
 
@@ -101,15 +101,15 @@ describe('bus-delivery', () => {
         }
 
         const first = scanAndFormatInbox(token, collabDir, 'sess-1', { BUS_URGENT_INJECTION_CAP: 3 });
-        assert.ok(first.text.includes('msg-0'));
-        assert.ok(first.text.includes('msg-2'));
-        assert.ok(!first.text.includes('msg-3'), 'msg-3 is beyond cap, should not appear in first call');
+        assert.match(first.text, /msg-0/);
+        assert.match(first.text, /msg-2/);
+        assert.doesNotMatch(first.text, /msg-3/, 'msg-3 is beyond cap, should not appear in first call');
         assert.equal(first.eventCount, 7);
 
         const second = scanAndFormatInbox(token, collabDir, 'sess-1', { BUS_URGENT_INJECTION_CAP: 3 });
         assert.ok(second.text, 'second call must still have events');
-        assert.ok(second.text.includes('msg-3'), 'msg-3 (tail) must re-surface');
-        assert.ok(!second.text.includes('msg-0'), 'msg-0 was delivered, must not re-appear');
+        assert.match(second.text, /msg-3/, 'msg-3 (tail) must re-surface');
+        assert.doesNotMatch(second.text, /msg-0/, 'msg-0 was delivered, must not re-appear');
       });
     });
 
@@ -127,8 +127,8 @@ describe('bus-delivery', () => {
 
         const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
         assert.ok(result.text, 'post-compact scan should deliver new events');
-        assert.ok(result.text.includes('after-compact'));
-        assert.ok(!result.text.includes('before-compact'), 'already-delivered events must not re-appear after compact');
+        assert.match(result.text, /after-compact/);
+        assert.doesNotMatch(result.text, /before-compact/, 'already-delivered events must not re-appear after compact');
       });
     });
   });

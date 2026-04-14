@@ -61,7 +61,7 @@ describe('plan-exit hook', () => {
     const parsed = JSON.parse(output);
     assert.equal(parsed.hookSpecificOutput.hookEventName, 'PostToolUse');
     assert.equal(parsed.hookSpecificOutput.permissionDecision, 'allow');
-    assert.ok(parsed.hookSpecificOutput.additionalContext.includes('collab-context'));
+    assert.match(parsed.hookSpecificOutput.additionalContext, /collab-context/);
   });
 
   it('exits silently with no cwd', () => {

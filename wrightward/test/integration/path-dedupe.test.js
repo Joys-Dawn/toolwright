@@ -65,7 +65,7 @@ describe('integration: path dedupe', () => {
     assert.equal(first.exitCode, 0);
     assert.ok(first.stdout.length > 0, 'First call should inject context');
     const parsed1 = JSON.parse(first.stdout);
-    assert.ok(parsed1.hookSpecificOutput.additionalContext.includes('do this'), 'First call includes inbox');
+    assert.match(parsed1.hookSpecificOutput.additionalContext, /do this/, 'First call includes inbox');
 
     // Second guard call — inbox is consumed (bookmark advanced), but agent summary
     // may still inject (different hash since inbox portion is gone).
@@ -80,7 +80,7 @@ describe('integration: path dedupe', () => {
     if (second.stdout) {
       const parsed2 = JSON.parse(second.stdout);
       // Should NOT contain the handoff body again
-      assert.ok(!parsed2.hookSpecificOutput.additionalContext.includes('do this'),
+      assert.doesNotMatch(parsed2.hookSpecificOutput.additionalContext, /do this/,
         'Second call should NOT re-inject inbox events');
     }
   });

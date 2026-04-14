@@ -5,7 +5,7 @@ Three [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugins that
 | Plugin | What it does |
 |--------|-------------|
 | [agentwright](agentwright/) | Automated code audits that find and fix bugs, security issues, and bad practices. Also includes skills for planning, debugging, and testing. Run `/audit-run` and it does the rest. |
-| [wrightward](wrightward/) | Multi-agent context awareness — when two or more Claude Code sessions work in the same repo, wrightward injects context so each agent knows what the others are working on, what files they've claimed, and what functions they're touching. |
+| [wrightward](wrightward/) | Multi-agent coordination — when two or more Claude Code sessions work in the same repo, wrightward blocks conflicting writes, injects awareness context, and gives the sessions a peer-to-peer message bus (with six MCP tools) to hand off tasks, watch files, and wake each other up via Claude Code channels. |
 | [timewright](timewright/) | Undo for Claude's in-session source file changes — including Bash-driven mutations (file deletions, sed rewrites, git operations) that native `/rewind` misses. Type `/undo` to revert. |
 
 ## Installation

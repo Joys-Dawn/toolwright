@@ -61,13 +61,13 @@ describe('mcp/channel-doorbell', () => {
   describe('buildSummary', () => {
     it('uses singular wording for exactly one event', () => {
       const text = buildSummary(1);
-      assert.ok(text.includes('1 new wrightward bus event.'));
-      assert.ok(!text.includes('events'));
+      assert.match(text, /1 new wrightward bus event\./);
+      assert.doesNotMatch(text, /events/);
     });
 
     it('uses plural wording for two or more events', () => {
       const text = buildSummary(3);
-      assert.ok(text.includes('3 new wrightward bus events'));
+      assert.match(text, /3 new wrightward bus events/);
     });
   });
 
@@ -130,7 +130,7 @@ describe('mcp/channel-doorbell', () => {
       assert.equal(server.calls.length, 1);
       const frame = server.calls[0];
       assert.equal(frame.method, 'notifications/claude/channel');
-      assert.ok(frame.params.content.includes('1 new wrightward bus event.'));
+      assert.match(frame.params.content, /1 new wrightward bus event\./);
       assert.equal(frame.params.meta.source, 'wrightward-bus');
       assert.equal(frame.params.meta.pending_count, '1');
     });
@@ -147,7 +147,7 @@ describe('mcp/channel-doorbell', () => {
       assert.equal(result.pendingCount, 3);
       assert.equal(server.calls.length, 1);
       const frame = server.calls[0];
-      assert.ok(frame.params.content.includes('3 new wrightward bus events'));
+      assert.match(frame.params.content, /3 new wrightward bus events/);
       assert.equal(frame.params.meta.pending_count, '3');
     });
 
@@ -171,7 +171,7 @@ describe('mcp/channel-doorbell', () => {
       const result = await ring(server, collabDir, 'sess-1');
       assert.equal(result.pinged, false);
       assert.equal(result.reason, 'notification-error');
-      assert.ok(result.error.includes('pipe closed'));
+      assert.match(result.error, /pipe closed/);
     });
 
     it('returns read-error and does not notify when the lock cannot be acquired', async () => {

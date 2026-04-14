@@ -187,7 +187,8 @@ describe('integration: MCP server handshake', () => {
       'expected exactly one channel notification, got ' + channelNotifs.length +
       ' (all received: ' + JSON.stringify(received.map(n => n.method)) + ')');
     const params = channelNotifs[0].params;
-    assert.ok(typeof params.content === 'string' && params.content.includes('1 new wrightward bus event'),
+    assert.equal(typeof params.content, 'string');
+    assert.match(params.content, /1 new wrightward bus event/,
       'content should describe 1 new event, got: ' + params.content);
     assert.equal(params.meta.source, 'wrightward-bus');
     assert.equal(params.meta.pending_count, '1');

@@ -17,8 +17,9 @@ MCP servers provide their own usage instructions — check those for query synta
 | Domain | Primary tools | Notes |
 |--------|--------------|-------|
 | Academic research (CS, math, physics) | AlphaXiv (run all three search tools in parallel) | `full_text_papers_search`, `embedding_similarity_search`, `agentic_paper_retrieval` cover different blind spots |
-| Biomedical / life sciences | bioRxiv/medRxiv, Scholar Gateway | Use `server: "medrxiv"` for medical sciences |
-| Peer-reviewed literature | Scholar Gateway (`semanticSearch`) | Use full natural language queries, not keywords |
+| Biomedical literature | PubMed (`search_articles`, `get_article_metadata`, `get_full_text_article`, `find_related_articles`), bioRxiv/medRxiv (`search_preprints`, `get_preprint`), Scholar Gateway (`semanticSearch`) | Run in parallel — PubMed for peer-reviewed, bioRxiv for preprints (use `server: "medrxiv"` for medical sciences), Scholar Gateway for semantic cross-cutting queries. |
+| Biomedical datasets (not literature) | Synapse (`search_synapse`, `get_entity`, `get_entity_children`, `get_entity_annotations`) | Use for dataset/cohort discovery, not findings. Good for: resolving `syn...` IDs from papers, walking consortium projects (AMP-AD, PsychENCODE, CommonMind, Pan-Neuro), reading rich annotations (assay, tissue, platform, grant, normalization). Metadata-only — can't download files. |
+| Peer-reviewed literature (general) | Scholar Gateway (`semanticSearch`) | Use full natural language queries, not keywords |
 | Software / libraries / frameworks | Context7 (`resolve-library-id` → `query-docs`), Exa | Context7 for current docs, Exa for blog posts and examples |
 | ML/AI models and tools | Hugging Face (`paper_search`, `hub_repo_search`) | Also check AlphaXiv for papers |
 | General web / industry practices | Exa (`web_search_exa`) | Describe the ideal page, not keywords |

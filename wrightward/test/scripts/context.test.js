@@ -192,7 +192,7 @@ describe('context script', () => {
     });
 
     assert.equal(result.exitCode, 1);
-    assert.ok(result.stderr.includes('session_id'));
+    assert.match(result.stderr, /session_id/);
   });
 
   it('accepts session id via --session-id CLI arg (no env vars)', () => {
@@ -244,7 +244,7 @@ describe('context script', () => {
     });
 
     assert.equal(result.exitCode, 1);
-    assert.ok(result.stderr.includes('task'));
+    assert.match(result.stderr, /task/);
   });
 
   it('rejects payload with invalid status value', () => {
@@ -261,7 +261,7 @@ describe('context script', () => {
     });
 
     assert.equal(result.exitCode, 1);
-    assert.ok(result.stderr.includes('status'));
+    assert.match(result.stderr, /status/);
   });
 
   it('rejects payload with invalid items in files array', () => {
@@ -279,7 +279,7 @@ describe('context script', () => {
     });
 
     assert.equal(result.exitCode, 1);
-    assert.ok(result.stderr.includes('prefixed string'));
+    assert.match(result.stderr, /prefixed string/);
   });
 
   it('strips files already claimed by another agent', () => {
@@ -306,7 +306,7 @@ describe('context script', () => {
     });
 
     assert.equal(result.exitCode, 0);
-    assert.ok(result.stderr.includes('foo.js'));
+    assert.match(result.stderr, /foo\.js/);
 
     const ctx = JSON.parse(
       fs.readFileSync(path.join(tmpDir, '.claude', 'collab', 'context', 'sess-b.json'), 'utf8')
@@ -315,6 +315,70 @@ describe('context script', () => {
     assert.equal(ctx.files.length, 1);
     assert.equal(ctx.files[0].path, 'baz.js');
     assert.equal(ctx.files[0].prefix, '~');
+  });
+
+  it('records interest for stripped files so the agent wakes when they free up', () => {
+    // Mirrors the behavior of the guard hook's blocked-write path — a
+    // well-behaved agent that declares up front should not have to attempt
+    // a blocked Write just to register interest.
+    runScript([], {
+      cwd: tmpDir,
+      env: { COLLAB_SESSION_ID: 'sess-a', COLLAB_PROJECT_CWD: tmpDir },
+      input: JSON.stringify({
+        task: 'Claiming foo.js',
+        files: ['~foo.js'],
+        status: 'in-progress'
+      })
+    });
+
+    const result = runScript([], {
+      cwd: tmpDir,
+      env: { COLLAB_SESSION_ID: 'sess-b', COLLAB_PROJECT_CWD: tmpDir },
+      input: JSON.stringify({
+        task: 'Also wants foo.js',
+        files: ['+foo.js'],
+        status: 'in-progress'
+      })
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.match(result.stderr, /Interest recorded/,
+      'stderr must tell the agent interest was recorded so it knows a wake-up is coming, got: ' + result.stderr);
+
+    const busPath = path.join(tmpDir, '.claude', 'collab', 'bus.jsonl');
+    const events = fs.readFileSync(busPath, 'utf8').trim().split('\n').map(JSON.parse);
+    const interest = events.find(e => e.type === 'interest' && e.from === 'sess-b' && e.meta && e.meta.file === 'foo.js');
+    assert.ok(interest, 'expected an interest event from sess-b for foo.js in bus.jsonl, got: ' + JSON.stringify(events.map(e => ({ type: e.type, from: e.from, file: e.meta && e.meta.file }))));
+  });
+
+  it('omits the interest-recorded line when BUS_ENABLED is false', () => {
+    fs.mkdirSync(path.join(tmpDir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.claude', 'wrightward.json'), JSON.stringify({ BUS_ENABLED: false }));
+
+    runScript([], {
+      cwd: tmpDir,
+      env: { COLLAB_SESSION_ID: 'sess-a', COLLAB_PROJECT_CWD: tmpDir },
+      input: JSON.stringify({
+        task: 'Claiming foo.js',
+        files: ['~foo.js'],
+        status: 'in-progress'
+      })
+    });
+
+    const result = runScript([], {
+      cwd: tmpDir,
+      env: { COLLAB_SESSION_ID: 'sess-b', COLLAB_PROJECT_CWD: tmpDir },
+      input: JSON.stringify({
+        task: 'Also wants foo.js',
+        files: ['+foo.js'],
+        status: 'in-progress'
+      })
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.match(result.stderr, /Removed files already claimed/);
+    assert.doesNotMatch(result.stderr, /Interest recorded/,
+      'must not claim interest was recorded when BUS_ENABLED is false');
   });
 
   it('allows same agent to re-declare its own files', () => {
@@ -392,6 +456,6 @@ describe('context script', () => {
     });
 
     assert.equal(result.exitCode, 1);
-    assert.ok(result.stderr.includes('No existing collab context'));
+    assert.match(result.stderr, /No existing collab context/);
   });
 });

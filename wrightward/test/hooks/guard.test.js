@@ -95,7 +95,7 @@ describe('guard hook', () => {
       tool_input: { file_path: path.join(tmpDir, 'target.js') }
     });
     assert.equal(result.exitCode, 2);
-    assert.ok(result.stderr.includes('collab-context'));
+    assert.match(result.stderr, /collab-context/);
   });
 
   it('exits 0 when agent has no context but edit does not overlap', () => {
@@ -131,8 +131,8 @@ describe('guard hook', () => {
       tool_input: { file_path: path.join(tmpDir, 'foo.js') }
     });
     assert.equal(result.exitCode, 2);
-    assert.ok(result.stderr.includes('their work'));
-    assert.ok(result.stderr.includes('foo.js'));
+    assert.match(result.stderr, /their work/);
+    assert.match(result.stderr, /foo\.js/);
   });
 
   it('injects non-blocking context when Write targets unrelated file', () => {
@@ -151,7 +151,7 @@ describe('guard hook', () => {
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.hookSpecificOutput.hookEventName, 'PreToolUse');
     assert.equal(parsed.hookSpecificOutput.permissionDecision, 'allow');
-    assert.ok(parsed.hookSpecificOutput.additionalContext.includes('their work'));
+    assert.match(parsed.hookSpecificOutput.additionalContext, /their work/);
   });
 
   it('exits 0 on second call when nothing changed', () => {
@@ -229,7 +229,7 @@ describe('guard hook', () => {
       tool_input: { file_path: path.join(tmpDir, 'shared.js') }
     });
     assert.equal(result.exitCode, 2);
-    assert.ok(result.stderr.includes('new task'));
+    assert.match(result.stderr, /new task/);
   });
 
   it('skips agents with status=done without cleaning them up', () => {
@@ -304,8 +304,8 @@ describe('guard hook', () => {
     const output = JSON.parse(result.stdout);
     assert.equal(output.hookSpecificOutput.hookEventName, 'PreToolUse');
     assert.equal(output.hookSpecificOutput.permissionDecision, 'allow');
-    assert.ok(output.hookSpecificOutput.additionalContext.includes('collab-context'));
-    assert.ok(output.hookSpecificOutput.additionalContext.includes('inactive'));
+    assert.match(output.hookSpecificOutput.additionalContext, /collab-context/);
+    assert.match(output.hookSpecificOutput.additionalContext, /inactive/);
   });
 
   it('does not inject re-declare reminder when agent is idle but still has context', () => {
@@ -352,8 +352,8 @@ describe('guard hook', () => {
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.hookSpecificOutput.hookEventName, 'PreToolUse');
     assert.equal(parsed.hookSpecificOutput.permissionDecision, 'allow');
-    assert.ok(parsed.hookSpecificOutput.additionalContext.includes('their work'));
-    assert.ok(parsed.hookSpecificOutput.additionalContext.includes('src/shared.js'));
+    assert.match(parsed.hookSpecificOutput.additionalContext, /their work/);
+    assert.match(parsed.hookSpecificOutput.additionalContext, /src\/shared\.js/);
   });
 
   it('adds non-blocking overlap context for Glob when glob matches another agent file', () => {
@@ -378,7 +378,7 @@ describe('guard hook', () => {
 
     assert.equal(result.exitCode, 0);
     const parsed = JSON.parse(result.stdout);
-    assert.ok(parsed.hookSpecificOutput.additionalContext.includes('their work'));
+    assert.match(parsed.hookSpecificOutput.additionalContext, /their work/);
   });
 
   it('adds non-blocking overlap context for Glob without explicit path (defaults to cwd)', () => {
@@ -403,7 +403,7 @@ describe('guard hook', () => {
 
     assert.equal(result.exitCode, 0);
     const parsed = JSON.parse(result.stdout);
-    assert.ok(parsed.hookSpecificOutput.additionalContext.includes('their work'));
+    assert.match(parsed.hookSpecificOutput.additionalContext, /their work/);
   });
 
   it('adds non-blocking overlap context for Grep without explicit path (defaults to cwd)', () => {
@@ -428,7 +428,7 @@ describe('guard hook', () => {
 
     assert.equal(result.exitCode, 0);
     const parsed = JSON.parse(result.stdout);
-    assert.ok(parsed.hookSpecificOutput.additionalContext.includes('their work'));
+    assert.match(parsed.hookSpecificOutput.additionalContext, /their work/);
   });
 
   it('adds non-blocking overlap context for Grep scoped to another agent file', () => {
@@ -454,7 +454,7 @@ describe('guard hook', () => {
 
     assert.equal(result.exitCode, 0);
     const parsed = JSON.parse(result.stdout);
-    assert.ok(parsed.hookSpecificOutput.additionalContext.includes('their work'));
+    assert.match(parsed.hookSpecificOutput.additionalContext, /their work/);
   });
 
   it('blocks Edit on overlapping file just like Write', () => {
@@ -470,7 +470,7 @@ describe('guard hook', () => {
       tool_input: { file_path: path.join(tmpDir, 'shared.js') }
     });
     assert.equal(result.exitCode, 2);
-    assert.ok(result.stderr.includes('their work'));
+    assert.match(result.stderr, /their work/);
   });
 
   it('exits 0 for Read on non-overlapping file', () => {
@@ -505,8 +505,8 @@ describe('guard hook', () => {
       tool_input: { file_path: path.join(tmpDir, 'shared.js') }
     });
     assert.equal(result.exitCode, 2);
-    assert.ok(result.stderr.includes('agent-two task'));
-    assert.ok(result.stderr.includes('agent-three task'));
+    assert.match(result.stderr, /agent-two task/);
+    assert.match(result.stderr, /agent-three task/);
   });
 
   it('exits 0 when tool_name is missing (no-op)', () => {
@@ -534,8 +534,8 @@ describe('guard hook', () => {
         tool_input: { file_path: path.join(collabDir, 'agents.json') }
       });
       assert.equal(result.exitCode, 2);
-      assert.ok(result.stderr.includes('BLOCKED'));
-      assert.ok(result.stderr.includes('.claude/collab/'));
+      assert.match(result.stderr, /BLOCKED/);
+      assert.match(result.stderr, /\.claude\/collab\//);
     });
 
     it('blocks Write on another agent\'s context file', () => {
@@ -553,7 +553,7 @@ describe('guard hook', () => {
         tool_input: { file_path: path.join(collabDir, 'context', 'sess-2.json') }
       });
       assert.equal(result.exitCode, 2);
-      assert.ok(result.stderr.includes('BLOCKED'));
+      assert.match(result.stderr, /BLOCKED/);
       // The other agent's context file must still exist — the block prevents the write
       const otherContextPath = path.join(collabDir, 'context', 'sess-2.json');
       assert.ok(fs.existsSync(otherContextPath));
@@ -571,7 +571,7 @@ describe('guard hook', () => {
         tool_input: { file_path: path.join(collabDir, 'context', 'sess-1.json') }
       });
       assert.equal(result.exitCode, 2);
-      assert.ok(result.stderr.includes('BLOCKED'));
+      assert.match(result.stderr, /BLOCKED/);
     });
 
     it('blocks Edit on the root file', () => {
@@ -583,7 +583,7 @@ describe('guard hook', () => {
         tool_input: { file_path: path.join(collabDir, 'root') }
       });
       assert.equal(result.exitCode, 2);
-      assert.ok(result.stderr.includes('BLOCKED'));
+      assert.match(result.stderr, /BLOCKED/);
     });
 
     it('blocks Write on a new file inside .claude/collab/', () => {
@@ -595,7 +595,7 @@ describe('guard hook', () => {
         tool_input: { file_path: path.join(collabDir, 'malicious.json') }
       });
       assert.equal(result.exitCode, 2);
-      assert.ok(result.stderr.includes('BLOCKED'));
+      assert.match(result.stderr, /BLOCKED/);
     });
 
     it('allows Read on .claude/collab/ files (inspection is fine)', () => {
@@ -632,7 +632,7 @@ describe('guard hook', () => {
         tool_input: { file_path: path.join(collabDir, 'context', 'sess-2.json') }
       });
       assert.equal(result.exitCode, 2);
-      assert.ok(result.stderr.includes('BLOCKED'));
+      assert.match(result.stderr, /BLOCKED/);
     });
 
     it('block is skipped when ENABLED=false (plugin disabled)', () => {
@@ -692,6 +692,49 @@ describe('guard hook', () => {
       assert.ok(entries.some(e => e.sessionId === 'sess-1'));
     });
 
+    it('block message informs the agent that interest was recorded and it will be notified', () => {
+      // Without this signal, the blocked agent has no idea the plugin will
+      // notify it when the file frees up — it may just move on assuming the
+      // file is permanently off-limits. Pin the user-facing line.
+      registerAgent(collabDir, 'sess-1');
+      registerAgent(collabDir, 'sess-2');
+      writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
+      writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'target.js')], status: 'in-progress' });
+
+      const result = runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Write',
+        tool_input: { file_path: path.join(tmpDir, 'target.js') }
+      });
+      assert.equal(result.exitCode, 2, 'Write should be blocked');
+      assert.match(result.stderr, /interest has been recorded/i);
+      assert.match(result.stderr, /notification will wake you when this file frees up/i);
+      // Time-expectation guidance lets the agent decide whether to wait or ask the user.
+      assert.match(result.stderr, /auto-tracked.+2 min|declared.+15 min/i);
+    });
+
+    it('block message omits the interest-recorded line when BUS_ENABLED is false', () => {
+      // When the bus is off, no interest is recorded and the agent will NOT
+      // receive a notification. Telling it otherwise would be a lie.
+      registerAgent(collabDir, 'sess-1');
+      registerAgent(collabDir, 'sess-2');
+      writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
+      writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'target.js')], status: 'in-progress' });
+
+      const claudeDir = path.join(tmpDir, '.claude');
+      fs.writeFileSync(path.join(claudeDir, 'wrightward.json'), JSON.stringify({ BUS_ENABLED: false }));
+
+      const result = runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Write',
+        tool_input: { file_path: path.join(tmpDir, 'target.js') }
+      });
+      assert.equal(result.exitCode, 2, 'Write should still be blocked');
+      assert.doesNotMatch(result.stderr, /interest has been recorded/i);
+    });
+
     it('injects urgent inbox events as additionalContext', () => {
       registerAgent(collabDir, 'sess-1');
       registerAgent(collabDir, 'sess-2');
@@ -711,8 +754,8 @@ describe('guard hook', () => {
 
       assert.equal(result.exitCode, 0);
       const parsed = JSON.parse(result.stdout);
-      assert.ok(parsed.hookSpecificOutput.additionalContext.includes('take over the auth work'));
-      assert.ok(parsed.hookSpecificOutput.additionalContext.includes('Urgent messages'));
+      assert.match(parsed.hookSpecificOutput.additionalContext, /take over the auth work/);
+      assert.match(parsed.hookSpecificOutput.additionalContext, /Urgent messages/);
     });
 
     it('advances bookmark after inbox injection', () => {
@@ -772,7 +815,7 @@ describe('guard hook', () => {
 
       assert.equal(result.exitCode, 0);
       const parsed = JSON.parse(result.stdout);
-      assert.ok(parsed.hookSpecificOutput.additionalContext.includes('auth.ts is free'));
+      assert.match(parsed.hookSpecificOutput.additionalContext, /auth\.ts is free/);
     });
   });
 

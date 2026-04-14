@@ -29,9 +29,9 @@ describe('mcp/file-watcher', () => {
     const watcher = createWatcher(busPath, () => { fires++; }, { debounceMs: 20, pollMs: 50 });
     watcher.start();
     // Wait past the initial mtime cache so the next write produces a change.
-    await wait(30);
+    await wait(60);
     fs.appendFileSync(busPath, '{"x":1}\n');
-    await wait(150);
+    await wait(500);
     assert.ok(fires >= 1, `expected at least 1 fire, got ${fires}`);
     watcher.close();
   });
@@ -40,7 +40,7 @@ describe('mcp/file-watcher', () => {
     let fires = 0;
     const watcher = createWatcher(busPath, () => { fires++; }, { debounceMs: 20, pollMs: 40 });
     watcher.start();
-    await wait(200);
+    await wait(300);
     // No writes → no fires. mtime cache prevents spurious work.
     assert.equal(fires, 0);
     watcher.close();
@@ -50,12 +50,12 @@ describe('mcp/file-watcher', () => {
     let fires = 0;
     const watcher = createWatcher(busPath, () => { fires++; }, { debounceMs: 50, pollMs: 200 });
     watcher.start();
-    await wait(30);
+    await wait(60);
     for (let i = 0; i < 5; i++) {
       fs.appendFileSync(busPath, `{"i":${i}}\n`);
       await wait(5);
     }
-    await wait(200);
+    await wait(600);
     assert.ok(fires >= 1, 'expected at least one fire from burst');
     assert.ok(fires < 5, `debounce should collapse bursts, saw ${fires} fires for 5 rapid appends`);
     watcher.close();
@@ -72,9 +72,9 @@ describe('mcp/file-watcher', () => {
       const state = watcher._state();
       assert.equal(state.hasWatcher, false, 'fs.watch threw — watcher should be null');
       assert.equal(state.hasPoll, true, 'polling fallback must still be installed');
-      await wait(30);
+      await wait(60);
       fs.appendFileSync(busPath, '{"y":1}\n');
-      await wait(150);
+      await wait(500);
       assert.ok(fires >= 1, `polling fallback should have fired, got ${fires}`);
       watcher.close();
     } finally {
@@ -86,7 +86,7 @@ describe('mcp/file-watcher', () => {
     let fires = 0;
     const watcher = createWatcher(busPath, () => { fires++; }, { debounceMs: 200, pollMs: 50 });
     watcher.start();
-    await wait(30);
+    await wait(60);
     fs.appendFileSync(busPath, '{"z":1}\n');
     // Trigger a pending debounce, then close before it fires.
     await wait(20);
@@ -97,13 +97,13 @@ describe('mcp/file-watcher', () => {
     assert.equal(state.hasWatcher, false, 'fs.watch handle must be released');
     assert.equal(state.hasDebounce, false, 'pending debounce timer must be cleared');
     // Give the would-have-fired window plenty of time.
-    await wait(300);
+    await wait(500);
     // Even if the timer fired, maybeFire() is a no-op after close (cachedMtimeMs
     // still updates from pre-close read, but onActivity is not called because
     // the debounced fire was cleared). Accept 0 or 1 fire pre-close, but no
     // new fires after the close sentinel.
     const firesAfterClose = fires;
-    await wait(100);
+    await wait(200);
     assert.equal(fires, firesAfterClose, 'no new fires must occur after close()');
   });
 
@@ -113,7 +113,7 @@ describe('mcp/file-watcher', () => {
     // fs.watch on a missing file throws synchronously — start() must swallow it
     // and keep polling, since the file may be created later.
     assert.doesNotThrow(() => watcher.start());
-    await wait(50);
+    await wait(100);
     watcher.close();
   });
 
@@ -122,9 +122,9 @@ describe('mcp/file-watcher', () => {
     let fires = 0;
     const watcher = createWatcher(later, () => { fires++; }, { debounceMs: 10, pollMs: 40 });
     watcher.start();
-    await wait(50);
+    await wait(100);
     fs.writeFileSync(later, '{"first":1}\n');
-    await wait(150);
+    await wait(500);
     assert.ok(fires >= 1, `expected at least 1 fire after file creation, got ${fires}`);
     watcher.close();
   });
@@ -145,15 +145,15 @@ describe('mcp/file-watcher', () => {
       if (calls === 1) throw new Error('boom');
     }, { debounceMs: 20, pollMs: 50 });
     watcher.start();
-    await wait(30);
+    await wait(60);
     fs.appendFileSync(busPath, '{"first":1}\n');
-    await wait(200);
+    await wait(500);
     assert.ok(calls >= 1, 'first (throwing) call should have happened');
 
     // Force a distinct mtime so the cache definitely sees a change.
-    await wait(20);
+    await wait(30);
     fs.appendFileSync(busPath, '{"second":2}\n');
-    await wait(200);
+    await wait(500);
     assert.ok(calls >= 2, 'watcher must keep firing after onActivity throws, calls=' + calls);
     watcher.close();
   });

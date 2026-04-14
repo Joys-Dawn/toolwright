@@ -44,13 +44,17 @@ async function main() {
 
   // Create MCP server
   const server = new Server(
-    { name: 'wrightward-bus', version: '3.1.0' },
+    { name: 'wrightward-bus', version: '3.1.1' },
     {
       capabilities: {
         tools: {},
         experimental: { 'claude/channel': {} }
       },
-      instructions: 'wrightward bus: peer-to-peer messaging between Claude Code sessions. Use wrightward_list_inbox to check for messages, wrightward_send_handoff to hand off work, wrightward_watch_file to watch a file, wrightward_ack to acknowledge events.'
+      instructions:
+        'wrightward-bus: peer-to-peer messaging between Claude Code sessions in the same repo.\n' +
+        'Urgent events arrive in two ways: (1) as a <channel source="wrightward-bus" pending_count="N"> wake-up ping between turns, and (2) as additionalContext injected on your next tool call. Both are signals to call wrightward_list_inbox and surface the pending events.\n' +
+        'Tools: wrightward_list_inbox (list and mark-delivered urgent events), wrightward_ack (acknowledge a handoff decision), wrightward_send_note (non-urgent info for another session), wrightward_send_handoff (give work to another session, optionally releasing files), wrightward_watch_file (register interest — you will be notified when the file frees up), wrightward_bus_status (diagnostic).\n' +
+        'Never edit files under .claude/collab/ — they are managed by this plugin; the guard hook will block such edits unconditionally.'
     }
   );
 

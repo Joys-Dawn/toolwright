@@ -36,14 +36,15 @@ describe('mcp/tools', () => {
   describe('getToolDefinitions', () => {
     it('returns 6 tools', () => {
       const tools = getToolDefinitions();
-      assert.equal(tools.length, 6);
-      const names = tools.map(t => t.name);
-      assert.ok(names.includes('wrightward_list_inbox'));
-      assert.ok(names.includes('wrightward_ack'));
-      assert.ok(names.includes('wrightward_send_note'));
-      assert.ok(names.includes('wrightward_send_handoff'));
-      assert.ok(names.includes('wrightward_watch_file'));
-      assert.ok(names.includes('wrightward_bus_status'));
+      const names = tools.map(t => t.name).sort();
+      assert.deepEqual(names, [
+        'wrightward_ack',
+        'wrightward_bus_status',
+        'wrightward_list_inbox',
+        'wrightward_send_handoff',
+        'wrightward_send_note',
+        'wrightward_watch_file',
+      ]);
     });
   });
 
@@ -52,7 +53,7 @@ describe('mcp/tools', () => {
       const result = handleToolCall('wrightward_bus_status', {}, collabDir, null, config);
       const data = JSON.parse(result.content[0].text);
       assert.ok(data.error);
-      assert.ok(data.error.includes('not bound'));
+      assert.match(data.error, /not bound/);
     });
 
     it('returns error when BUS_ENABLED is false', () => {
@@ -60,14 +61,14 @@ describe('mcp/tools', () => {
       const result = handleToolCall('wrightward_bus_status', {}, collabDir, 'sess-1', disabledConfig);
       const data = JSON.parse(result.content[0].text);
       assert.ok(data.error);
-      assert.ok(data.error.includes('disabled'));
+      assert.match(data.error, /disabled/);
     });
 
     it('returns error for unknown tool name', () => {
       const result = handleToolCall('wrightward_unknown', {}, collabDir, 'sess-1', config, tmpDir);
       const data = JSON.parse(result.content[0].text);
       assert.ok(data.error);
-      assert.ok(data.error.includes('Unknown tool'));
+      assert.match(data.error, /Unknown tool/);
     });
   });
 
@@ -193,7 +194,7 @@ describe('mcp/tools', () => {
       const result = handleToolCall('wrightward_send_handoff', { task_ref: 'T1', next_action: 'do it' }, collabDir, 'sess-1', config, tmpDir);
       const data = JSON.parse(result.content[0].text);
       assert.ok(data.error);
-      assert.ok(data.error.includes('to'), 'error should mention "to": ' + data.error);
+      assert.match(data.error, /\bto\b/, 'error should mention "to": ' + data.error);
     });
 
     it('returns error when args.to is empty string', () => {
@@ -326,7 +327,8 @@ describe('mcp/tools', () => {
     });
     it('list_inbox rejects unknown type filter', () => {
       const err = callError('wrightward_list_inbox', { types: ['gossip'] });
-      assert.ok(err && err.includes('unknown urgent types'));
+      assert.ok(err, 'expected an error');
+      assert.match(err, /unknown urgent types/);
     });
     it('list_inbox rejects non-array types', () => {
       assert.ok(callError('wrightward_list_inbox', { types: 'handoff' }));
@@ -337,7 +339,8 @@ describe('mcp/tools', () => {
     });
     it('ack rejects unknown decision', () => {
       const err = callError('wrightward_ack', { id: 'evt-1', decision: 'maybe' });
-      assert.ok(err && err.includes('decision'));
+      assert.ok(err, 'expected an error');
+      assert.match(err, /decision/);
     });
 
     it('send_note rejects missing body', () => {
@@ -346,7 +349,8 @@ describe('mcp/tools', () => {
 
     it('send_handoff rejects missing task_ref', () => {
       const err = callError('wrightward_send_handoff', { to: 'sess-2', next_action: 'go' });
-      assert.ok(err && err.includes('task_ref'));
+      assert.ok(err, 'expected an error');
+      assert.match(err, /task_ref/);
     });
 
     it('watch_file rejects missing file', () => {

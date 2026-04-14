@@ -48,25 +48,25 @@ describe('ensureCollabDir', () => {
     fs.writeFileSync(path.join(tmpDir, '.gitignore'), 'node_modules/\n', 'utf8');
     ensureCollabDir(tmpDir);
     const content = fs.readFileSync(path.join(tmpDir, '.gitignore'), 'utf8');
-    assert.ok(content.includes('node_modules/'));
-    assert.ok(content.includes('.claude/collab/'));
+    assert.match(content, /node_modules\//);
+    assert.match(content, /\.claude\/collab\//);
   });
 
   it('handles .gitignore without trailing newline', () => {
     fs.writeFileSync(path.join(tmpDir, '.gitignore'), 'node_modules/', 'utf8');
     ensureCollabDir(tmpDir);
     const content = fs.readFileSync(path.join(tmpDir, '.gitignore'), 'utf8');
-    assert.ok(content.includes('node_modules/'));
-    assert.ok(content.includes('.claude/collab/'));
+    assert.match(content, /node_modules\//);
+    assert.match(content, /\.claude\/collab\//);
     // Should have a newline between entries
-    assert.ok(content.includes('node_modules/\n'));
+    assert.match(content, /node_modules\/\n/);
   });
 
   it('skips gitignore when .claude/ is already ignored', () => {
     fs.writeFileSync(path.join(tmpDir, '.gitignore'), '.claude/\n', 'utf8');
     ensureCollabDir(tmpDir);
     const content = fs.readFileSync(path.join(tmpDir, '.gitignore'), 'utf8');
-    assert.ok(!content.includes('.claude/collab/'));
+    assert.doesNotMatch(content, /\.claude\/collab\//);
   });
 
   it('is idempotent', () => {

@@ -112,7 +112,7 @@ function formatFileList(files) {
 }
 
 function buildSummary(contexts) {
-  const lines = ['Other agents are active in this codebase:'];
+  const lines = ['Other agents active in this codebase:'];
   for (const ctx of contexts) {
     const shortId = ctx.sessionId.substring(0, 8);
     const fileList = formatFileList(ctx.files);
@@ -122,7 +122,6 @@ function buildSummary(contexts) {
     if (funcList) detail += ` (functions: ${funcList})`;
     lines.push(detail);
   }
-  lines.push('Consider whether your edit conflicts with their work. If so, ask the user for guidance.');
   return lines.join('\n');
 }
 
@@ -258,7 +257,7 @@ async function main() {
     return;
   }
 
-  handleWriteTool(overlaps, collabDir, session_id, otherContexts, inboxText);
+  handleWriteTool(overlaps, collabDir, session_id, otherContexts, inboxText, config, blockedFile);
 }
 
 function handleReadTool(overlaps, collabDir, sessionId, inboxText) {
@@ -268,7 +267,10 @@ function handleReadTool(overlaps, collabDir, sessionId, inboxText) {
 
   const parts = [];
   if (overlaps.length > 0) {
-    parts.push(buildSummary(overlaps));
+    parts.push(
+      buildSummary(overlaps) +
+      '\nThis read touches file(s) another agent is actively editing. Their latest changes may not yet be on disk — factor that in before acting on what you read.'
+    );
   }
   if (inboxText) {
     parts.push(inboxText);
@@ -291,29 +293,41 @@ function isInCollabDir(targetPath, collabDir) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function handleWriteTool(overlaps, collabDir, sessionId, otherContexts, inboxText) {
+function handleWriteTool(overlaps, collabDir, sessionId, otherContexts, inboxText, config, blockedFile) {
   if (overlaps.length > 0) {
     const myContext = readContext(collabDir, sessionId);
     if (!myContext) {
       process.stderr.write(
-        'Another agent is working on files that overlap with this edit. ' +
-        'Use /wrightward:collab-context to declare what you are working on first.'
+        'Write rejected — file(s) overlap another agent\'s claim, and this session has no declared context.\n' +
+        buildSummary(overlaps) +
+        '\nRun /wrightward:collab-context to declare your task. Once declared, a blocked write records interest automatically and a notification will wake you when the file frees up.'
       );
       process.exit(2);
     }
 
     // The interest event was already emitted under the same lock as the inbox
     // scan in scanInboxAndMaybeEmitInterest (Sg2: one lock per hook invocation).
+    // Tell the agent so it knows it will be woken when the file frees up,
+    // rather than moving on and assuming the file is permanently off-limits.
+    const interestRecorded = config && config.BUS_ENABLED && blockedFile;
+    const wakeupLine = interestRecorded
+      ? '\nYour interest has been recorded — a notification will wake you when this file frees up. Auto-tracked claims release within ~2 min of the other agent\'s last edit; declared claims can hold up to 15 min. Do NOT retry or bypass the block; if urgent, ask the user.'
+      : '\nThe bus is disabled — no notification will wake you when this file frees up. Wait and retry, or ask the user if urgent.';
 
     process.stderr.write(
-      buildSummary(overlaps) + '\nThis file overlaps with another agent\'s claimed files. Skip this edit or ask the user for guidance.'
+      'Write rejected — file claimed by another active agent.\n' +
+      buildSummary(overlaps) +
+      wakeupLine
     );
     process.exit(2);
   }
 
   // No file overlap — inject non-blocking context only when something changed
   otherContexts.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
-  const parts = [buildSummary(otherContexts)];
+  const parts = [
+    buildSummary(otherContexts) +
+    '\nNone of their declared files overlap with your intended write — proceed.'
+  ];
   if (inboxText) {
     parts.push(inboxText);
   }

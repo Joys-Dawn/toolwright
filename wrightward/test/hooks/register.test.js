@@ -48,8 +48,8 @@ describe('register hook', () => {
     fs.writeFileSync(path.join(tmpDir, '.gitignore'), 'node_modules\n', 'utf8');
     runHook({ session_id: 'test-sess-1', cwd: tmpDir });
     const gitignore = fs.readFileSync(path.join(tmpDir, '.gitignore'), 'utf8');
-    assert.ok(gitignore.includes('node_modules'), 'pre-existing entries must survive');
-    assert.ok(gitignore.includes('.claude/collab/'));
+    assert.match(gitignore, /node_modules/, 'pre-existing entries must survive');
+    assert.match(gitignore, /\.claude\/collab\//);
   });
 
   it('does NOT create .gitignore when one does not exist', () => {
@@ -183,7 +183,8 @@ describe('register hook', () => {
     );
 
     const envContent = fs.readFileSync(envFile, 'utf8');
-    assert.ok(envContent.includes("export COLLAB_SESSION_ID='sess-env'"));
-    assert.ok(envContent.includes(`export COLLAB_PROJECT_CWD='${tmpDir}'`));
+    assert.match(envContent, /export COLLAB_SESSION_ID='sess-env'/);
+    assert.ok(envContent.includes(`export COLLAB_PROJECT_CWD='${tmpDir}'`),
+      `expected COLLAB_PROJECT_CWD='${tmpDir}' in env file, got: ${envContent}`);
   });
 });

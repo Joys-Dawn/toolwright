@@ -181,7 +181,7 @@ describe('session-state bus integration', () => {
       });
 
       const removed = scavengeExpiredSessions(collabDir, 60000, 'sess-alive');
-      assert.ok(removed.includes('sess-expired'));
+      assert.deepEqual(removed, ['sess-expired']);
 
       const bp = busPath(collabDir);
       assert.ok(fs.existsSync(bp), 'bus.jsonl must exist after scavenge emitted file_freed');
@@ -229,8 +229,7 @@ describe('session-state bus integration', () => {
       });
 
       const removed = scavengeExpiredSessions(collabDir, 60000, 'sess-current');
-      assert.ok(removed.includes('sess-old'));
-      assert.ok(!removed.includes('sess-current'));
+      assert.deepEqual(removed, ['sess-old']);
     });
   });
 

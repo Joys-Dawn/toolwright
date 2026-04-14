@@ -92,10 +92,9 @@ describe('integration: file-freed round trip', () => {
       tool_input: { file_path: path.join(tmpDir, 'anything.js') }
     });
     assert.equal(nextResult.exitCode, 0);
-    if (nextResult.stdout) {
-      const parsed = JSON.parse(nextResult.stdout);
-      assert.ok(parsed.hookSpecificOutput.additionalContext.includes('auth.ts'));
-    }
+    assert.ok(nextResult.stdout, 'guard hook must emit stdout to inject file_freed context');
+    const parsed = JSON.parse(nextResult.stdout);
+    assert.match(parsed.hookSpecificOutput.additionalContext, /auth\.ts/);
   });
 
   it('multiple interested agents all get file_freed', () => {

@@ -1,6 +1,12 @@
 # wrightward
 
-Claude Code plugin for multi-agent file coordination. When multiple Claude Code sessions work in the same repo, wrightward prevents them from silently overwriting each other's work. It tracks which files each agent is touching, blocks conflicting writes, and injects awareness of what other agents are doing.
+Claude Code plugin for multi-agent coordination. When multiple Claude Code sessions work in the same repo, wrightward prevents them from silently overwriting each other's work and gives them a peer-to-peer message bus to hand off tasks, watch files, and wake each other up.
+
+- **File conflict prevention** — auto-tracks Edits/Writes; blocks overlapping writes with a summary of who owns the file.
+- **Awareness context** — injects short summaries of other agents' active work into the guard hook's output.
+- **Message bus** — six MCP tools for sending notes, handoffs, file-watch registrations, and inbox checks between sessions.
+- **Channel push** (research preview) — optional wake-up `notifications/claude/channel` ping when an idle session receives an urgent bus event.
+- **Zero network I/O** — all state is local files in `.claude/collab/` (auto-gitignored). No daemon, no IPC, no external services.
 
 ## Installation
 
@@ -42,7 +48,7 @@ Context injection is deduplicated — the same summary is only shown once per ch
 
 ### Collab state is off-limits to the model
 
-Edit/Write on any file inside `.claude/collab/` is hard-blocked unconditionally — whether or not other agents are active. This prevents an agent from bypassing the coordination system by directly editing `agents.json` or another agent's context file (e.g., to remove what it perceives as a "stale" claim). Collab state is managed exclusively by the wrightward skills and hooks. Read access is not blocked — agents can still inspect their own state for debugging.
+Edit/Write on any file inside `.claude/collab/` is hard-blocked unconditionally — whether or not other agents are active (and the block tells the model to NOT use Bash to get around this). This prevents an agent from bypassing the coordination system by directly editing `agents.json` or another agent's context file (e.g., to remove what it perceives as a "stale" claim). Collab state is managed exclusively by the wrightward skills and hooks. Read access is not blocked — agents can still inspect their own state for debugging.
 
 If an agent believes another agent's claim is stale, the instructions in every collab skill tell it to **wait 6 minutes and try again**. After 6 minutes of no heartbeat, a crashed or abandoned session is automatically excluded from the active set, and its claims stop enforcing. If the claim is still enforced after 6 minutes, the other agent is alive — the claim is legitimate, not stale, and agents are explicitly instructed never to bypass it. Claims declared through `/wrightward:collab-context` can persist for 15 minutes or longer while the other agent works through a plan.
 
@@ -54,55 +60,82 @@ If an agent hasn't touched a file in **5 minutes**, a one-time reminder suggests
 
 On top of file coordination, wrightward runs a file-based peer-to-peer message bus so sessions can hand off work, watch files, and notify each other.
 
-- Events are appended to `.claude/collab/bus.jsonl` and fanned out to the target session via an injected context block on the next tool call (Path 1).
+- Events are appended to `.claude/collab/bus.jsonl` (append-only, length-bounded, self-compacting).
 - Per-session delivery bookmarks in `.claude/collab/bus-delivered/<sessionId>.json` track what each session has already seen.
-- A bundled MCP server (`wrightward-bus`) exposes six tools — `wrightward_list_inbox`, `wrightward_ack`, `wrightward_send_note`, `wrightward_send_handoff`, `wrightward_watch_file`, `wrightward_bus_status` — wrapped by four skills: `/wrightward:inbox`, `/wrightward:ack`, `/wrightward:handoff`, `/wrightward:watch`.
+- Urgent events are delivered via **Path 1** — the guard/heartbeat hooks inject pending events as `additionalContext` on the session's next tool call, then advance the bookmark. This is the sole source of truth for event delivery.
+- A bundled MCP server (`wrightward-bus`) exposes six tools for the model to use directly.
 
-No daemon, no IPC, no CLI — every agent is a filesystem reader/writer. The bus is strictly additive: with an older Claude Code or the MCP server disabled, file coordination still works exactly as before.
+### MCP tools
+
+| Tool | Description |
+|------|-------------|
+| `wrightward_list_inbox` | List urgent events targeted at this session. Advances the delivery bookmark by default. |
+| `wrightward_ack` | Acknowledge a handoff or other urgent event (`accepted` / `rejected` / `dismissed`). |
+| `wrightward_send_note` | Send a non-urgent info message to another session, `"all"`, or `"role:<name>"`. |
+| `wrightward_send_handoff` | Hand work off to another session. Optionally releases files in the same atomic step. |
+| `wrightward_watch_file` | Register interest in a file — the sender is notified when it frees up. |
+| `wrightward_bus_status` | Diagnostic: event counts, bookmark positions, recent activity. |
+
+### Skill wrappers
+
+Four skills wrap the MCP tools for conversational use (`/wrightward:inbox`, `/wrightward:ack`, `/wrightward:handoff`, `/wrightward:watch`). Skills also run independently of the MCP server — if the MCP server is disabled, the skills still work via bundled bash scripts.
+
+No daemon, no IPC, no CLI. Every agent is a filesystem reader/writer coordinated by an OS-level advisory file lock. The bus is strictly additive: if the MCP server is disabled (`BUS_ENABLED: false`), file coordination still works unchanged.
 
 ## Channel push — wake idle sessions (v3.1, research preview)
 
-By default, peer messages surface on a session's next tool call. If you want idle sessions to wake between turns — without a new user prompt — launch Claude Code with the `--channels` flag. wrightward's MCP server emits a single summary `notifications/claude/channel` (the **doorbell**) when urgent events arrive; the woken session's next tool call then runs Path 1, which injects the full event content as additional context.
+By default, peer messages surface on a session's next tool call (Path 1). Channels add **Path 2**: a single `notifications/claude/channel` wake-up ping so an idle session notices new events between turns without a new user prompt. The doorbell writes no state and delivers no payload — it just says "you have N pending events". The woken session's next tool call runs Path 1 as usual and injects the actual event content.
 
-```
-claude --channels plugin:wrightward@<marketplace>
-```
+**Path 1 is always-on and authoritative.** Path 2 is a best-effort wake-up signal. If the channel notification is dropped (known Claude Code bugs on some platforms) or the subsystem is disabled, Path 1 still delivers on the next interaction — the user's experience degrades to "wake up on your next message" instead of "wake up immediately".
 
-Path 1 (next-tool-call injection) remains the source of truth for event content — the doorbell just wakes the session earlier. If channels are unsupported or the notification is silently dropped (a known Claude Code issue on some platforms), the plugin still works: the user's next interaction surfaces the event via Path 1, as in the default behavior.
+### Launching with channels
 
-### Allowlist / dev-mode workaround
+The plugin form `--channels plugin:wrightward@<marketplace>` requires wrightward to be on Anthropic's approved channel allowlist. Until it's approved, use the `server:` form instead — [Anthropic's documented workflow](https://code.claude.com/docs/en/channels-reference#test-during-the-research-preview) for plugin-developer channels:
 
-The `--channels` flag requires the plugin to be on the Claude Code channel allowlist. Until wrightward is allowlisted, use the development flag:
+1. **Add the server to your user-level MCP config** (`~/.mcp.json`):
 
-```
-claude --dangerously-load-development-channels plugin:wrightward@<marketplace>
-```
+    ```json
+    {
+      "mcpServers": {
+        "wrightward-bus": {
+          "type": "stdio",
+          "command": "node",
+          "args": ["/absolute/path/to/.claude/plugins/cache/<marketplace>/wrightward/<version>/mcp/server.mjs"]
+        }
+      }
+    }
+    ```
+
+2. **Launch Claude Code with the development flag:**
+
+    ```
+    claude --dangerously-load-development-channels server:wrightward-bus
+    ```
+
+The expected banner reads *"Listening for channel messages from: server:wrightward-bus"*. If you instead see "not on the approved channels allowlist", you used the `plugin:` form — switch to `server:` as above.
+
+Once the plugin is on Anthropic's allowlist, the `--channels plugin:wrightward@<marketplace>` form will work without the `server:` workaround and without the dev flag.
 
 ### Launching from VS Code / Cursor
 
-The Claude Code VS Code / Cursor extension has no direct "extra CLI args" setting, but it supports [`claudeCode.claudeProcessWrapper`](https://code.claude.com/docs/en/vs-code) — an "Executable path used to launch the Claude process." Point it at a shim that prepends the flag and forwards the remaining args.
+The Claude Code VS Code / Cursor extension supports [`claudeCode.claudeProcessWrapper`](https://code.claude.com/docs/en/vs-code) — an executable that wraps the `claude` binary and can prepend CLI args.
 
 **Windows — `claude-dev.cmd`:**
 ```cmd
 @echo off
-claude --dangerously-load-development-channels plugin:wrightward@<marketplace> %*
+claude --dangerously-load-development-channels server:wrightward-bus %*
 ```
 
 **POSIX — `claude-dev.sh`:**
 ```sh
 #!/usr/bin/env sh
-exec claude --dangerously-load-development-channels plugin:wrightward@<marketplace> "$@"
+exec claude --dangerously-load-development-channels server:wrightward-bus "$@"
 ```
 
-Then in VS Code / Cursor `settings.json`:
-
+Then in `settings.json`:
 ```json
-{
-  "claudeCode.claudeProcessWrapper": "C:\\Users\\<you>\\bin\\claude-dev.cmd"
-}
+{ "claudeCode.claudeProcessWrapper": "C:\\Users\\<you>\\bin\\claude-dev.cmd" }
 ```
-
-Use the wrapper only while actively testing channels — otherwise every session unnecessarily loads dev-mode channels.
 
 ## Skills
 
@@ -131,7 +164,7 @@ Six hooks run automatically — no user intervention needed:
 
 ## Recommended permissions
 
-Add these to your global `~/.claude/settings.json` to avoid the "Use skill?" consent dialog on every skill invocation:
+Add these to your global `~/.claude/settings.json` to skip consent dialogs on wrightward's skills and MCP tools:
 
 ```json
 {
@@ -139,11 +172,14 @@ Add these to your global `~/.claude/settings.json` to avoid the "Use skill?" con
     "allow": [
       "Skill(wrightward:collab-context)",
       "Skill(wrightward:collab-done)",
-      "Skill(wrightward:collab-release)"
+      "Skill(wrightward:collab-release)",
+      "mcp__wrightward-bus__*"
     ]
   }
 }
 ```
+
+The `mcp__wrightward-bus__*` entry auto-allows every wrightward MCP tool. This is important when using Channels: after a wake-up ping, the model typically calls `wrightward_list_inbox` immediately — if that call hits a permission prompt, the wake-up flow stalls.
 
 ## Configuration
 
@@ -180,6 +216,15 @@ Set `ENABLED` to `false` in `.claude/wrightward.json` to fully disable wrightwar
 ## State
 
 All coordination state lives in `.claude/collab/` (auto-gitignored). No state persists between sessions.
+
+## Security
+
+- **No network I/O.** The plugin and bundled MCP server make zero outbound HTTP/DNS/socket calls. All state is file reads and writes under `.claude/collab/`.
+- **Channel notifications carry no payload.** The doorbell emits a fixed short string (`"You have N new wrightward bus event(s)..."`) plus a `pending_count` attribute. Event content is always delivered through Path 1's hook-injected `additionalContext`, which is standard Claude Code context injection.
+- **Bus messages originate only from co-located sessions.** There is no external sender. The bus carries only events written by other wrightward sessions running in the same repo.
+- **Edit/Write to collab state are hard-blocked.** The guard hook unconditionally rejects Edit and Write tool calls targeting any file under `.claude/collab/`, including from the agent itself. Bash is not intercepted — the block message and skill instructions tell the agent never to escalate to shell commands (`rm`, `sed`, redirects) to modify collab files, but this is a prompt-level directive, not an enforced block. State changes should always go through wrightward's skills.
+- **Advisory file locking.** All bus mutations (append, compact, bookmark advance, interest registration) run under one exclusive file lock with stale-lock detection. Prevents torn writes across concurrent sessions without any cross-process IPC.
+- **No telemetry.** No events, usage stats, or crash reports leave the user's machine.
 
 ## Requirements
 

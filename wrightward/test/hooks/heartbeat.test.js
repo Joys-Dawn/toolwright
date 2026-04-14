@@ -208,8 +208,8 @@ describe('heartbeat hook', () => {
     assert.ok(result.stdout.length > 0);
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.hookSpecificOutput.hookEventName, 'PostToolUse');
-    assert.ok(parsed.hookSpecificOutput.additionalContext.includes('old.js'));
-    assert.ok(!parsed.hookSpecificOutput.additionalContext.includes('recent.js'));
+    assert.match(parsed.hookSpecificOutput.additionalContext, /old\.js/);
+    assert.doesNotMatch(parsed.hookSpecificOutput.additionalContext, /recent\.js/);
 
     // Verify reminded flag is set
     const ctx = readContext(collabDir, 'sess-1');
@@ -387,7 +387,7 @@ describe('heartbeat hook', () => {
     assert.equal(result.exitCode, 0);
     assert.ok(result.stdout.length > 0);
     const parsed = JSON.parse(result.stdout);
-    assert.ok(parsed.hookSpecificOutput.additionalContext.includes('please take over auth'));
+    assert.match(parsed.hookSpecificOutput.additionalContext, /please take over auth/);
   });
 
   it('advances bookmark after inbox injection', () => {

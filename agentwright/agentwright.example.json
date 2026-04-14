@@ -1,7 +1,8 @@
 {
   "pipelines": {
-    "default": ["correctness", "security", "best-practices"],
+    "default": ["implementation", "correctness", "security", "best-practices", "test-coverage"],
     "full": [
+      "implementation",
       "correctness",
       "security",
       "best-practices",

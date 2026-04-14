@@ -3,10 +3,11 @@
 
 const path = require('path');
 const { ensureCollabDir, resolveCollabDir } = require('../lib/collab-dir');
-const { getActiveAgents, registerAgent } = require('../lib/agents');
+const { getActiveAgents, registerAgent, withAgentsLock } = require('../lib/agents');
 const { readContext, writeContext, fileEntryForPath } = require('../lib/context');
 const { removeSessionState } = require('../lib/session-state');
 const { loadConfig } = require('../lib/config');
+const { writeInterest } = require('../lib/bus-query');
 
 function parseArgs(argv) {
   const args = {};
@@ -142,7 +143,7 @@ async function main() {
   const stripped = [];
   payload.files = payload.files.filter(entry => {
     if (claimedFiles.has(entry.path)) {
-      stripped.push(entry.prefix + entry.path);
+      stripped.push(entry);
       return false;
     }
     return true;
@@ -151,7 +152,25 @@ async function main() {
   registerAgent(collabDir, sessionId);
   writeContext(collabDir, sessionId, payload);
   if (stripped.length > 0) {
-    process.stderr.write(`Removed files already claimed by other agents: ${stripped.join(', ')}\n`);
+    const formatted = stripped.map(e => e.prefix + e.path).join(', ');
+    let message = `Removed files already claimed by other agents: ${formatted}.`;
+    // Record interest so the agent gets a bus/channel notification when the
+    // file frees up — mirrors the guard hook's behavior on blocked writes,
+    // but fires on the declare-upfront path so well-behaved agents aren't
+    // forced to attempt a blocked Write just to register interest.
+    if (config.BUS_ENABLED) {
+      try {
+        withAgentsLock(collabDir, (token) => {
+          for (const entry of stripped) {
+            writeInterest(token, collabDir, sessionId, entry.path, config.BUS_INTEREST_TTL_MS);
+          }
+        });
+        message += ' Interest recorded — you\'ll be notified when they free up.';
+      } catch (err) {
+        process.stderr.write('[collab/context] interest write failed: ' + (err.message || err) + '\n');
+      }
+    }
+    process.stderr.write(message + '\n');
   }
   process.stdout.write('Updated collab context for the current session.\n');
 }

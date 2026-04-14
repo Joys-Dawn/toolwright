@@ -62,7 +62,7 @@ describe('release-file script', () => {
 
     const result = runScript({ files: ['a.js'] }, env());
     assert.equal(result.exitCode, 0);
-    assert.ok(result.stdout.includes('Released'));
+    assert.match(result.stdout, /Released/);
 
     const ctx = readContext(collabDir, 'sess-1');
     assert.equal(ctx.files.length, 1);
@@ -78,7 +78,7 @@ describe('release-file script', () => {
 
     const result = runScript({ files: ['nonexistent.js'] }, env());
     assert.equal(result.exitCode, 0);
-    assert.ok(result.stderr.includes('nonexistent.js'));
+    assert.match(result.stderr, /nonexistent\.js/);
   });
 
   it('keeps context with empty files after releasing all files', () => {
@@ -99,7 +99,7 @@ describe('release-file script', () => {
   it('fails when no context exists', () => {
     const result = runScript({ files: ['foo.js'] }, env());
     assert.equal(result.exitCode, 1);
-    assert.ok(result.stderr.includes('No collab context'));
+    assert.match(result.stderr, /No collab context/);
   });
 
   it('fails when files array is empty', () => {
@@ -111,13 +111,13 @@ describe('release-file script', () => {
 
     const result = runScript({ files: [] }, env());
     assert.equal(result.exitCode, 1);
-    assert.ok(result.stderr.includes('non-empty'));
+    assert.match(result.stderr, /non-empty/);
   });
 
   it('fails when session id is missing from both CLI args and env vars', () => {
     const result = runScript({ files: ['foo.js'] }, { COLLAB_SESSION_ID: '', COLLAB_PROJECT_CWD: '' });
     assert.equal(result.exitCode, 1);
-    assert.ok(result.stderr.includes('session_id'));
+    assert.match(result.stderr, /session_id/);
   });
 
   it('accepts session id via --session-id CLI arg (no env vars)', () => {
@@ -133,7 +133,7 @@ describe('release-file script', () => {
       { COLLAB_SESSION_ID: '', COLLAB_PROJECT_CWD: '' }
     );
     assert.equal(result.exitCode, 0);
-    assert.ok(result.stdout.includes('Released'));
+    assert.match(result.stdout, /Released/);
 
     const ctx = readContext(collabDir, 'cli-sess');
     assert.equal(ctx.files.length, 0);
