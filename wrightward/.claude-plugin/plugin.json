@@ -1,6 +1,6 @@
 {
   "name": "wrightward",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "description": "Multi-agent coordination and message bus for Claude Code",
   "author": {
     "name": "yiann"
@@ -14,6 +14,8 @@
   ],
   "userConfig": {
     "discord_bot_token": {
+      "type": "string",
+      "title": "Discord Bot Token",
       "description": "Discord bot token. Leave blank to run wrightward without Discord (Phases 1-2 behavior unchanged).",
       "sensitive": true
     }
