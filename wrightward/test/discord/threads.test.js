@@ -286,6 +286,50 @@ describe('discord/threads', () => {
       });
     });
 
+    describe('listActiveThreads', () => {
+      it('returns only non-archived entries with expected shape', async () => {
+        const api = makeMockApi();
+        const threads = createThreads(collabDir, api, 'forum-1');
+        await threads.ensureThreadForSession('sess-live', 'live task');
+        await threads.ensureThreadForSession('sess-done', 'done task');
+        await threads.archiveThread('sess-done');
+
+        const active = threads.listActiveThreads();
+        assert.equal(active.length, 1);
+        const entry = active[0];
+        assert.equal(entry.sessionId, 'sess-live');
+        assert.equal(typeof entry.thread_id, 'string');
+        assert.ok(entry.thread_id.length > 0);
+        assert.equal(typeof entry.rendered_name, 'string');
+      });
+
+      it('returns [] when the index is empty', () => {
+        const api = makeMockApi();
+        const threads = createThreads(collabDir, api, 'forum-1');
+        assert.deepEqual(threads.listActiveThreads(), []);
+      });
+
+      it('ignores entries without thread_id (defensive against corrupt rows)', async () => {
+        // Corrupt row test — write an entry missing `thread_id` directly to
+        // the index, then confirm listActiveThreads survives and returns the
+        // valid rows only. Regressions in ensureThreadForSession that produce
+        // malformed entries should not crash the inbound poller downstream.
+        const api = makeMockApi();
+        const threads = createThreads(collabDir, api, 'forum-1');
+        await threads.ensureThreadForSession('sess-valid', 'task');
+
+        const idxPath = indexPath(collabDir);
+        const idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
+        idx['sess-corrupt'] = { archived_at: null };
+        idx['sess-null-entry'] = null;
+        fs.writeFileSync(idxPath, JSON.stringify(idx));
+
+        const active = threads.listActiveThreads();
+        assert.equal(active.length, 1);
+        assert.equal(active[0].sessionId, 'sess-valid');
+      });
+    });
+
     describe('pruneArchivedBefore', () => {
       it('deletes archived threads older than the cutoff and removes them from the index', async () => {
         const api = makeMockApi();

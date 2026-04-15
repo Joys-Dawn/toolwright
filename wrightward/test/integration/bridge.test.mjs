@@ -474,4 +474,73 @@ describe('integration: bridge daemon', () => {
       'disabled_until_ts must be at least 50 min in the future (1h ceiling ± clock drift)');
     child = null; // already exited; afterEach skips kill
   });
+
+  // Thread-reply round-trip: user replies in a forum thread and the message
+  // appends as `user_message` targeting the thread owner, with meta carrying
+  // the thread id. Thread-context routing does NOT require an @mention.
+  it('routes a reply inside an agent forum thread back to that agent via bus.jsonl', async () => {
+    registerAgent(collabDir, 'sess-ccccc111');
+    writeContext(collabDir, 'sess-ccccc111', {
+      task: 'thread reply test', files: [], functions: [], status: 'in-progress'
+    });
+
+    const THREAD_ID = 'thread-reply-route';
+    let threadGetCalls = 0;
+    fixture = await makeFixtureServer({
+      [`GET /api/v10/channels/${BROADCAST_CHANNEL_ID}/messages`]: { status: 200, body: [] },
+      [`POST /api/v10/channels/${FORUM_CHANNEL_ID}/threads`]: () => ({
+        status: 200, body: { id: THREAD_ID, name: 'thread reply test (sess-ccc)' }
+      }),
+      [`POST /api/v10/channels/${BROADCAST_CHANNEL_ID}/messages`]: {
+        status: 200, body: { id: 'bcast-1' }
+      },
+      [`POST /api/v10/channels/${THREAD_ID}/messages`]: {
+        status: 200, body: { id: 'mirrored-into-thread' }
+      },
+      // First GET is the per-thread seed — empty, so the poller marks the
+      // stream seeded and on the next tick fetches real messages. Second GET
+      // returns the user's reply. Subsequent GETs are empty to keep the test
+      // deterministic — we only care about the single ingestion event.
+      [`GET /api/v10/channels/${THREAD_ID}/messages`]: () => {
+        threadGetCalls++;
+        if (threadGetCalls === 1) return { status: 200, body: [] };
+        if (threadGetCalls === 2) {
+          return {
+            status: 200, body: [
+              { id: 'reply-msg-1', author: { id: 'user-allowed-1', bot: false },
+                content: 'help me debug the login flow' }
+            ]
+          };
+        }
+        return { status: 200, body: [] };
+      }
+    });
+
+    child = spawnBridge(tmpDir, fixture.baseUrl);
+
+    // Drive thread creation via session_started (same handler that creates
+    // forum threads in the real bridge lifecycle).
+    await waitFor(() => fixture.calls.some((c) => c.method === 'GET'), 5000);
+    withAgentsLock(collabDir, (token) => {
+      append(token, collabDir, createEvent('sess-ccccc111', 'all', 'session_started',
+        'session online'));
+    });
+
+    // Wait until the bridge has both created the thread AND ingested the
+    // user reply back into bus.jsonl.
+    await waitFor(() => {
+      const events = readBus(collabDir).filter((e) => e.type === 'user_message');
+      return events.length >= 1;
+    }, 8000);
+
+    const events = readBus(collabDir).filter((e) => e.type === 'user_message');
+    assert.equal(events.length, 1);
+    assert.equal(events[0].to, 'sess-ccccc111',
+      'thread-context routing delivers to the thread owner without an @mention');
+    assert.match(events[0].body, /help me debug the login flow/);
+    assert.equal(events[0].meta.source, 'discord');
+    assert.equal(events[0].meta.discord_thread_id, THREAD_ID);
+    assert.equal(events[0].meta.discord_channel_id, THREAD_ID);
+    assert.equal(events[0].from, SYNTHETIC_SENDER);
+  });
 });

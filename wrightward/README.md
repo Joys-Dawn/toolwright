@@ -7,7 +7,7 @@ Claude Code plugin for multi-agent coordination. When multiple Claude Code sessi
 - **Message bus** — six MCP tools for sending notes, handoffs, file-watch registrations, and inbox checks between sessions.
 - **Channel push** (research preview) — optional wake-up `notifications/claude/channel` ping when an idle session receives an urgent bus event.
 - **Zero network I/O by default** — all state is local files in `.claude/collab/` (auto-gitignored). No daemon, no IPC, no external services unless the optional Discord bridge (v3.2) is explicitly enabled.
-- **Optional Discord observability** — opt-in bridge that mirrors bus events to a Discord forum (thread per agent) and relays `@agent-…` mentions back into the bus.
+- **Optional Discord observability** — opt-in bridge that mirrors bus events to a Discord forum (thread per agent) and relays inbound messages (thread replies or `@agent-…` mentions in the broadcast channel) back into the bus.
 
 ## Installation
 
@@ -146,8 +146,15 @@ When enabled, the bridge:
 
 - creates one Discord **forum thread per agent** named `<task> (<shortId>)` and posts per-session events there;
 - mirrors `session_started` / `session_ended` / broadcast handoffs / `user_message` targeted at `"all"` into a shared **broadcast text channel**;
-- watches that broadcast channel for `@agent-<shortId>` mentions and routes them back into `bus.jsonl` as `user_message` events targeted at the matching session;
+- watches the broadcast channel **and every live (non-archived) agent thread** for inbound messages and routes them back into `bus.jsonl` as `user_message` events;
 - renames a thread when `/wrightward:collab-context` updates the session's task string (throttled by Discord's own per-bucket rate limits).
+
+Inbound routing has two forms:
+
+- **Reply inside an agent's forum thread** → the message is delivered to that thread's session without an `@mention`. Useful when you're already watching the thread and want to respond in context.
+- **Post in the broadcast channel with `@agent-<id>`** → the message is delivered to the mentioned session(s). Fan-out is supported: a reply that also includes `@agent-<id>` mentions is delivered to the union of the thread owner and the mentioned sessions (deduped).
+
+Both forms are gated on `ALLOWED_SENDERS`, sanitized for tokens/webhook URLs, and UTF-8-clamped before append. If Discord's Message Content Intent is **off** for your bot, thread replies still route to the thread owner (the body may be empty) — broadcast @mentions, however, require MCI because the body is the only signal.
 
 When the bridge is disabled (default), Phases 1–2 behave identically to prior versions.
 
@@ -179,7 +186,7 @@ When the bridge is disabled (default), Phases 1–2 behave identically to prior 
 | `FORUM_CHANNEL_ID` | — | Forum channel ID where per-agent threads are created |
 | `BROADCAST_CHANNEL_ID` | — | Text channel ID for session-wide announcements and inbound @-mentions |
 | `ALLOWED_SENDERS` | `[]` | Array of Discord **user IDs** permitted to route inbound mentions. Empty blocks all inbound — send-only mode |
-| `POLL_INTERVAL_MS` | `3000` | How often to poll the broadcast channel for new messages |
+| `POLL_INTERVAL_MS` | `3000` | How often to poll the broadcast channel and each active forum thread for new messages |
 | `THREAD_RENAME_ON_CONTEXT_UPDATE` | `true` | Whether `/wrightward:collab-context` task changes rename the Discord thread |
 | `BOT_USER_AGENT` | (default `DiscordBot (…, 3.2.0)`) | Override only if you have a reason; must start with the literal `DiscordBot` to avoid Cloudflare blocking |
 | `mirrorPolicy` | (see below) | Per-event-type override of what gets mirrored where |

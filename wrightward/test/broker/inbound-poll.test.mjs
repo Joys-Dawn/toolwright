@@ -149,7 +149,7 @@ describe('broker/inbound-poll', () => {
         broadcastChannelId: 'b', allowedSenders: ['u1']
       });
       await p.pollOnce();
-      assert.equal(readMarker(collabDir), 'm3');
+      assert.equal(readMarker(collabDir).broadcast, 'm3');
       // Processed chronologically — oldest first.
       const events = readBus(collabDir).filter((e) => e.type === 'user_message');
       assert.equal(events.length, 3);
@@ -189,7 +189,7 @@ describe('broker/inbound-poll', () => {
       assert.equal(readBus(collabDir).filter(e => e.type === 'user_message').length, 0);
       // Marker should point at the newest message (old-3) so the next real
       // poll uses after=old-3 and only sees strictly-newer posts.
-      assert.equal(readMarker(collabDir), 'old-3');
+      assert.equal(readMarker(collabDir).broadcast, 'old-3');
     });
 
     it('persists bookmark across instances (restart recovery)', async () => {
@@ -280,6 +280,86 @@ describe('broker/inbound-poll', () => {
         broadcastChannelId: 'b', allowedSenders: ['u1']
       });
       assert.doesNotThrow(() => p.stop());
+    });
+  });
+
+  // Marker persistence is the single source of truth for "where did we leave
+  // off last tick" — a bug here either replays history (duplicate user
+  // messages) or skips live messages (silent data loss). These tests cover
+  // the input shapes readMarker/writeMarker must tolerate without either.
+  describe('readMarker/writeMarker edge cases', () => {
+    function markerFile(dir) {
+      return path.join(dir, 'bridge/last-polled.json');
+    }
+
+    it('readMarker returns the default shape when the marker file is missing', () => {
+      // Fresh collabDir — no bridge/last-polled.json written yet.
+      assert.deepEqual(readMarker(collabDir), { broadcast: null, threads: {} });
+    });
+
+    it('readMarker returns the default shape when the file contains invalid JSON', () => {
+      const file = markerFile(collabDir);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, 'not { valid json');
+
+      assert.deepEqual(readMarker(collabDir), { broadcast: null, threads: {} });
+    });
+
+    it('readMarker discards the threads field when it is an array (not an object)', () => {
+      // Preserves the broadcast marker but falls back to `{}` for threads —
+      // an array-shaped field would otherwise let Object.entries iterate
+      // numeric keys and poison the map.
+      const file = markerFile(collabDir);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify({
+        broadcast: 'bcast-1',
+        threads: ['not', 'an', 'object']
+      }));
+
+      assert.deepEqual(readMarker(collabDir),
+        { broadcast: 'bcast-1', threads: {} });
+    });
+
+    it('readMarker treats empty legacy last_polled_message_id as default', () => {
+      // The old single-marker shape used '' as "unseeded" in some early
+      // builds — migrate to the null default rather than seeding an empty
+      // string that would serialize as after= on the next fetch.
+      const file = markerFile(collabDir);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify({ last_polled_message_id: '' }));
+
+      assert.deepEqual(readMarker(collabDir), { broadcast: null, threads: {} });
+    });
+
+    it('writeMarker accepts a plain string and stores it as the broadcast marker', () => {
+      // Older broadcast-only tests call writeMarker(dir, 'seed') — that
+      // shape must keep working so test setup doesn't need to migrate.
+      writeMarker(collabDir, 'bcast-only-id');
+      assert.deepEqual(readMarker(collabDir),
+        { broadcast: 'bcast-only-id', threads: {} });
+    });
+
+    it('writeMarker normalizes an array-shaped threads field to an empty object', () => {
+      writeMarker(collabDir, { broadcast: 'b', threads: ['not', 'an', 'object'] });
+      assert.deepEqual(readMarker(collabDir),
+        { broadcast: 'b', threads: {} });
+    });
+
+    it('writeMarker drops non-string and empty-string entries from the threads map', () => {
+      // sanitizeThreadsMap is internal — verify its contract via the
+      // write/read round-trip. A buggy caller (e.g., a test fixture passing
+      // a stale number) must not persist garbage that poisons the next read.
+      writeMarker(collabDir, {
+        broadcast: 'b',
+        threads: {
+          'thread-ok': 'id-ok',
+          'thread-nonstring': 42,
+          '': 'empty-key',
+          'thread-empty-value': ''
+        }
+      });
+      assert.deepEqual(readMarker(collabDir),
+        { broadcast: 'b', threads: { 'thread-ok': 'id-ok' } });
     });
   });
 });

@@ -128,6 +128,31 @@ function createThreads(collabDir, api, forumChannelId) {
   }
 
   /**
+   * Returns all live (non-archived) threads as a flat array suitable for
+   * iteration. Used by the inbound poller to know which thread channels to
+   * poll each tick. `archived_at === null` is the live sentinel — archived
+   * threads carry a numeric ms epoch and are excluded here.
+   *
+   * Shape per entry: { sessionId, thread_id, rendered_name }. Entries
+   * lacking a thread_id (partial or corrupt index rows) are skipped
+   * defensively so a bad row can't crash the poller.
+   */
+  function listActiveThreads() {
+    const idx = readIndex(collabDir);
+    const out = [];
+    for (const [sessionId, entry] of Object.entries(idx)) {
+      if (!entry || !entry.thread_id) continue;
+      if (entry.archived_at != null) continue;
+      out.push({
+        sessionId,
+        thread_id: entry.thread_id,
+        rendered_name: entry.rendered_name || null
+      });
+    }
+    return out;
+  }
+
+  /**
    * Deletes archived threads whose archived_at is older than `olderThanTs`
    * (a ms epoch). Entries without archived_at are skipped — only archived
    * threads are candidates. Returns { deleted: string[], failed: {sid, error}[], skipped: string[] }.
@@ -171,6 +196,7 @@ function createThreads(collabDir, api, forumChannelId) {
     archiveThread: archiveThreadForSession,
     getThreadIdFor,
     listSessions,
+    listActiveThreads,
     pruneArchivedBefore
   };
 }

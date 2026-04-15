@@ -275,6 +275,7 @@ async function main() {
     broadcastChannelId: config.discord.BROADCAST_CHANNEL_ID,
     allowedSenders: config.discord.ALLOWED_SENDERS || [],
     pollIntervalMs: config.discord.POLL_INTERVAL_MS,
+    threadsProvider: threads.listActiveThreads,
     logger: (line) => appendLog(collabDir, redactTokens(line))
   });
 

@@ -70,25 +70,30 @@ function clampUtf8(str, maxBytes) {
 }
 
 /**
- * Parses `@agent-<id>` mentions out of `content` and resolves them to a
- * known session in `agentRoster`.
+ * Parses `@agent-<id>` mentions out of `content` and resolves them to known
+ * sessions in `agentRoster`. Returns every resolved target in message order,
+ * deduped — fan-out routing is the caller's responsibility.
  *
- * Matching precedence:
- *   1. Full session ID match wins immediately (and clears ambiguity).
- *   2. Short-ID match (first 8 chars) resolves to the single matching
- *      session if unambiguous; ambiguous short-IDs route to "all" with
- *      `ambiguous: true` so the formatter can add a warning in the broadcast.
+ * Per-mention resolution:
+ *   1. Full session ID match resolves to that sessionId.
+ *   2. Short-ID match (first 8 chars) resolves to the single matching session.
+ *   3. Ambiguous short-ID (two sessions share the same 8-char prefix) resolves
+ *      to `"all"` and sets `ambiguous: true` so callers can surface a warning.
+ *   4. Mentions matching no roster entry are dropped silently.
  *
  * The `stripped` return is `content` with all `@agent-<id>` tokens removed
  * and whitespace collapsed — safe to append to bus.jsonl as message body.
  *
  * @param {string} content
  * @param {object} agentRoster - Map of sessionId → any (only keys are used).
- * @returns {{ routedTo: string|null, stripped: string, ambiguous: boolean }}
+ * @returns {{ mentions: string[], stripped: string, ambiguous: boolean }}
+ *   `mentions` is the deduped, message-ordered list of resolved targets
+ *   (sessionIds plus possibly `"all"` for ambiguous short-IDs). Empty when
+ *   no mention resolves.
  */
 function parseMentions(content, agentRoster) {
   if (typeof content !== 'string' || content.length === 0) {
-    return { routedTo: null, stripped: '', ambiguous: false };
+    return { mentions: [], stripped: '', ambiguous: false };
   }
 
   const sessionIds = agentRoster && typeof agentRoster === 'object'
@@ -107,33 +112,47 @@ function parseMentions(content, agentRoster) {
     }
   }
 
-  let routedTo = null;
+  const mentions = [];
+  const seen = new Set();
   let ambiguous = false;
+  let concreteResolved = false;
+
+  function pushOnce(target) {
+    if (seen.has(target)) return;
+    seen.add(target);
+    mentions.push(target);
+  }
 
   for (const m of content.matchAll(AGENT_MENTION_RE)) {
     const id = m[1];
     if (sessionIdSet.has(id)) {
-      routedTo = id;
-      ambiguous = false;
-      break;
+      pushOnce(id);
+      concreteResolved = true;
+      continue;
     }
     const byShort = byShortId.get(id);
     if (byShort === null) {
-      if (!routedTo) {
-        routedTo = 'all';
-        ambiguous = true;
-      }
-    } else if (byShort && !routedTo) {
-      routedTo = byShort;
+      pushOnce('all');
+      ambiguous = true;
+    } else if (byShort) {
+      pushOnce(byShort);
+      concreteResolved = true;
     }
   }
+
+  // When the user unambiguously addressed at least one concrete session in
+  // this message, drop any `'all'` entry contributed by a sibling ambiguous
+  // short-ID. Otherwise a single ambiguous mention dilutes the intent of the
+  // whole message into a broadcast. `ambiguous` still surfaces so callers can
+  // show a "did you mean X or Y?" warning alongside the targeted delivery.
+  const filtered = concreteResolved ? mentions.filter((m) => m !== 'all') : mentions;
 
   const stripped = content
     .replace(AGENT_MENTION_RE, '')
     .replace(/\s+/g, ' ')
     .trim();
 
-  return { routedTo, stripped, ambiguous };
+  return { mentions: filtered, stripped, ambiguous };
 }
 
 module.exports = { redactTokens, clampUtf8, parseMentions };

@@ -147,91 +147,115 @@ describe('discord-sanitize', () => {
       'sess-abc12346': {} // same short-ID prefix as sess-abc12345 → ambiguous short
     };
 
-    it('returns null routedTo and empty stripped for empty content', () => {
+    it('returns empty mentions and empty stripped for empty content', () => {
       const r = parseMentions('', roster);
-      assert.equal(r.routedTo, null);
+      assert.deepEqual(r.mentions, []);
       assert.equal(r.stripped, '');
       assert.equal(r.ambiguous, false);
     });
 
-    it('returns null routedTo for non-string content', () => {
+    it('returns empty mentions for non-string content', () => {
       const r = parseMentions(null, roster);
-      assert.equal(r.routedTo, null);
+      assert.deepEqual(r.mentions, []);
     });
 
-    it('returns null routedTo when no @agent- mentions present', () => {
+    it('returns empty mentions when no @agent- mentions present', () => {
       const r = parseMentions('just a regular message', roster);
-      assert.equal(r.routedTo, null);
+      assert.deepEqual(r.mentions, []);
       assert.equal(r.stripped, 'just a regular message');
+      assert.equal(r.ambiguous, false);
     });
 
     it('matches full session ID in @agent-<sessionId>', () => {
       const r = parseMentions('@agent-sess-def67890 please review', roster);
-      assert.equal(r.routedTo, 'sess-def67890');
+      assert.deepEqual(r.mentions, ['sess-def67890']);
       assert.equal(r.stripped, 'please review');
     });
 
     it('matches a short-ID (first 8 chars) when unambiguous', () => {
       const r = parseMentions('@agent-sess-def please', { 'sess-def67890': {} });
       // 'sess-def' is 8 chars — first 8 of 'sess-def67890'. Short-ID match.
-      assert.equal(r.routedTo, 'sess-def67890');
+      assert.deepEqual(r.mentions, ['sess-def67890']);
     });
 
-    it('routes to "all" with ambiguous=true when short-ID collides', () => {
+    it('routes ambiguous short-ID to "all" with ambiguous=true', () => {
       // 'sess-abc' is the 8-char prefix of both sess-abc12345 and sess-abc12346.
       const r = parseMentions('@agent-sess-abc help', roster);
-      assert.equal(r.routedTo, 'all');
+      assert.deepEqual(r.mentions, ['all']);
       assert.equal(r.ambiguous, true);
     });
 
-    it('prefers full-ID match even when short-ID collision exists', () => {
-      // Full ID wins — ambiguity only matters when we fall back to short-ID.
+    it('full-ID match resolves to single session without ambiguity', () => {
+      // Full-ID mentions never trigger ambiguity — even when the roster has
+      // short-ID collisions among other sessions. Fan-out only comes from
+      // resolving multiple *distinct* mentions.
       const r = parseMentions('@agent-sess-abc12345', roster);
-      assert.equal(r.routedTo, 'sess-abc12345');
+      assert.deepEqual(r.mentions, ['sess-abc12345']);
       assert.equal(r.ambiguous, false);
     });
 
-    it('full-ID match wins over earlier short-ID ambiguous match', () => {
+    it('drops ambiguous "all" when a sibling concrete mention also resolved', () => {
+      // Respects user intent: if the message contains at least one
+      // unambiguous full-ID mention, a sibling ambiguous short-ID must NOT
+      // broadcast to everyone (which would dilute the targeted intent). The
+      // `ambiguous` flag still fires so callers can surface a "did you mean?"
+      // warning alongside the targeted delivery.
       const r = parseMentions('@agent-sess-abc then @agent-sess-def67890', roster);
-      assert.equal(r.routedTo, 'sess-def67890');
-      assert.equal(r.ambiguous, false);
+      assert.deepEqual(r.mentions, ['sess-def67890']);
+      assert.equal(r.ambiguous, true);
     });
 
-    it('returns null routedTo when mention does not match any roster entry', () => {
+    it('keeps "all" when the only mention is ambiguous (no concrete sibling)', () => {
+      // Still broadcast when the user gave us nothing more specific to work
+      // with — the ambiguous short-ID is the only signal, so broadcasting is
+      // the safest fallback.
+      const r = parseMentions('@agent-sess-abc please', roster);
+      assert.deepEqual(r.mentions, ['all']);
+      assert.equal(r.ambiguous, true);
+    });
+
+    it('drops ambiguous "all" when a concrete short-ID mention also resolved', () => {
+      // Symmetry: both full-ID and unambiguous short-ID count as "concrete"
+      // for the drop-`all` rule. Here `sess-def` is a unique short-ID that
+      // resolves to sess-def67890; the ambiguous `sess-abc` sibling should
+      // not override it with a broadcast.
+      const r = parseMentions('@agent-sess-abc and @agent-sess-def', roster);
+      assert.deepEqual(r.mentions, ['sess-def67890']);
+      assert.equal(r.ambiguous, true);
+    });
+
+    it('drops mentions that match no roster entry', () => {
       const r = parseMentions('@agent-unknown hello', roster);
-      assert.equal(r.routedTo, null);
+      assert.deepEqual(r.mentions, []);
       assert.equal(r.stripped, 'hello');
     });
 
-    it('strips all @agent- tokens from returned content', () => {
+    it('strips all @agent- tokens and returns every resolved target', () => {
       const r = parseMentions('@agent-sess-def67890 fix @agent-sess-abc12345 now', roster);
       assert.doesNotMatch(r.stripped, /@agent-/);
       assert.equal(r.stripped, 'fix now');
+      // Fan-out preserves message order.
+      assert.deepEqual(r.mentions, ['sess-def67890', 'sess-abc12345']);
     });
 
-    it('does NOT match <@agent-...> (Discord snowflake mention form)', () => {
-      // Critical: the <@...> form is Discord's own snowflake-mention. Hijacking
-      // that shape with non-numeric values would render as broken mentions.
+    it('matches free-text @agent-<id> even inside <...> brackets', () => {
+      // The bracket form is Discord's own snowflake-mention shape. We don't
+      // adopt that syntax for agent routing — but our free-text regex still
+      // picks up the `@agent-<id>` substring inside brackets. What matters is
+      // that we never route `<@<numeric>>` (that test follows).
       const r = parseMentions('<@agent-sess-def67890> hi', roster);
-      // The `@agent-` substring is still reached via the free-text regex
-      // regardless of `<>`, BUT the plan specifies we only support the free-text
-      // form. We don't strip `<` `>` chars — they remain so the sender can see
-      // their bracketed form was not treated as Discord's mention syntax.
-      // Acceptance here: free-text match IS made (same string); the test that
-      // matters is that we never inject events for the snowflake-number shape.
-      assert.equal(r.routedTo, 'sess-def67890');
+      assert.deepEqual(r.mentions, ['sess-def67890']);
     });
 
     it('ignores <@12345> pure numeric Discord mentions', () => {
-      // <@12345> is Discord's user-mention syntax — we must not route it.
       const r = parseMentions('<@1234567890> hello', roster);
-      assert.equal(r.routedTo, null);
+      assert.deepEqual(r.mentions, []);
     });
 
     it('handles null/undefined agentRoster gracefully', () => {
       assert.doesNotThrow(() => parseMentions('@agent-x hi', null));
       const r = parseMentions('@agent-x hi', null);
-      assert.equal(r.routedTo, null);
+      assert.deepEqual(r.mentions, []);
     });
 
     it('collapses extra whitespace left behind after stripping mentions', () => {
@@ -239,15 +263,36 @@ describe('discord-sanitize', () => {
       assert.equal(r.stripped, 'hello how are you');
     });
 
-    it('handles multiple mentions without short-ID collision', () => {
+    // Test #14 from plan.
+    it('returns every mention in message order when short-IDs do not collide', () => {
       const roster2 = {
         'sess-aaaaaaaa': {},
         'sess-bbbbbbbb': {}
       };
       const r = parseMentions('@agent-sess-aaa and @agent-sess-bbb', roster2);
-      // First match: short-id sess-aaa → sess-aaaaaaaa. But then we see the
-      // second mention which is also only short — routedTo should remain the first.
-      assert.equal(r.routedTo, 'sess-aaaaaaaa');
+      assert.deepEqual(r.mentions, ['sess-aaaaaaaa', 'sess-bbbbbbbb']);
+    });
+
+    // Test #15 from plan.
+    it('dedupes the same session mentioned multiple times', () => {
+      const r = parseMentions('@agent-sess-def67890 @agent-sess-def67890 done', roster);
+      assert.deepEqual(r.mentions, ['sess-def67890']);
+    });
+
+    // Test #16 from plan (explicit empty-mentions ambiguous=false).
+    it('returns ambiguous=false when no mention resolved', () => {
+      const r = parseMentions('plain text', roster);
+      assert.deepEqual(r.mentions, []);
+      assert.equal(r.ambiguous, false);
+    });
+
+    it('keeps ambiguous=false if only full-ID mentions are present', () => {
+      // Pin: ambiguity is per-mention and must only latch when an actual
+      // short-ID collision fires. Multiple clean full-ID mentions do not
+      // count as ambiguous even when the roster has unrelated collisions.
+      const r = parseMentions('@agent-sess-abc12345 and @agent-sess-def67890', roster);
+      assert.deepEqual(r.mentions, ['sess-abc12345', 'sess-def67890']);
+      assert.equal(r.ambiguous, false);
     });
   });
 });
