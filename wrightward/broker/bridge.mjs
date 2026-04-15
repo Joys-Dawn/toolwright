@@ -140,6 +140,43 @@ async function dispatchEvent(event, policy, threads, api, config, collabDir) {
  * This respects the "never call api.* inside withAgentsLock" rule — Discord
  * REST calls could block for seconds, and other agents must not wait on them.
  */
+/**
+ * Polls `tick` repeatedly until `deadlineMs` elapses or the `shouldStop`
+ * callback returns true. Used during graceful shutdown so events appended
+ * by cleanup.js (which races the shutdown path) still get mirrored before
+ * we exit — a single drain tick is not enough when the append lands AFTER
+ * the tick reads the bus.
+ *
+ * Each iteration's errors are swallowed (logged via `onError`) so one bad
+ * Discord response does not kill the whole drain. The loop ends as soon as
+ * now >= deadline.
+ *
+ * @param {object} opts
+ * @param {() => Promise<void>} opts.tick - work to run each iteration
+ * @param {number} opts.deadlineMs - absolute ms epoch to stop at
+ * @param {number} opts.pollMs - delay between iterations
+ * @param {(err: Error) => void} [opts.onError]
+ * @param {() => number} [opts.now=Date.now]
+ * @param {(ms: number) => Promise<void>} [opts.sleep]
+ */
+async function runDrainLoop(opts) {
+  const now = opts.now || Date.now;
+  const sleep = opts.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const onError = opts.onError || (() => {});
+  while (now() < opts.deadlineMs) {
+    try {
+      await opts.tick();
+    } catch (err) {
+      onError(err);
+    }
+    // Skip the trailing sleep when there isn't room for another full
+    // iteration before the deadline — shaves up to pollMs off the shutdown
+    // wall time with no loss of event coverage.
+    if (opts.deadlineMs - now() <= opts.pollMs) break;
+    await sleep(opts.pollMs);
+  }
+}
+
 async function runOutboundTick(collabDir, policy, api, threads, config) {
   let events, bookmark, meta, isStale, endOffset;
   withAgentsLock(collabDir, (token) => {
@@ -324,21 +361,31 @@ async function main() {
   function shutdown(code) {
     if (shuttingDown) return;
     shuttingDown = true;
-    try { watcher.close(); } catch (_) {}
     try { inbound.stop(); } catch (_) {}
     try { clearInterval(parentTimer); } catch (_) {}
     // Drain: cleanup.js appends session_ended to bus.jsonl in parallel with
-    // MCP shutdown, so the file-watcher may never fire for it before we're
-    // told to exit. Enqueue one final tick to catch + mirror it (and archive
-    // the thread) before shutting down.
-    queue = queue.then(() => runOutboundTick(collabDir, policy, api, threads, config)
-      .catch((err) => appendLog(collabDir, '[bridge] drain tick: ' +
-        redactTokens(err.message || String(err)))));
-    // Give the queue a brief moment to flush in-flight + drain tick.
+    // MCP shutdown — the append may land BEFORE, DURING, or AFTER this
+    // shutdown starts. The watcher stays live during the drain so real-time
+    // appends fire the normal tick path; the drain loop re-reads the bus on
+    // a poll interval as a belt-and-braces catch for debounced or missed
+    // watcher events. Deadline is held at 2s so the exit is still prompt.
+    const DRAIN_MS = 2000;
+    const DRAIN_POLL_MS = 250;
+    const deadlineMs = Date.now() + DRAIN_MS;
+    queue = queue.then(() => runDrainLoop({
+      tick: () => runOutboundTick(collabDir, policy, api, threads, config),
+      deadlineMs,
+      pollMs: DRAIN_POLL_MS,
+      onError: (err) => appendLog(collabDir, '[bridge] drain tick: ' +
+        redactTokens(err.message || String(err)))
+    }));
     Promise.race([
       queue,
-      new Promise((r) => setTimeout(r, 2000))
-    ]).finally(() => process.exit(code));
+      new Promise((r) => setTimeout(r, DRAIN_MS + 500))
+    ]).finally(() => {
+      try { watcher.close(); } catch (_) {}
+      process.exit(code);
+    });
   }
 
   process.on('SIGTERM', () => shutdown(0));
@@ -365,4 +412,4 @@ if (isMain) {
   });
 }
 
-export { main, dispatchEvent, runOutboundTick, readBridgeFresh, seedBookmarkIfFresh };
+export { main, dispatchEvent, runOutboundTick, runDrainLoop, readBridgeFresh, seedBookmarkIfFresh };

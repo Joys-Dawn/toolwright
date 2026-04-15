@@ -9,7 +9,7 @@ const { ensureCollabDir } = require('../../lib/collab-dir');
 const { withAgentsLock, registerAgent, registerAgentInLock } = require('../../lib/agents');
 const { createEvent } = require('../../lib/bus-schema');
 const { append, appendBatch, busPath } = require('../../lib/bus-log');
-const { listInbox, findInterested, writeInterest, writeAck, buildFileFreedEvents } = require('../../lib/bus-query');
+const { listInbox, findInterested, writeInterest, writeAck, findEventById, buildFileFreedEvents } = require('../../lib/bus-query');
 const { writeContext } = require('../../lib/context');
 const interestIndex = require('../../lib/interest-index');
 
@@ -235,17 +235,62 @@ describe('bus-query', () => {
   });
 
   describe('writeAck', () => {
-    it('appends ack event with correct meta', () => {
+    it('appends ack event routed at the original handoff sender', () => {
       withAgentsLock(collabDir, (token) => {
-        const id = writeAck(token, collabDir, 'sess-1', 'event-123', 'accepted');
+        const id = writeAck(token, collabDir, 'sess-1', 'sess-sender', 'event-123', 'accepted');
         assert.ok(typeof id === 'string');
       });
 
       const content = fs.readFileSync(busPath(collabDir), 'utf8').trim();
       const event = JSON.parse(content);
       assert.equal(event.type, 'ack');
+      // Critical routing fix: ack must target the original sender, not 'all'.
+      // Otherwise the sender never sees it (pre-urgency) or every agent gets
+      // spammed (post-urgency).
+      assert.equal(event.to, 'sess-sender');
       assert.equal(event.meta.ack_of, 'event-123');
       assert.equal(event.meta.decision, 'accepted');
+      assert.equal(event.body, 'Ack: accepted');
+    });
+
+    it('includes task_ref in the body when provided', () => {
+      withAgentsLock(collabDir, (token) => {
+        writeAck(token, collabDir, 'sess-1', 'sess-sender', 'event-123', 'rejected', 'auth refactor');
+      });
+      const event = JSON.parse(fs.readFileSync(busPath(collabDir), 'utf8').trim());
+      assert.equal(event.body, 'Ack: rejected — auth refactor');
+    });
+  });
+
+  describe('findEventById', () => {
+    it('returns the matching event when present', () => {
+      let appendedId;
+      withAgentsLock(collabDir, (token) => {
+        const ev = createEvent('sess-2', 'sess-1', 'handoff', 'take over', { task_ref: 'X' });
+        append(token, collabDir, ev);
+        appendedId = ev.id;
+
+        const found = findEventById(token, collabDir, appendedId);
+        assert.ok(found);
+        assert.equal(found.id, appendedId);
+        assert.equal(found.from, 'sess-2');
+        assert.equal(found.meta.task_ref, 'X');
+      });
+    });
+
+    it('returns null when no event matches', () => {
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'note', 'hi'));
+        assert.equal(findEventById(token, collabDir, 'does-not-exist'), null);
+      });
+    });
+
+    it('returns null for empty or non-string id', () => {
+      withAgentsLock(collabDir, (token) => {
+        assert.equal(findEventById(token, collabDir, ''), null);
+        assert.equal(findEventById(token, collabDir, null), null);
+        assert.equal(findEventById(token, collabDir, undefined), null);
+      });
     });
   });
 

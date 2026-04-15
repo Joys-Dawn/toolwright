@@ -20,7 +20,7 @@
 const DEFAULT_BASE = 'https://discord.com/api/v10';
 // User-Agent MUST start with 'DiscordBot' per Discord's API reference —
 // generic UAs are Cloudflare-blocked with misleading errors.
-const USER_AGENT = 'DiscordBot (https://github.com/Joys-Dawn/toolwright, 3.4.0)';
+const USER_AGENT = 'DiscordBot (https://github.com/Joys-Dawn/toolwright, 3.6.0)';
 const MAX_RETRIES = 5;
 // Auto-archive duration is an enum — arbitrary values are rejected with 400.
 const ALLOWED_AUTO_ARCHIVE = new Set([60, 1440, 4320, 10080]);

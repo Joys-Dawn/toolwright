@@ -55,6 +55,7 @@ describe('mcp/tools', () => {
       const data = JSON.parse(result.content[0].text);
       assert.ok(data.error);
       assert.match(data.error, /not bound/);
+      assert.match(data.hint, /Try again in a few seconds/);
     });
 
     it('returns error when BUS_ENABLED is false', () => {
@@ -63,6 +64,7 @@ describe('mcp/tools', () => {
       const data = JSON.parse(result.content[0].text);
       assert.ok(data.error);
       assert.match(data.error, /disabled/);
+      assert.match(data.hint, /BUS_ENABLED=true/);
     });
 
     it('returns error for unknown tool name', () => {
@@ -144,24 +146,55 @@ describe('mcp/tools', () => {
   });
 
   describe('wrightward_ack', () => {
-    it('appends ack event with correct meta', () => {
-      const result = handleToolCall('wrightward_ack', { id: 'event-123', decision: 'rejected' }, collabDir, 'sess-1', config, tmpDir);
+    function seedHandoff(taskRef) {
+      let handoffId;
+      withAgentsLock(collabDir, (token) => {
+        const e = createEvent('sess-sender', 'sess-1', 'handoff', 'take over', {
+          task_ref: taskRef || 'work'
+        });
+        append(token, collabDir, e);
+        handoffId = e.id;
+      });
+      return handoffId;
+    }
+
+    it('routes the ack event at the original handoff sender', () => {
+      const handoffId = seedHandoff('auth refactor');
+      const result = handleToolCall('wrightward_ack', { id: handoffId, decision: 'rejected' }, collabDir, 'sess-1', config, tmpDir);
       const data = JSON.parse(result.content[0].text);
       assert.ok(data.ok);
       assert.ok(data.id);
+      assert.match(data.hint, /Sender notified/);
 
       const events = fs.readFileSync(busPath(collabDir), 'utf8').trim().split('\n').map(l => JSON.parse(l));
       const ack = events.find(e => e.type === 'ack');
       assert.ok(ack);
-      assert.equal(ack.meta.ack_of, 'event-123');
+      // Critical: acks must go to the original sender, not 'all'.
+      assert.equal(ack.to, 'sess-sender');
+      assert.equal(ack.meta.ack_of, handoffId);
       assert.equal(ack.meta.decision, 'rejected');
+      // task_ref is copied into the ack body so the sender's thread reads cleanly.
+      assert.match(ack.body, /auth refactor/);
     });
 
     it('defaults decision to accepted', () => {
-      handleToolCall('wrightward_ack', { id: 'event-456' }, collabDir, 'sess-1', config, tmpDir);
+      const handoffId = seedHandoff();
+      handleToolCall('wrightward_ack', { id: handoffId }, collabDir, 'sess-1', config, tmpDir);
       const events = fs.readFileSync(busPath(collabDir), 'utf8').trim().split('\n').map(l => JSON.parse(l));
       const ack = events.find(e => e.type === 'ack');
       assert.equal(ack.meta.decision, 'accepted');
+    });
+
+    it('returns error when ackOf refers to an unknown event', () => {
+      const result = handleToolCall('wrightward_ack', { id: 'unknown-event-id' }, collabDir, 'sess-1', config, tmpDir);
+      const data = JSON.parse(result.content[0].text);
+      assert.ok(data.error, 'expected error for unknown ackOf');
+      assert.match(data.error, /unknown or expired/);
+      assert.match(data.hint, /wrightward_list_inbox/);
+      // Must NOT append an ack event when routing fails — don't leave an
+      // un-routable ack sitting in the bus.
+      const busText = fs.existsSync(busPath(collabDir)) ? fs.readFileSync(busPath(collabDir), 'utf8') : '';
+      assert.ok(!busText.includes('"type":"ack"'), 'no ack event should be written on lookup failure');
     });
   });
 
@@ -170,11 +203,25 @@ describe('mcp/tools', () => {
       const result = handleToolCall('wrightward_send_note', { body: 'hello world' }, collabDir, 'sess-1', config, tmpDir);
       const data = JSON.parse(result.content[0].text);
       assert.ok(data.id);
+      // kind=note default → quiet-log hint
+      assert.match(data.hint, /Logged quietly/);
 
       const events = fs.readFileSync(busPath(collabDir), 'utf8').trim().split('\n').map(l => JSON.parse(l));
       const note = events.find(e => e.type === 'note');
       assert.ok(note);
       assert.equal(note.body, 'hello world');
+    });
+
+    it('hint switches to broadcast-wording for kind=finding', () => {
+      const result = handleToolCall('wrightward_send_note', { body: 'bug', kind: 'finding' }, collabDir, 'sess-1', config, tmpDir);
+      const data = JSON.parse(result.content[0].text);
+      assert.match(data.hint, /Broadcast/);
+    });
+
+    it('hint switches to broadcast-wording for kind=decision', () => {
+      const result = handleToolCall('wrightward_send_note', { body: 'pick X', kind: 'decision' }, collabDir, 'sess-1', config, tmpDir);
+      const data = JSON.parse(result.content[0].text);
+      assert.match(data.hint, /Broadcast/);
     });
 
     it('defaults to to "all" when omitted', () => {
@@ -187,6 +234,32 @@ describe('mcp/tools', () => {
       handleToolCall('wrightward_send_note', { to: 'sess-2', body: 'direct' }, collabDir, 'sess-1', config, tmpDir);
       const events = fs.readFileSync(busPath(collabDir), 'utf8').trim().split('\n').map(l => JSON.parse(l));
       assert.equal(events[0].to, 'sess-2');
+    });
+
+    it('defaults kind to "note" when omitted (backwards compat)', () => {
+      handleToolCall('wrightward_send_note', { body: 'quiet log' }, collabDir, 'sess-1', config, tmpDir);
+      const events = fs.readFileSync(busPath(collabDir), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+      assert.equal(events[0].type, 'note');
+    });
+
+    it('writes a finding event when kind="finding"', () => {
+      handleToolCall('wrightward_send_note', { body: 'bug in X', kind: 'finding' }, collabDir, 'sess-1', config, tmpDir);
+      const events = fs.readFileSync(busPath(collabDir), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+      assert.equal(events[0].type, 'finding');
+      assert.equal(events[0].body, 'bug in X');
+    });
+
+    it('writes a decision event when kind="decision"', () => {
+      handleToolCall('wrightward_send_note', { body: 'JWT not cookies', kind: 'decision' }, collabDir, 'sess-1', config, tmpDir);
+      const events = fs.readFileSync(busPath(collabDir), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+      assert.equal(events[0].type, 'decision');
+    });
+
+    it('rejects unknown kind values', () => {
+      const result = handleToolCall('wrightward_send_note', { body: 'x', kind: 'rumor' }, collabDir, 'sess-1', config, tmpDir);
+      const data = JSON.parse(result.content[0].text);
+      assert.ok(data.error);
+      assert.match(data.error, /kind must be one of/);
     });
   });
 
@@ -266,6 +339,8 @@ describe('mcp/tools', () => {
       }, collabDir, 'sess-1', config, tmpDir);
       const data = JSON.parse(result.content[0].text);
       assert.ok(data.id);
+      assert.match(data.hint, /Recipient sees this on their next tool call/);
+      assert.match(data.hint, /ack will arrive in your inbox/);
 
       const events = fs.readFileSync(busPath(collabDir), 'utf8').trim().split('\n').map(l => JSON.parse(l));
       const handoff = events.find(e => e.type === 'handoff');
@@ -280,6 +355,7 @@ describe('mcp/tools', () => {
       const result = handleToolCall('wrightward_watch_file', { file: 'db.ts' }, collabDir, 'sess-1', config, tmpDir);
       const data = JSON.parse(result.content[0].text);
       assert.ok(data.id);
+      assert.match(data.hint, /notified when the file frees up/);
 
       const events = fs.readFileSync(busPath(collabDir), 'utf8').trim().split('\n').map(l => JSON.parse(l));
       const interest = events.find(e => e.type === 'interest');
@@ -302,6 +378,7 @@ describe('mcp/tools', () => {
         { body: 'hi user', audience: 'user' }, collabDir, 'sess-1', config, tmpDir);
       const data = JSON.parse(result.content[0].text);
       assert.ok(data.id);
+      assert.match(data.hint, /Posted to Discord/);
 
       const evt = readEvents().find(e => e.type === 'agent_message');
       assert.ok(evt);
@@ -311,17 +388,22 @@ describe('mcp/tools', () => {
     });
 
     it('appends agent_message with audience="all"', () => {
-      handleToolCall('wrightward_send_message',
+      const result = handleToolCall('wrightward_send_message',
         { body: 'broadcast', audience: 'all' }, collabDir, 'sess-1', config, tmpDir);
+      const data = JSON.parse(result.content[0].text);
+      assert.match(data.hint, /Broadcast to Discord \+ every active agent/);
       const evt = readEvents().find(e => e.type === 'agent_message');
       assert.equal(evt.to, 'all');
     });
 
     it('appends agent_message with audience as a sessionId', () => {
-      handleToolCall('wrightward_send_message',
-        { body: 'hey peer', audience: 'sess-2' }, collabDir, 'sess-1', config, tmpDir);
+      const result = handleToolCall('wrightward_send_message',
+        { body: 'hey peer', audience: 'sess-2aa' }, collabDir, 'sess-1', config, tmpDir);
+      const data = JSON.parse(result.content[0].text);
+      // Session-targeted message hint names the first 8 chars of the sessionId.
+      assert.match(data.hint, /sess-2aa's Discord thread and inbox/);
       const evt = readEvents().find(e => e.type === 'agent_message');
-      assert.equal(evt.to, 'sess-2');
+      assert.equal(evt.to, 'sess-2aa');
     });
 
     it('audience="all" lands in another agent\'s urgent inbox', () => {

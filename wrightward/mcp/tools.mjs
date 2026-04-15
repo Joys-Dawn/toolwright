@@ -13,7 +13,7 @@ const require = createRequire(import.meta.url);
 
 const { withAgentsLock } = require('../lib/agents');
 const { readBookmark, append, appendBatch } = require('../lib/bus-log');
-const { listInbox, writeInterest, writeAck, buildFileFreedEvents } = require('../lib/bus-query');
+const { listInbox, writeInterest, writeAck, findEventById, buildFileFreedEvents } = require('../lib/bus-query');
 const { createEvent, URGENT_TYPES } = require('../lib/bus-schema');
 const { readContext, writeContext } = require('../lib/context');
 const { getAllClaimedFiles } = require('../lib/session-state');
@@ -54,6 +54,8 @@ function validateAckArgs(args) {
   }
 }
 
+const SEND_NOTE_KINDS = new Set(['note', 'finding', 'decision']);
+
 function validateSendNoteArgs(args) {
   if (typeof args.body !== 'string' || args.body.length === 0) {
     throw new Error('body must be a non-empty string');
@@ -63,6 +65,9 @@ function validateSendNoteArgs(args) {
   }
   if (args.files !== undefined && (!Array.isArray(args.files) || args.files.some(f => typeof f !== 'string'))) {
     throw new Error('files must be an array of strings');
+  }
+  if (args.kind !== undefined && !SEND_NOTE_KINDS.has(args.kind)) {
+    throw new Error('kind must be one of: note, finding, decision');
   }
 }
 
@@ -99,37 +104,38 @@ function validateSendMessageArgs(args) {
 const TOOL_DEFINITIONS = [
   {
     name: 'wrightward_list_inbox',
-    description: 'List urgent bus events targeted at this session. Advances delivery bookmark by default. Only returns urgent event types (handoff, file_freed, user_message, blocker, delivery_failed).',
+    description: 'List urgent bus events targeted at this session. Advances delivery bookmark by default. Only returns urgent event types (handoff, file_freed, user_message, blocker, delivery_failed, agent_message, ack, finding, decision).',
     inputSchema: {
       type: 'object',
       properties: {
         limit: { type: 'number', description: 'Max events to return' },
-        types: { type: 'array', items: { type: 'string' }, description: 'Filter within urgent event types only. Valid values: "handoff", "file_freed", "user_message", "blocker", "delivery_failed". Non-urgent types are never returned.' },
+        types: { type: 'array', items: { type: 'string' }, description: 'Filter within urgent event types only. Valid values: "handoff", "file_freed", "user_message", "blocker", "delivery_failed", "agent_message", "ack", "finding", "decision". Non-urgent types are never returned.' },
         mark_delivered: { type: 'boolean', description: 'Advance bookmark (default true)' }
       }
     }
   },
   {
     name: 'wrightward_ack',
-    description: 'Acknowledge a bus event (e.g., handoff). Records a semantic ack.',
+    description: 'Acknowledge a handoff (or other bus event) and notify its original sender. Looks up the event by id, routes the ack at the sender\'s session so they see your decision on their next tool call and in their Discord thread.',
     inputSchema: {
       type: 'object',
       properties: {
-        id: { type: 'string', description: 'Event ID to acknowledge' },
-        decision: { type: 'string', enum: ['accepted', 'rejected', 'dismissed'], description: 'Ack decision' }
+        id: { type: 'string', description: 'Event ID to acknowledge (e.g., the handoff id from your inbox).' },
+        decision: { type: 'string', enum: ['accepted', 'rejected', 'dismissed'], description: 'Your decision. Defaults to "accepted".' }
       },
       required: ['id']
     }
   },
   {
     name: 'wrightward_send_note',
-    description: 'Send a note to other agents on the bus.',
+    description: 'Log an observability entry to the bus. Use `kind` to signal importance: "note" (default) is a quiet log — persisted but non-urgent, shows only in Discord; "finding" is urgent and broadcasts to every agent — use when you discover something others MUST know (bug, gotcha, surprising behavior); "decision" is urgent and broadcasts — use when you make a choice others must know about (picked approach X, ruled out Y). To direct at a specific agent, set `to` to their sessionId.',
     inputSchema: {
       type: 'object',
       properties: {
-        to: { type: 'string', description: 'Target: session ID, "all", or "role:<name>"' },
-        body: { type: 'string', description: 'Message body' },
-        files: { type: 'array', items: { type: 'string' }, description: 'Related file paths' }
+        to: { type: 'string', description: 'Target: session ID or "all" (default).' },
+        body: { type: 'string', description: 'Message body.' },
+        kind: { type: 'string', enum: ['note', 'finding', 'decision'], description: 'Observability level. "note" quiet; "finding" and "decision" urgent. Defaults to "note".' },
+        files: { type: 'array', items: { type: 'string' }, description: 'Related file paths.' }
       },
       required: ['body']
     }
@@ -184,10 +190,16 @@ export function getToolDefinitions() {
 
 export function handleToolCall(toolName, args, collabDir, sessionId, config, projectRoot) {
   if (!sessionId) {
-    return { content: [{ type: 'text', text: JSON.stringify({ error: 'MCP server not bound to a session' }) }] };
+    return { content: [{ type: 'text', text: JSON.stringify({
+      error: 'MCP server not bound to a session',
+      hint: 'Try again in a few seconds — session binding is async.'
+    }) }] };
   }
   if (!config.BUS_ENABLED) {
-    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Bus is disabled' }) }] };
+    return { content: [{ type: 'text', text: JSON.stringify({
+      error: 'Bus is disabled',
+      hint: 'Ask the user to set BUS_ENABLED=true in .claude/wrightward.json.'
+    }) }] };
   }
 
   try {
@@ -273,11 +285,31 @@ function handleListInbox(args, collabDir, sessionId, config) {
 
 function handleAck(args, collabDir, sessionId) {
   validateAckArgs(args);
-  let id;
+  let result;
   withAgentsLock(collabDir, (token) => {
-    id = writeAck(token, collabDir, sessionId, args.id, args.decision || 'accepted');
+    // Look up the original event so we can route the ack at its sender.
+    // Without this, acks would broadcast to `all` and the original sender
+    // would have no automated path to learn their handoff was acted on.
+    const original = findEventById(token, collabDir, args.id);
+    if (!original) {
+      result = {
+        error: 'ackOf refers to an unknown or expired event',
+        hint: 'Call wrightward_list_inbox to see live event ids.'
+      };
+      return;
+    }
+    const taskRef = original.meta && typeof original.meta.task_ref === 'string'
+      ? original.meta.task_ref
+      : undefined;
+    const id = writeAck(
+      token, collabDir, sessionId,
+      original.from, args.id,
+      args.decision || 'accepted',
+      taskRef
+    );
+    result = { ok: true, id, hint: 'Sender notified on their next tool call.' };
   });
-  return { content: [{ type: 'text', text: JSON.stringify({ ok: true, id }) }] };
+  return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 }
 
 function handleSendNote(args, collabDir, sessionId, _config, projectRoot) {
@@ -291,13 +323,21 @@ function handleSendNote(args, collabDir, sessionId, _config, projectRoot) {
     if (rel) files.push(rel);
   }
 
+  // kind determines the event type. 'note' is non-urgent (quiet log).
+  // 'finding' and 'decision' are urgent — they auto-inject into other
+  // agents' contexts on their next tool call. See bus-schema URGENT_TYPES.
+  const kind = args.kind || 'note';
+
   let id;
   withAgentsLock(collabDir, (token) => {
-    const event = createEvent(sessionId, args.to || 'all', 'note', args.body, { files });
+    const event = createEvent(sessionId, args.to || 'all', kind, args.body, { files });
     append(token, collabDir, event);
     id = event.id;
   });
-  return { content: [{ type: 'text', text: JSON.stringify({ id }) }] };
+  const hint = kind === 'note'
+    ? 'Logged quietly. Discord only; other agents not notified.'
+    : 'Broadcast — every active agent sees this on their next tool call.';
+  return { content: [{ type: 'text', text: JSON.stringify({ id, hint }) }] };
 }
 
 function handleSendMessage(args, collabDir, sessionId) {
@@ -314,7 +354,16 @@ function handleSendMessage(args, collabDir, sessionId) {
     append(token, collabDir, event);
     id = event.id;
   });
-  return { content: [{ type: 'text', text: JSON.stringify({ id }) }] };
+  let hint;
+  if (args.audience === 'user') {
+    hint = 'Posted to Discord (user-facing channel/thread).';
+  } else if (args.audience === 'all') {
+    hint = 'Broadcast to Discord + every active agent\'s inbox.';
+  } else {
+    const sid8 = args.audience.substring(0, 8);
+    hint = `Posted to ${sid8}'s Discord thread and inbox.`;
+  }
+  return { content: [{ type: 'text', text: JSON.stringify({ id, hint }) }] };
 }
 
 function handleSendHandoff(args, collabDir, sessionId, config, projectRoot) {
@@ -381,7 +430,10 @@ function handleSendHandoff(args, collabDir, sessionId, config, projectRoot) {
     append(token, collabDir, event);
     id = event.id;
   });
-  return { content: [{ type: 'text', text: JSON.stringify({ id }) }] };
+  return { content: [{ type: 'text', text: JSON.stringify({
+    id,
+    hint: 'Recipient sees this on their next tool call. Their ack will arrive in your inbox.'
+  }) }] };
 }
 
 function handleWatchFile(args, collabDir, sessionId, config, projectRoot) {
@@ -394,7 +446,10 @@ function handleWatchFile(args, collabDir, sessionId, config, projectRoot) {
   withAgentsLock(collabDir, (token) => {
     id = writeInterest(token, collabDir, sessionId, relPath, config.BUS_INTEREST_TTL_MS);
   });
-  return { content: [{ type: 'text', text: JSON.stringify({ id }) }] };
+  return { content: [{ type: 'text', text: JSON.stringify({
+    id,
+    hint: 'You\'ll be notified when the file frees up.'
+  }) }] };
 }
 
 function handleBusStatus(collabDir, sessionId) {

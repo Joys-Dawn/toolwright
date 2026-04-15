@@ -137,7 +137,7 @@ function loadDiscordConfig(raw) {
     }
   }
   // Merge user's mirrorPolicy on top of defaults. mergePolicy enforces the
-  // HARD_RAIL constraints (interest/ack/delivery_failed/rate_limited cannot
+  // HARD_RAIL constraints (interest/delivery_failed/rate_limited cannot
   // be elevated to a mirror action).
   out.mirrorPolicy = Object.freeze(mergePolicy(raw && raw.mirrorPolicy));
   Object.freeze(out.ALLOWED_SENDERS);

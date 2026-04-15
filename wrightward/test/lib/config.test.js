@@ -269,15 +269,20 @@ describe('config', () => {
       assert.ok(Object.isFrozen(config.discord.mirrorPolicy));
     });
 
-    it('exposes a default mirror policy with mirror actions and silent/never rules', () => {
+    it('exposes a default mirror policy with mirror actions and never rules', () => {
       const config = loadConfig(cwd);
       const p = config.discord.mirrorPolicy;
       assert.equal(p.user_message.action, 'post_thread');
       assert.equal(p.handoff.action, 'post_thread');
       assert.equal(p.session_started.action, 'post_broadcast');
-      assert.equal(p.note.action, 'silent');
+      // note/finding/decision mirror by default (post_thread when targeted,
+      // post_broadcast when sent to 'all'); ack also mirrors (routed to the
+      // original handoff sender's thread).
+      assert.equal(p.note.action, 'post_thread');
+      assert.equal(p.finding.action, 'post_thread');
+      assert.equal(p.decision.action, 'post_thread');
+      assert.equal(p.ack.action, 'post_thread');
       assert.equal(p.interest.action, 'never');
-      assert.equal(p.ack.action, 'never');
       assert.equal(p.delivery_failed.action, 'never');
       assert.equal(p.rate_limited.action, 'never');
     });
@@ -304,12 +309,11 @@ describe('config', () => {
       assert.equal(config.discord.POLL_INTERVAL_MS, 500);
     });
 
-    it('hard rail: user cannot elevate interest/ack/delivery_failed/rate_limited to a mirror action', () => {
+    it('hard rail: user cannot elevate interest/delivery_failed/rate_limited to a mirror action', () => {
       fs.writeFileSync(configPath, JSON.stringify({
         discord: {
           mirrorPolicy: {
             interest: { action: 'post_broadcast' },
-            ack: { action: 'post_thread' },
             delivery_failed: { action: 'post_broadcast' },
             rate_limited: { action: 'post_thread' }
           }
@@ -317,9 +321,20 @@ describe('config', () => {
       }));
       const config = loadConfig(cwd);
       assert.equal(config.discord.mirrorPolicy.interest.action, 'never');
-      assert.equal(config.discord.mirrorPolicy.ack.action, 'never');
       assert.equal(config.discord.mirrorPolicy.delivery_failed.action, 'never');
       assert.equal(config.discord.mirrorPolicy.rate_limited.action, 'never');
+    });
+
+    it('ack is NOT hard-railed: user can demote it to silent', () => {
+      // ack carries user-facing handoff outcomes, so users can choose to
+      // silence the Discord mirror if they find it noisy.
+      fs.writeFileSync(configPath, JSON.stringify({
+        discord: {
+          mirrorPolicy: { ack: { action: 'silent' } }
+        }
+      }));
+      const config = loadConfig(cwd);
+      assert.equal(config.discord.mirrorPolicy.ack.action, 'silent');
     });
   });
 });

@@ -38,7 +38,7 @@ async function main() {
     input += chunk;
   }
 
-  const { session_id, cwd } = JSON.parse(input);
+  const { session_id, cwd, source } = JSON.parse(input);
   if (!session_id || !cwd) {
     process.exit(0);
   }
@@ -80,11 +80,20 @@ async function main() {
         claude_pid: claudePid
       });
 
-      try {
-        append(token, collabDir, createEvent(session_id, 'all', 'session_started',
-          'Session started', { pid: claudePid }));
-      } catch (err) {
-        process.stderr.write('[collab/register] bus append failed: ' + (err.message || err) + '\n');
+      // Claude Code fires SessionStart for source ∈ {startup, resume, clear, compact}.
+      // Only startup/resume mean the session is (re)joining the bus — clear and compact
+      // continue the same session and must not re-announce. Undefined source (older
+      // Claude Code versions that don't send the field) falls through to emit.
+      const shouldAnnounce = source === undefined
+        || source === 'startup'
+        || source === 'resume';
+      if (shouldAnnounce) {
+        try {
+          append(token, collabDir, createEvent(session_id, 'all', 'session_started',
+            'Session started', { pid: claudePid, hook_source: source || 'startup' }));
+        } catch (err) {
+          process.stderr.write('[collab/register] bus append failed: ' + (err.message || err) + '\n');
+        }
       }
     });
   } else {

@@ -12,7 +12,7 @@ const { BROADCAST_TARGETS } = require('./constants');
  * Design:
  *   - `silent`  → don't post, but user can override to a mirror action.
  *   - `never`   → don't post AND hard-rail: user cannot elevate internal
- *                 bookkeeping events (ack, interest, delivery_failed,
+ *                 bookkeeping events (interest, delivery_failed,
  *                 rate_limited) to a mirror action.
  *   - Unknown event types default to `silent` — safer than post_broadcast
  *     since a new type could leak internal state before the bridge knows
@@ -27,20 +27,27 @@ const DEFAULT_POLICY = Object.freeze({
   session_started: { action: 'post_broadcast', severity: 'info' },
   session_ended:   { action: 'post_broadcast', severity: 'info' },
   agent_message:   { action: 'post_thread', severity: 'info' },
-  note:            { action: 'silent' },
-  finding:         { action: 'silent' },
-  decision:        { action: 'silent' },
+  // ack is routed to the original handoff's sender (event.to = sender's
+  // sessionId), so post_thread lands in that sender's Discord thread.
+  ack:             { action: 'post_thread', severity: 'info' },
+  // note/finding/decision: observability events. When sent to a specific
+  // sessionId they land in that thread; when sent to 'all' (the default)
+  // they promote to post_broadcast per decide().
+  note:            { action: 'post_thread', severity: 'info' },
+  finding:         { action: 'post_thread', severity: 'info' },
+  decision:        { action: 'post_thread', severity: 'info' },
   context_updated: { action: 'rename_thread' },
   interest:        { action: 'never' },
-  ack:             { action: 'never' },
   delivery_failed: { action: 'never' },
   rate_limited:    { action: 'never' }
 });
 
 // Types that cannot be elevated to a mirror action. User config may demote
 // them to silent (still won't post), but cannot promote to post_*. Prevents
-// the user from accidentally mirroring internal ack/interest churn.
-const HARD_RAIL_TYPES = new Set(['interest', 'ack', 'delivery_failed', 'rate_limited']);
+// the user from accidentally mirroring internal interest churn or bridge
+// diagnostics. 'ack' is NOT hard-railed because acks are user-facing signals
+// (handoff accepted / rejected / dismissed) that belong on the sender's thread.
+const HARD_RAIL_TYPES = new Set(['interest', 'delivery_failed', 'rate_limited']);
 
 const VALID_ACTIONS = new Set([
   'post_thread',

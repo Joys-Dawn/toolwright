@@ -15,16 +15,34 @@ describe('discord/formatter', () => {
   }
 
   describe('formatEvent action', () => {
-    it('returns silent for note/finding/decision (default policy)', () => {
+    it('returns post_thread for note/finding/decision targeted at a session', () => {
       for (const t of ['note', 'finding', 'decision']) {
         const r = formatEvent(ev(t, 'sess-a', 'sess-b', 'hi'));
-        assert.equal(r.action, 'silent');
-        assert.equal(r.content, null);
+        assert.equal(r.action, 'post_thread', t + ' must mirror to thread when targeted');
+        assert.equal(r.target_session_id, 'sess-a');
+        assert.ok(r.content && r.content.length > 0);
       }
     });
 
-    it('returns silent for interest/ack/rate_limited (never types)', () => {
-      for (const t of ['interest', 'ack', 'rate_limited', 'delivery_failed']) {
+    it('returns post_broadcast for note/finding/decision sent to "all"', () => {
+      for (const t of ['note', 'finding', 'decision']) {
+        const r = formatEvent(ev(t, 'all', 'sess-a', 'hi'));
+        assert.equal(r.action, 'post_broadcast', t + ' to "all" promotes to broadcast');
+        assert.ok(r.content && r.content.length > 0);
+      }
+    });
+
+    it('returns post_thread for ack targeted at the original handoff sender', () => {
+      // handleAck routes the ack event's `to` at the original sender; the
+      // bridge then posts the ack into that sender's thread.
+      const r = formatEvent(ev('ack', 'sess-a', 'sess-b', 'Ack: accepted'));
+      assert.equal(r.action, 'post_thread');
+      assert.equal(r.target_session_id, 'sess-a');
+      assert.ok(r.content && r.content.length > 0);
+    });
+
+    it('returns silent for interest/rate_limited/delivery_failed (never types)', () => {
+      for (const t of ['interest', 'rate_limited', 'delivery_failed']) {
         const r = formatEvent(ev(t, 'all', 'sess-a', 'x'));
         assert.equal(r.action, 'silent', t + ' must be silent');
       }

@@ -75,11 +75,14 @@ function clampUtf8(str, maxBytes) {
  * deduped — fan-out routing is the caller's responsibility.
  *
  * Per-mention resolution:
- *   1. Full session ID match resolves to that sessionId.
- *   2. Short-ID match (first 8 chars) resolves to the single matching session.
- *   3. Ambiguous short-ID (two sessions share the same 8-char prefix) resolves
+ *   1. Literal `@agent-all` resolves to the broadcast target `"all"`. This
+ *      is an explicit user-driven broadcast — `ambiguous` stays false and
+ *      the entry is preserved even when concrete mentions also resolve.
+ *   2. Full session ID match resolves to that sessionId.
+ *   3. Short-ID match (first 8 chars) resolves to the single matching session.
+ *   4. Ambiguous short-ID (two sessions share the same 8-char prefix) resolves
  *      to `"all"` and sets `ambiguous: true` so callers can surface a warning.
- *   4. Mentions matching no roster entry are dropped silently.
+ *   5. Mentions matching no roster entry are dropped silently.
  *
  * The `stripped` return is `content` with all `@agent-<id>` tokens removed
  * and whitespace collapsed — safe to append to bus.jsonl as message body.
@@ -116,6 +119,11 @@ function parseMentions(content, agentRoster) {
   const seen = new Set();
   let ambiguous = false;
   let concreteResolved = false;
+  // Tracks whether the user typed the literal `@agent-all` token. This is
+  // distinct from an ambiguous short-ID that resolves to `'all'` — an
+  // explicit broadcast is deliberate user intent and must never be dropped
+  // by the concrete-sibling filter below.
+  let explicitAllMention = false;
 
   function pushOnce(target) {
     if (seen.has(target)) return;
@@ -125,6 +133,14 @@ function parseMentions(content, agentRoster) {
 
   for (const m of content.matchAll(AGENT_MENTION_RE)) {
     const id = m[1];
+    // Explicit broadcast syntax — `@agent-all` resolves to the broadcast
+    // target `'all'`. Matched before the sessionIdSet check so a pathological
+    // session literally named 'all' can never shadow the broadcast intent.
+    if (id === 'all') {
+      pushOnce('all');
+      explicitAllMention = true;
+      continue;
+    }
     if (sessionIdSet.has(id)) {
       pushOnce(id);
       concreteResolved = true;
@@ -145,7 +161,11 @@ function parseMentions(content, agentRoster) {
   // short-ID. Otherwise a single ambiguous mention dilutes the intent of the
   // whole message into a broadcast. `ambiguous` still surfaces so callers can
   // show a "did you mean X or Y?" warning alongside the targeted delivery.
-  const filtered = concreteResolved ? mentions.filter((m) => m !== 'all') : mentions;
+  // An explicit `@agent-all` bypasses the filter — the user asked to
+  // broadcast AND to address specific sessions; honor both.
+  const filtered = (concreteResolved && !explicitAllMention)
+    ? mentions.filter((m) => m !== 'all')
+    : mentions;
 
   const stripped = content
     .replace(AGENT_MENTION_RE, '')

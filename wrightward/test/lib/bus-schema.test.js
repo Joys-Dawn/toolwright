@@ -136,6 +136,70 @@ describe('bus-schema', () => {
     });
   });
 
+  describe('URGENT_TYPES membership contract', () => {
+    // Guards against a regression that removes a type from URGENT_TYPES:
+    // the iteration-based tests above only check whatever is currently in
+    // the set, so a drop would silently pass. Pin each type individually
+    // so removing one fails loudly at its own assertion.
+
+    it('includes handoff (work assignment needs immediate attention)', () => {
+      assert.ok(URGENT_TYPES.has('handoff'));
+    });
+
+    it('includes file_freed (unblocks a watching agent)', () => {
+      assert.ok(URGENT_TYPES.has('file_freed'));
+    });
+
+    it('includes user_message (human-originated message)', () => {
+      assert.ok(URGENT_TYPES.has('user_message'));
+    });
+
+    it('includes blocker (another agent needs help)', () => {
+      assert.ok(URGENT_TYPES.has('blocker'));
+    });
+
+    it('includes delivery_failed (bus diagnostic requiring action)', () => {
+      assert.ok(URGENT_TYPES.has('delivery_failed'));
+    });
+
+    it('includes agent_message (peer-to-peer message)', () => {
+      assert.ok(URGENT_TYPES.has('agent_message'));
+    });
+
+    it('includes ack so original handoff sender sees accepted/rejected/dismissed on next tool call', () => {
+      assert.ok(URGENT_TYPES.has('ack'));
+    });
+
+    it('includes finding so must-know discoveries reach every active agent', () => {
+      assert.ok(URGENT_TYPES.has('finding'));
+    });
+
+    it('includes decision so choices that affect others reach every active agent', () => {
+      assert.ok(URGENT_TYPES.has('decision'));
+    });
+
+    it('excludes note (quiet observability log, Discord-only)', () => {
+      assert.ok(!URGENT_TYPES.has('note'));
+    });
+
+    it('excludes interest (internal watch bookkeeping)', () => {
+      assert.ok(!URGENT_TYPES.has('interest'));
+    });
+
+    it('excludes session_started and session_ended (lifecycle announcements, not action-required)', () => {
+      assert.ok(!URGENT_TYPES.has('session_started'));
+      assert.ok(!URGENT_TYPES.has('session_ended'));
+    });
+
+    it('excludes context_updated (thread-rename signal, bridge-internal)', () => {
+      assert.ok(!URGENT_TYPES.has('context_updated'));
+    });
+
+    it('excludes rate_limited (bridge diagnostic)', () => {
+      assert.ok(!URGENT_TYPES.has('rate_limited'));
+    });
+  });
+
   describe('matchesSession', () => {
     it('excludes events from self (sender exclusion)', () => {
       const e = { from: 'sess-1', to: 'sess-1' };

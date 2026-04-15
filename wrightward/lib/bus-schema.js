@@ -25,7 +25,12 @@ const EVENT_TYPES = new Set([
 
 const URGENT_TYPES = new Set([
   'handoff', 'file_freed', 'user_message', 'blocker', 'delivery_failed',
-  'agent_message'
+  'agent_message',
+  // 'ack' routes a handoff acknowledgement to the original sender so they see
+  // accepted/rejected/dismissed without grepping bus.jsonl.
+  // 'finding' and 'decision' are observability events loud enough that every
+  // agent needs to know ("must-know" semantics); 'note' stays non-urgent.
+  'ack', 'finding', 'decision'
 ]);
 
 /**

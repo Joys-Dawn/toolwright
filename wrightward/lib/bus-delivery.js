@@ -74,6 +74,55 @@ function advanceBookmark(token, collabDir, sessionId, { delivered, endOffset, bo
 }
 
 /**
+ * Returns the action-hint suffix for an urgent event, or '' when no hint
+ * applies. Hints point the agent at the exact tool to call next so the
+ * auto-injection is self-contained (no forced second tool call just to
+ * discover what to do).
+ */
+function hintForType(event) {
+  switch (event.type) {
+    case 'handoff':
+      return ' → ack with wrightward_ack({id})';
+    case 'user_message':
+      if (event.meta && event.meta.source === 'discord') {
+        return ' → reply via wrightward_send_message audience="user"';
+      }
+      return '';
+    case 'agent_message': {
+      const from8 = (event.from || '').substring(0, 8);
+      return ` → reply via wrightward_send_message audience="${from8}"`;
+    }
+    case 'file_freed': {
+      const file = event.meta && event.meta.file;
+      return file ? ` → retry your blocked write on ${file}` : '';
+    }
+    case 'blocker':
+      return ' → another agent is blocked — consider unblocking';
+    case 'delivery_failed':
+      return ' → see wrightward_bus_status';
+    // ack / finding / decision are informational — no action suffix.
+    default:
+      return '';
+  }
+}
+
+/**
+ * Formats one urgent event as a single inbox line. Shape:
+ *   - [<type> id=<full-id>] from <from8>[ (Discord)][ (re: <task_ref>)]: <body>[ → <hint>]
+ *
+ * Full id (not short) is emitted so the agent can pass it verbatim to
+ * `wrightward_ack` without ambiguity.
+ */
+function formatEventLine(event) {
+  const shortFrom = (event.from || '').substring(0, 8);
+  const discordTag = event.meta && event.meta.source === 'discord' ? ' (Discord)' : '';
+  const taskRef = event.meta && typeof event.meta.task_ref === 'string' ? event.meta.task_ref : '';
+  const reClause = taskRef ? ` (re: ${taskRef})` : '';
+  const hint = hintForType(event);
+  return `- [${event.type} id=${event.id}] from ${shortFrom}${discordTag}${reClause}: ${event.body}${hint}`;
+}
+
+/**
  * Scans the bus inbox for urgent events, formats them for injection,
  * and advances the bookmark.
  *
@@ -101,11 +150,17 @@ function scanAndFormatInbox(token, collabDir, sessionId, config) {
 
   const lines = ['Urgent messages from other agents:'];
   for (const e of capped) {
-    const shortFrom = (e.from || '').substring(0, 8);
-    lines.push(`- [${e.type}] from ${shortFrom}: ${e.body}`);
+    lines.push(formatEventLine(e));
   }
   if (fresh.length > cap) {
     lines.push(`(${fresh.length - cap} more — use /wrightward:inbox to see all)`);
+  }
+  // Check the full fresh set, not just the capped slice — otherwise a pending
+  // Discord event sitting behind the "(N more)" pointer would skip the footer.
+  const sawDiscord = fresh.some((e) => e.meta && e.meta.source === 'discord');
+  if (sawDiscord) {
+    // Agent does NOT see Discord replies via plain output — must use the MCP tool.
+    lines.push('Discord messages above: reply via wrightward_send_message audience="user" (plain output won\'t reach Discord).');
   }
 
   const truncated = fresh.length > cap;
@@ -120,5 +175,7 @@ function scanAndFormatInbox(token, collabDir, sessionId, config) {
 module.exports = {
   readInboxFresh,
   advanceBookmark,
-  scanAndFormatInbox
+  scanAndFormatInbox,
+  formatEventLine,
+  hintForType
 };

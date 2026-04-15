@@ -97,15 +97,50 @@ describe('mcp/channel-doorbell', () => {
     });
 
     it('does not notify when only non-urgent events are present', async () => {
+      // 'note' is the only observability type that stays non-urgent; finding
+      // and decision now fire the doorbell (see urgent-finding/decision test
+      // below). interest/ack_to_other/session_* etc are also non-urgent.
       withAgentsLock(collabDir, (token) => {
         append(token, collabDir, createEvent('sess-2', 'sess-1', 'note', 'not urgent'));
-        append(token, collabDir, createEvent('sess-2', 'sess-1', 'finding', 'ambient fyi'));
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'interest', 'fyi'));
       });
       const server = fakeServer();
       const result = await ring(server, collabDir, 'sess-1');
       assert.equal(result.pinged, false);
       assert.equal(result.reason, 'empty');
       assert.equal(server.calls.length, 0);
+    });
+
+    it('notifies for finding (now urgent per plan)', async () => {
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'finding', 'bug in X'));
+      });
+      const server = fakeServer();
+      const result = await ring(server, collabDir, 'sess-1');
+      assert.equal(result.pinged, true);
+      assert.equal(server.calls.length, 1);
+    });
+
+    it('notifies for decision (now urgent per plan)', async () => {
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'decision', 'going with JWT'));
+      });
+      const server = fakeServer();
+      const result = await ring(server, collabDir, 'sess-1');
+      assert.equal(result.pinged, true);
+      assert.equal(server.calls.length, 1);
+    });
+
+    it('notifies for ack (so the original handoff sender sees it)', async () => {
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'ack', 'Ack: accepted', {
+          ack_of: 'some-handoff-id', decision: 'accepted'
+        }));
+      });
+      const server = fakeServer();
+      const result = await ring(server, collabDir, 'sess-1');
+      assert.equal(result.pinged, true);
+      assert.equal(server.calls.length, 1);
     });
 
     it('does not notify when urgent events target a different session', async () => {

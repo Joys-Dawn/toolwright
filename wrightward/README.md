@@ -42,7 +42,7 @@ Before every tool call, wrightward checks for conflicts:
 
 - **Read/Glob/Grep on another agent's files** — non-blocking context injected (who owns it, what they're doing)
 - **Write to another agent's file** — blocked, agent sees who owns it
-- **Write to an unrelated file** — proceeds with awareness of other active agents
+- **Write to an unrelated file** — proceeds with awareness of other active agents; if the writing session hasn't declared its own context, the injection also nudges it to run `/wrightward:collab-context` so peers can see its claims
 - **Solo agent** — everything proceeds silently with zero overhead
 
 Context injection is deduplicated — the same summary is only shown once per change in other agents' state.
@@ -64,17 +64,18 @@ On top of file coordination, wrightward runs a file-based peer-to-peer message b
 - Events are appended to `.claude/collab/bus.jsonl` (append-only, length-bounded, self-compacting).
 - Per-session delivery bookmarks in `.claude/collab/bus-delivered/<sessionId>.json` track what each session has already seen.
 - Urgent events are delivered via **Path 1** — the guard/heartbeat hooks inject pending events as `additionalContext` on the session's next tool call, then advance the bookmark. This is the sole source of truth for event delivery.
-- A bundled MCP server (`wrightward-bus`) exposes six tools for the model to use directly.
+- A bundled MCP server (`wrightward-bus`) exposes seven tools for the model to use directly.
 
 ### MCP tools
 
 | Tool | Description |
 |------|-------------|
 | `wrightward_list_inbox` | List urgent events targeted at this session. Advances the delivery bookmark by default. |
-| `wrightward_ack` | Acknowledge a handoff or other urgent event (`accepted` / `rejected` / `dismissed`). |
-| `wrightward_send_note` | Send a non-urgent info message to another session, `"all"`, or `"role:<name>"`. |
+| `wrightward_ack` | Acknowledge a handoff (`accepted` / `rejected` / `dismissed`). Looks up the original event and routes the ack at its sender so they see the decision on their next tool call and in their Discord thread. |
+| `wrightward_send_note` | Log an observability entry. `kind="note"` (default) is quiet; `"finding"` and `"decision"` are urgent and fan out to every agent's inbox. All three mirror to Discord. |
 | `wrightward_send_handoff` | Hand work off to another session. Optionally releases files in the same atomic step. |
 | `wrightward_watch_file` | Register interest in a file — the sender is notified when it frees up. |
+| `wrightward_send_message` | Send a peer message or Discord reply. `audience="user"` replies on Discord only; `"all"` broadcasts; a sessionId targets one agent. |
 | `wrightward_bus_status` | Diagnostic: event counts, bookmark positions, recent activity. |
 
 ### Skill wrappers
@@ -153,6 +154,7 @@ Inbound routing has two forms:
 
 - **Reply inside an agent's forum thread** → the message is delivered to that thread's session without an `@mention`. Useful when you're already watching the thread and want to respond in context.
 - **Post in the broadcast channel with `@agent-<id>`** → the message is delivered to the mentioned session(s). Fan-out is supported: a reply that also includes `@agent-<id>` mentions is delivered to the union of the thread owner and the mentioned sessions (deduped).
+- **`@agent-all`** → explicit broadcast: the message is delivered to every registered agent. Works in the broadcast channel or inside a thread (in a thread, the thread owner is already included in the broadcast). Distinct from an ambiguous short-ID — `ambiguous_mention` stays `false`.
 
 Both forms are gated on `ALLOWED_SENDERS`, sanitized for tokens/webhook URLs, and UTF-8-clamped before append. If Discord's Message Content Intent is **off** for your bot, thread replies still route to the thread owner (the body may be empty) — broadcast @mentions, however, require MCI because the body is the only signal.
 
@@ -193,10 +195,12 @@ When the bridge is disabled (default), Phases 1–2 behave identically to prior 
 
 **Mirror policy defaults** (user overrides merge on top):
 
-- `user_message`, `handoff`, `blocker`, `file_freed` → post into the recipient's thread.
+- `user_message`, `handoff`, `blocker`, `file_freed`, `agent_message` → post into the recipient's thread.
 - `session_started`, `session_ended` → post into the broadcast channel.
-- `note`, `finding`, `decision` → silent by default.
-- `interest`, `ack`, `delivery_failed`, `rate_limited` → **never mirrored** (hard rail; user cannot elevate these to a mirror action).
+- `note`, `finding`, `decision` → post into the target thread when sent to a sessionId; promote to the broadcast channel when sent to `"all"`. Demote to `silent` via `mirrorPolicy` if you find them noisy.
+- `ack` → post into the original handoff sender's thread so they see your decision without grepping. Demotable to `silent`.
+- `context_updated` → renames the sender's thread to match the new task string.
+- `interest`, `delivery_failed`, `rate_limited` → **never mirrored** (hard rail; user cannot elevate these to a mirror action).
 
 ### Security model
 

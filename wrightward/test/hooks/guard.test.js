@@ -152,6 +152,27 @@ describe('guard hook', () => {
     assert.equal(parsed.hookSpecificOutput.hookEventName, 'PreToolUse');
     assert.equal(parsed.hookSpecificOutput.permissionDecision, 'allow');
     assert.match(parsed.hookSpecificOutput.additionalContext, /their work/);
+    // Self has a declared context — no nudge should appear.
+    assert.doesNotMatch(parsed.hookSpecificOutput.additionalContext,
+      /Declare your own with \/wrightward:collab-context/);
+  });
+
+  it('nudges to declare own context on no-overlap write when session has none', () => {
+    registerAgent(collabDir, 'sess-1');
+    registerAgent(collabDir, 'sess-2');
+    // sess-1 has NO context declared — the nudge should fire.
+    writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'foo.js')], status: 'in-progress' });
+
+    const result = runHook({
+      session_id: 'sess-1',
+      cwd: tmpDir,
+      tool_name: 'Write',
+      tool_input: { file_path: path.join(tmpDir, 'unrelated.js') }
+    });
+    assert.equal(result.exitCode, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.match(parsed.hookSpecificOutput.additionalContext,
+      /Declare your own with \/wrightward:collab-context/);
   });
 
   it('exits 0 on second call when nothing changed', () => {

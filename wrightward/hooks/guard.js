@@ -324,9 +324,16 @@ function handleWriteTool(overlaps, collabDir, sessionId, otherContexts, inboxTex
 
   // No file overlap — inject non-blocking context only when something changed
   otherContexts.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+  // Nudge this session to declare its own context when it hasn't yet — other
+  // agents can't steer around files they can't see claimed.
+  const selfContext = readContext(collabDir, sessionId);
+  const ownContextNudge = selfContext
+    ? ''
+    : '\nDeclare your own with /wrightward:collab-context so they avoid your files.';
   const parts = [
     buildSummary(otherContexts) +
-    '\nNone of their declared files overlap with your intended write — proceed.'
+    '\nNone of their declared files overlap with your intended write — proceed.' +
+    ownContextNudge
   ];
   if (inboxText) {
     parts.push(inboxText);

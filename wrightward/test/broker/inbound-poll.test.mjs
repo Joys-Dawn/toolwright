@@ -241,6 +241,27 @@ describe('broker/inbound-poll', () => {
       assert.equal(events[0].meta.ambiguous_mention, true);
     });
 
+    it('routes @agent-all from broadcast to the all target without ambiguity', async () => {
+      // End-to-end: a user types `@agent-all` in the broadcast channel and
+      // every registered session must receive the message. Distinct from
+      // the ambiguous-short-id path above — meta.ambiguous_mention stays
+      // false because the broadcast was explicit, not a collision fallback.
+      writeMarker(collabDir, 'seed');
+      const api = makeMockApi([[
+        { id: 'm1', author: { id: 'u1', bot: false },
+          content: '@agent-all heads up, deploying in 5' }
+      ]]);
+      const p = createInboundPoller(collabDir, api, {
+        broadcastChannelId: 'b', allowedSenders: ['u1']
+      });
+      await p.pollOnce();
+      const events = readBus(collabDir).filter((e) => e.type === 'user_message');
+      assert.equal(events.length, 1);
+      assert.equal(events[0].to, 'all');
+      assert.equal(events[0].meta.ambiguous_mention, false);
+      assert.equal(events[0].body, 'heads up, deploying in 5');
+    });
+
     it('does not run concurrently (reentrancy guard)', async () => {
       // If pollOnce is called twice in rapid succession, the second should
       // be a no-op to avoid double-processing the same API response.

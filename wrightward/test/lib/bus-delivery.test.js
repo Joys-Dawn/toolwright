@@ -9,7 +9,7 @@ const { ensureCollabDir } = require('../../lib/collab-dir');
 const { registerAgent, withAgentsLock } = require('../../lib/agents');
 const { append, readBookmark, writeBookmark } = require('../../lib/bus-log');
 const { createEvent } = require('../../lib/bus-schema');
-const { scanAndFormatInbox, readInboxFresh, advanceBookmark } = require('../../lib/bus-delivery');
+const { scanAndFormatInbox, readInboxFresh, advanceBookmark, formatEventLine, hintForType } = require('../../lib/bus-delivery');
 
 describe('bus-delivery', () => {
   let tmpDir;
@@ -130,6 +130,209 @@ describe('bus-delivery', () => {
         assert.match(result.text, /after-compact/);
         assert.doesNotMatch(result.text, /before-compact/, 'already-delivered events must not re-appear after compact');
       });
+    });
+
+    it('tags Discord-sourced events with (Discord) in the formatted output', () => {
+      // The inbound poller sets meta.source='discord' on every ingested
+      // Discord message. Tagging each event lets the agent tell which
+      // inputs originated on Discord and therefore need a Discord reply.
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent(
+          'synthetic', 'sess-1', 'user_message', 'ping from a human on Discord',
+          { source: 'discord', discord_user_id: 'u1', discord_channel_id: 'b' }
+        ));
+
+        const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
+        assert.ok(result.text);
+        assert.match(result.text, /\(Discord\)/,
+          'Discord-sourced events must be tagged so agents know to reply on Discord');
+      });
+    });
+
+    it('appends a Discord-reply reminder when any event has meta.source="discord"', () => {
+      // Without this footer, an agent seeing an urgent Discord message has
+      // no in-context cue that plain assistant output will NOT reach the
+      // human — the reply path is `wrightward_send_message audience="user"`.
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent(
+          'synthetic', 'sess-1', 'user_message', 'help please',
+          { source: 'discord' }
+        ));
+
+        const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
+        assert.match(result.text, /wrightward_send_message/,
+          'footer must name the MCP tool to use');
+        assert.match(result.text, /audience="user"/,
+          'footer must name the audience value that routes back to Discord');
+      });
+    });
+
+    it('omits the Discord footer when no event is Discord-sourced', () => {
+      // Pin: the footer must not appear for pure agent-to-agent traffic.
+      // Otherwise every heartbeat would nag about Discord even when no
+      // Discord message is pending.
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'handoff', 'internal handoff'));
+
+        const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
+        assert.ok(result.text);
+        assert.doesNotMatch(result.text, /wrightward_send_message/,
+          'footer must not appear when no Discord event is pending');
+        assert.doesNotMatch(result.text, /\(Discord\)/,
+          'non-Discord events must not carry the Discord tag');
+      });
+    });
+
+    it('appends the Discord footer exactly once even when multiple Discord events arrive', () => {
+      // Footer is meant to be a single reminder per injection, not one per
+      // event — otherwise a burst of Discord messages would dominate the
+      // additionalContext with repeated boilerplate.
+      withAgentsLock(collabDir, (token) => {
+        for (let i = 0; i < 3; i++) {
+          append(token, collabDir, createEvent(
+            'synthetic', 'sess-1', 'user_message', 'msg-' + i,
+            { source: 'discord' }
+          ));
+        }
+
+        const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
+        // The per-event reply hint also contains 'wrightward_send_message'.
+        // With 3 Discord events + 1 footer, expect exactly 4 matches.
+        const matches = result.text.match(/wrightward_send_message/g) || [];
+        assert.equal(matches.length, 4,
+          'three per-event reply hints + one footer');
+        const footerMatches = result.text.match(/Discord messages above/g) || [];
+        assert.equal(footerMatches.length, 1,
+          'footer must appear exactly once per injection — not once per event');
+      });
+    });
+
+    it('renders full event id in the line so agents can ack verbatim', () => {
+      withAgentsLock(collabDir, (token) => {
+        const ev = createEvent('sess-2', 'sess-1', 'handoff', 'run migration tests',
+          { task_ref: 'auth refactor' });
+        append(token, collabDir, ev);
+        const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
+        assert.match(result.text, new RegExp('id=' + ev.id.replace(/-/g, '\\-')),
+          'full event id must appear in the line');
+      });
+    });
+
+    it('renders (re: <task_ref>) for handoffs with meta.task_ref', () => {
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'handoff', 'do the thing',
+          { task_ref: 'auth refactor' }));
+        const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
+        assert.match(result.text, /\(re: auth refactor\)/);
+      });
+    });
+
+    it('handoff line ends with the ack-tool hint', () => {
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'handoff', 'do it'));
+        const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
+        assert.match(result.text, /→ ack with wrightward_ack/);
+      });
+    });
+
+    it('file_freed line names the retry hint and the file path', () => {
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'file_freed', 'src/auth.ts released',
+          { file: 'src/auth.ts' }));
+        const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
+        assert.match(result.text, /→ retry your blocked write on src\/auth\.ts/);
+      });
+    });
+
+    it('Discord user_message line carries the send_message reply hint', () => {
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('synthetic', 'sess-1', 'user_message', 'hi',
+          { source: 'discord' }));
+        const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
+        assert.match(result.text, /→ reply via wrightward_send_message audience="user"/);
+      });
+    });
+
+    it('agent_message line carries a reply hint targeted at the sender', () => {
+      withAgentsLock(collabDir, (token) => {
+        const from = 'a1b2c3d4-1111-2222-3333-444455556666';
+        append(token, collabDir, createEvent(from, 'sess-1', 'agent_message', 'yo'));
+        const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
+        assert.match(result.text, /→ reply via wrightward_send_message audience="a1b2c3d4"/);
+      });
+    });
+
+    it('blocker line carries an unblock hint', () => {
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'blocker', 'stuck on X'));
+        const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
+        assert.match(result.text, /→ another agent is blocked — consider unblocking/);
+      });
+    });
+
+    it('delivery_failed line points at the bus-status tool', () => {
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'delivery_failed', 'dropped'));
+        const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
+        assert.match(result.text, /→ see wrightward_bus_status/);
+      });
+    });
+
+    it('ack line carries no action hint (informational)', () => {
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'ack',
+          'Ack: accepted — auth refactor', { ack_of: 'x', decision: 'accepted' }));
+        const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
+        assert.match(result.text, /\[ack id=/);
+        // No '→' suffix for ack: agent just reads the body.
+        const ackLine = result.text.split('\n').find(l => l.includes('[ack id='));
+        assert.ok(ackLine, 'ack line should be present');
+        assert.doesNotMatch(ackLine, /→/, 'ack line must not carry an action hint');
+      });
+    });
+
+    it('finding and decision lines carry no action hints (informational)', () => {
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'finding', 'bug!'));
+        append(token, collabDir, createEvent('sess-2', 'sess-1', 'decision', 'chose X'));
+        const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
+        const findingLine = result.text.split('\n').find(l => l.includes('[finding id='));
+        const decisionLine = result.text.split('\n').find(l => l.includes('[decision id='));
+        assert.ok(findingLine && decisionLine);
+        assert.doesNotMatch(findingLine, /→/);
+        assert.doesNotMatch(decisionLine, /→/);
+      });
+    });
+  });
+
+  describe('formatEventLine', () => {
+    it('includes type, full id, from8, body in that order', () => {
+      const ev = { id: 'abcd1234-5678-90ab-cdef-1234567890ab', ts: 1, from: 'fromabcd-1234-5678-90ab-cdef12345678',
+        to: 'sess-1', type: 'handoff', body: 'B', meta: {}, severity: 'info', expires_at: null };
+      const line = formatEventLine(ev);
+      assert.equal(line,
+        `- [handoff id=abcd1234-5678-90ab-cdef-1234567890ab] from fromabcd: B → ack with wrightward_ack({id})`);
+    });
+
+    it('omits (re: …) when meta.task_ref is missing', () => {
+      const ev = { id: 'x', from: 'fromabcd-1111-2222-3333-444455556666', type: 'handoff', body: 'B', meta: {} };
+      assert.doesNotMatch(formatEventLine(ev), /\(re:/);
+    });
+  });
+
+  describe('hintForType', () => {
+    it('returns an empty string for informational types (ack, finding, decision, note, session_*)', () => {
+      for (const type of ['ack', 'finding', 'decision', 'note', 'session_started']) {
+        assert.equal(hintForType({ type, meta: {} }), '');
+      }
+    });
+    it('distinguishes Discord user_message from CLI user_message', () => {
+      assert.equal(hintForType({ type: 'user_message', meta: {} }), '');
+      assert.match(hintForType({ type: 'user_message', meta: { source: 'discord' } }),
+        /reply via wrightward_send_message audience="user"/);
+    });
+    it('omits the file-path for file_freed events missing meta.file', () => {
+      assert.equal(hintForType({ type: 'file_freed', meta: {} }), '');
     });
   });
 

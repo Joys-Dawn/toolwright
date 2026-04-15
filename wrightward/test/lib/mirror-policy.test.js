@@ -95,11 +95,27 @@ describe('mirror-policy', () => {
       assert.equal(r.action, 'post_broadcast');
     });
 
-    it('note/finding/decision → silent by default', () => {
+    it('note/finding/decision targeted at a session → post_thread', () => {
       for (const type of ['note', 'finding', 'decision']) {
         const r = decide(ev(type, 'sess-A', 'sess-B'));
-        assert.equal(r.action, 'silent', `${type} should be silent by default`);
+        assert.equal(r.action, 'post_thread', `${type} should post_thread when targeted`);
+        assert.equal(r.target_session_id, 'sess-A');
       }
+    });
+
+    it('note/finding/decision with to=all → post_broadcast (broadcast fallback)', () => {
+      for (const type of ['note', 'finding', 'decision']) {
+        const r = decide(ev(type, 'all', 'sess-A'));
+        assert.equal(r.action, 'post_broadcast', `${type} to 'all' should promote to broadcast`);
+      }
+    });
+
+    it('ack targeted at original sender → post_thread', () => {
+      // handleAck routes the ack event's `to` at the original handoff sender,
+      // so the bridge lands the post in that sender's Discord thread.
+      const r = decide(ev('ack', 'sess-A', 'sess-B'));
+      assert.equal(r.action, 'post_thread');
+      assert.equal(r.target_session_id, 'sess-A');
     });
 
     it('context_updated → rename_thread targeted at sender', () => {
@@ -141,8 +157,8 @@ describe('mirror-policy', () => {
       }
     });
 
-    it('interest/ack/delivery_failed/rate_limited → never', () => {
-      for (const type of ['interest', 'ack', 'delivery_failed', 'rate_limited']) {
+    it('interest/delivery_failed/rate_limited → never', () => {
+      for (const type of ['interest', 'delivery_failed', 'rate_limited']) {
         const r = decide(ev(type, 'all', 'sess-A'));
         assert.equal(r.action, 'never', `${type} should be 'never' by default`);
       }
@@ -178,7 +194,7 @@ describe('mirror-policy', () => {
     it('does not mutate DEFAULT_POLICY', () => {
       const merged = mergePolicy({ note: { action: 'post_broadcast' } });
       assert.equal(merged.note.action, 'post_broadcast');
-      assert.equal(DEFAULT_POLICY.note.action, 'silent', 'DEFAULT_POLICY must stay pristine');
+      assert.equal(DEFAULT_POLICY.note.action, 'post_thread', 'DEFAULT_POLICY must stay pristine');
     });
 
     it('overrides action for non-rail types', () => {
@@ -203,9 +219,13 @@ describe('mirror-policy', () => {
         'user override to post_broadcast must be discarded for interest');
     });
 
-    it('HARD RAIL: ack cannot be elevated to post_thread', () => {
-      const merged = mergePolicy({ ack: { action: 'post_thread' } });
-      assert.equal(merged.ack.action, 'never');
+    it('ack is NOT hard-railed — user can override it', () => {
+      // ack carries user-facing "accepted/rejected/dismissed" signals, not
+      // internal bookkeeping, so users can re-route it (e.g., demote to
+      // silent if they find the notifications noisy).
+      const merged = mergePolicy({ ack: { action: 'silent' } });
+      assert.equal(merged.ack.action, 'silent');
+      assert.ok(!HARD_RAIL_TYPES.has('ack'), 'ack must not be hard-railed');
     });
 
     it('HARD RAIL: delivery_failed cannot be elevated', () => {
@@ -225,17 +245,17 @@ describe('mirror-policy', () => {
 
     it('ignores invalid action values (default wins)', () => {
       const merged = mergePolicy({ note: { action: 'bogus_action' } });
-      assert.equal(merged.note.action, 'silent', 'invalid action must fall back to default');
+      assert.equal(merged.note.action, 'post_thread', 'invalid action must fall back to default');
     });
 
     it('ignores non-object overrides', () => {
       const merged = mergePolicy({ note: 'not an object' });
-      assert.equal(merged.note.action, 'silent');
+      assert.equal(merged.note.action, 'post_thread');
     });
 
     it('ignores array override body', () => {
       const merged = mergePolicy({ note: ['post_broadcast'] });
-      assert.equal(merged.note.action, 'silent');
+      assert.equal(merged.note.action, 'post_thread');
     });
 
     it('ignores array-shaped userPolicy entirely', () => {

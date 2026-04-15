@@ -142,8 +142,8 @@ describe('register hook', () => {
     assert.ok(ticket.hook_pid > 0);
   });
 
-  it('appends session_started event to bus.jsonl', () => {
-    runHook({ session_id: 'test-sess-1', cwd: tmpDir });
+  it('appends session_started event to bus.jsonl on source=startup', () => {
+    runHook({ session_id: 'test-sess-1', cwd: tmpDir, source: 'startup' });
     const busFile = path.join(tmpDir, '.claude', 'collab', 'bus.jsonl');
     assert.ok(fs.existsSync(busFile));
     const content = fs.readFileSync(busFile, 'utf8').trim();
@@ -151,6 +151,69 @@ describe('register hook', () => {
     assert.equal(event.type, 'session_started');
     assert.equal(event.from, 'test-sess-1');
     assert.equal(event.to, 'all');
+    assert.equal(event.meta.hook_source, 'startup');
+  });
+
+  it('appends session_started when source is omitted (back-compat fallback)', () => {
+    // Older Claude Code versions may not send `source`. Treat undefined as startup
+    // so wrightward keeps announcing sessions on those hosts.
+    runHook({ session_id: 'test-sess-1', cwd: tmpDir });
+    const busFile = path.join(tmpDir, '.claude', 'collab', 'bus.jsonl');
+    assert.ok(fs.existsSync(busFile));
+    const event = JSON.parse(fs.readFileSync(busFile, 'utf8').trim());
+    assert.equal(event.type, 'session_started');
+    assert.equal(event.meta.hook_source, 'startup');
+  });
+
+  it('appends session_started when source is resume', () => {
+    runHook({ session_id: 'test-sess-1', cwd: tmpDir, source: 'resume' });
+    const busFile = path.join(tmpDir, '.claude', 'collab', 'bus.jsonl');
+    assert.ok(fs.existsSync(busFile));
+    const event = JSON.parse(fs.readFileSync(busFile, 'utf8').trim());
+    assert.equal(event.type, 'session_started');
+    assert.equal(event.meta.hook_source, 'resume');
+  });
+
+  it('does NOT append session_started when source is clear', () => {
+    runHook({ session_id: 'test-sess-1', cwd: tmpDir, source: 'clear' });
+    const busFile = path.join(tmpDir, '.claude', 'collab', 'bus.jsonl');
+    const hasBus = fs.existsSync(busFile);
+    if (hasBus) {
+      const content = fs.readFileSync(busFile, 'utf8');
+      assert.ok(!content.includes('session_started'),
+        'clear source must not produce a session_started event');
+    }
+  });
+
+  it('does NOT append session_started when source is compact', () => {
+    // This is the root-cause fix: a long-lived session that auto-compacts must
+    // not re-announce itself to the bus (and therefore to Discord).
+    runHook({ session_id: 'test-sess-1', cwd: tmpDir, source: 'compact' });
+    const busFile = path.join(tmpDir, '.claude', 'collab', 'bus.jsonl');
+    const hasBus = fs.existsSync(busFile);
+    if (hasBus) {
+      const content = fs.readFileSync(busFile, 'utf8');
+      assert.ok(!content.includes('session_started'),
+        'compact source must not produce a session_started event');
+    }
+  });
+
+  it('still registers agent and writes ticket on source=clear (heartbeat refresh)', () => {
+    runHook({ session_id: 'sess-clear', cwd: tmpDir, source: 'clear' });
+    const collabDir = path.join(tmpDir, '.claude', 'collab');
+    const agents = JSON.parse(fs.readFileSync(path.join(collabDir, 'agents.json'), 'utf8'));
+    assert.ok(agents['sess-clear'], 'agent must be registered even when announce is suppressed');
+    const tickets = fs.readdirSync(path.join(collabDir, 'mcp-bindings'));
+    assert.ok(tickets.length >= 1, 'binding ticket must be written on clear');
+  });
+
+  it('still registers agent and writes ticket on source=compact (heartbeat refresh)', () => {
+    runHook({ session_id: 'sess-compact', cwd: tmpDir, source: 'compact' });
+    const collabDir = path.join(tmpDir, '.claude', 'collab');
+    const agents = JSON.parse(fs.readFileSync(path.join(collabDir, 'agents.json'), 'utf8'));
+    assert.ok(agents['sess-compact'], 'agent must be registered even when announce is suppressed');
+    const tickets = fs.readdirSync(path.join(collabDir, 'mcp-bindings'));
+    assert.ok(tickets.length >= 1, 'binding ticket must be written on compact');
   });
 
   it('does not write bus files when BUS_ENABLED is false', () => {

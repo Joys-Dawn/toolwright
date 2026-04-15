@@ -7,7 +7,8 @@ import { createRequire } from 'module';
 import {
   dispatchEvent,
   readBridgeFresh,
-  seedBookmarkIfFresh
+  seedBookmarkIfFresh,
+  runDrainLoop
 } from '../../broker/bridge.mjs';
 
 const require = createRequire(import.meta.url);
@@ -102,13 +103,30 @@ describe('broker/bridge', () => {
       assert.equal(api._calls.postMessage.length, 0);
     });
 
-    it('returns false for silent events (note/finding/decision default to silent)', async () => {
+    it('returns false for silent events (e.g. file_freed broadcast: targeted-only by default)', async () => {
+      // file_freed with to="all" is post_thread_if_targeted → silent. Exercises
+      // the bridge's silent short-circuit without assuming any event type
+      // defaults to silent outright.
       const threads = makeThreadsStub();
       const api = makeApiStub();
       const event = {
-        type: 'note', from: 'sess-aaaaaaaa', to: 'all', body: 'routine note'
+        type: 'file_freed', from: 'sess-aaaaaaaa', to: 'all', body: 'file X freed'
       };
       const result = await dispatchEvent(event, policy, threads, api, BASE_CONFIG, collabDir);
+      assert.equal(result, false);
+      assert.equal(api._calls.postMessage.length, 0);
+    });
+
+    it('returns false for silent events when user policy demotes a type to silent', async () => {
+      // Covers the "user-demoted" path: if a user overrides (say) note → silent,
+      // the bridge must respect that even though note defaults to post_thread.
+      const threads = makeThreadsStub();
+      const api = makeApiStub();
+      const customPolicy = mergePolicy({ note: { action: 'silent' } });
+      const event = {
+        type: 'note', from: 'sess-aaaaaaaa', to: 'sess-bbbbbbbb', body: 'hushed note'
+      };
+      const result = await dispatchEvent(event, customPolicy, threads, api, BASE_CONFIG, collabDir);
       assert.equal(result, false);
       assert.equal(api._calls.postMessage.length, 0);
     });
@@ -327,6 +345,91 @@ describe('broker/bridge', () => {
       assert.equal(out.events.length, 1,
         'dedup must drop the event already delivered at lastDeliveredTs/lastDeliveredId');
       assert.equal(out.events[0].body, 'second');
+    });
+  });
+
+  // Regression guard for the final-session session_ended drain: a single
+  // drain tick at shutdown was not enough when cleanup.js appended the
+  // event AFTER the tick read the bus. The loop re-runs the tick until
+  // the deadline so late appends are still caught.
+  describe('runDrainLoop', () => {
+    // Fake time-and-sleep controller. Drives the loop deterministically so
+    // tests are instant — no real setTimeout, no wall clock.
+    function makeClock() {
+      let t = 0;
+      return {
+        now: () => t,
+        sleep: (ms) => { t += ms; return Promise.resolve(); },
+        advance: (ms) => { t += ms; }
+      };
+    }
+
+    it('invokes tick multiple times within the deadline window', async () => {
+      const clock = makeClock();
+      let ticks = 0;
+      await runDrainLoop({
+        tick: async () => { ticks++; },
+        deadlineMs: 1000,
+        pollMs: 250,
+        now: clock.now,
+        sleep: clock.sleep
+      });
+      // Fake clock advances only via sleep (ticks themselves are instant).
+      // Iteration N runs at t = N * pollMs; loop stops when now >= deadline.
+      // With deadline=1000, pollMs=250: ticks at t=0, 250, 500, 750 → 4.
+      assert.equal(ticks, 4, 'drain must poll repeatedly within the deadline');
+    });
+
+    it('returns promptly when the deadline is already in the past', async () => {
+      const clock = makeClock();
+      let ticks = 0;
+      await runDrainLoop({
+        tick: async () => { ticks++; },
+        deadlineMs: -1,
+        pollMs: 250,
+        now: clock.now,
+        sleep: clock.sleep
+      });
+      assert.equal(ticks, 0, 'expired deadline must skip the loop body entirely');
+    });
+
+    it('swallows tick errors via onError and keeps polling', async () => {
+      const clock = makeClock();
+      const errors = [];
+      let ticks = 0;
+      await runDrainLoop({
+        tick: async () => {
+          ticks++;
+          if (ticks === 2) throw new Error('simulated tick failure');
+        },
+        deadlineMs: 800,
+        pollMs: 250,
+        onError: (err) => errors.push(err.message),
+        now: clock.now,
+        sleep: clock.sleep
+      });
+      // Iterations at t=0, 250, 500, 750 → 4 ticks; one throw; loop keeps going.
+      assert.equal(ticks, 4);
+      assert.deepEqual(errors, ['simulated tick failure']);
+    });
+
+    it('does not sleep after the final iteration', async () => {
+      // Guards against wasted wall-clock time on shutdown: the final
+      // iteration must not block for pollMs before the outer Promise.race
+      // can wake and exit.
+      const clock = makeClock();
+      const sleepCalls = [];
+      await runDrainLoop({
+        tick: async () => {},
+        deadlineMs: 500,
+        pollMs: 250,
+        now: clock.now,
+        sleep: (ms) => { sleepCalls.push(ms); clock.advance(ms); return Promise.resolve(); }
+      });
+      // Iterations at t=0, 250 → 2 ticks. Between iteration 1 and 2 we sleep
+      // once. After iteration 2, now=500 >= deadline → no trailing sleep.
+      assert.equal(sleepCalls.length, 1,
+        'sleep must not fire after the last iteration');
     });
   });
 });

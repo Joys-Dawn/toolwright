@@ -146,14 +146,49 @@ function writeInterest(token, collabDir, sessionId, filePath, ttlMs) {
 }
 
 /**
- * Appends a semantic ack event. `token` must match withAgentsLock.
+ * Scans bus.jsonl for an event with matching id. O(n) but bounded by
+ * retention (10k events default) so cost is negligible at current scale.
+ * Returns null when the event is absent (garbage-collected, expired, or
+ * never existed).
+ *
+ * Used by handleAck to resolve the original handoff's sender so the ack
+ * can be routed directly at them instead of broadcast.
+ *
+ * @param {symbol} token - Lock-acquisition token from withAgentsLock.
+ * @returns {object|null}
+ */
+function findEventById(token, collabDir, id) {
+  assertLockHeld(token, collabDir);
+  if (typeof id !== 'string' || id.length === 0) return null;
+  const { events } = tailReader(token, collabDir, 0);
+  // Scan tail-first: handoffs are typically acked within minutes of emission,
+  // so the match usually lives in the last handful of events.
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].id === id) return events[i];
+  }
+  return null;
+}
+
+/**
+ * Appends a semantic ack event routed at the original handoff's sender.
+ * `token` must match withAgentsLock.
+ *
+ * `to` should be the original handoff sender's sessionId (looked up via
+ * findEventById). `taskRef` is the original handoff's task_ref meta field
+ * (optional) so the ack body reads meaningfully on the sender's Discord
+ * thread: "Ack: accepted — auth refactor".
+ *
  * @returns {string} Event ID.
  */
-function writeAck(token, collabDir, sessionId, ackOf, decision) {
+function writeAck(token, collabDir, sessionId, to, ackOf, decision, taskRef) {
   assertLockHeld(token, collabDir);
-  const event = createEvent(sessionId, 'all', 'ack', 'Ack: ' + decision, {
+  const d = decision || 'accepted';
+  const body = taskRef
+    ? 'Ack: ' + d + ' — ' + taskRef
+    : 'Ack: ' + d;
+  const event = createEvent(sessionId, to, 'ack', body, {
     ack_of: ackOf,
-    decision: decision || 'accepted'
+    decision: d
   });
   append(token, collabDir, event);
   return event.id;
@@ -203,4 +238,4 @@ function buildFileFreedEvents(token, collabDir, { releasedBy, files, reason, exc
   return events;
 }
 
-module.exports = { listInbox, findInterested, writeInterest, writeAck, buildFileFreedEvents, matchesSession, isUrgent };
+module.exports = { listInbox, findInterested, writeInterest, writeAck, findEventById, buildFileFreedEvents, matchesSession, isUrgent };

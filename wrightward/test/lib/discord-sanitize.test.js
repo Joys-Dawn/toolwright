@@ -294,5 +294,47 @@ describe('discord-sanitize', () => {
       assert.deepEqual(r.mentions, ['sess-abc12345', 'sess-def67890']);
       assert.equal(r.ambiguous, false);
     });
+
+    it('resolves literal @agent-all to the broadcast target without ambiguity', () => {
+      // The explicit broadcast syntax is the user saying "send this to
+      // every registered agent". Unlike the ambiguous-short-ID fallback
+      // (which also emits `'all'`), this is deliberate intent — so
+      // `ambiguous` must stay false.
+      const r = parseMentions('@agent-all please stand by', roster);
+      assert.deepEqual(r.mentions, ['all']);
+      assert.equal(r.ambiguous, false);
+      assert.equal(r.stripped, 'please stand by');
+    });
+
+    it('preserves @agent-all alongside concrete mentions (explicit intent not filtered)', () => {
+      // The concrete-sibling filter exists to drop `'all'` contributed by
+      // an ambiguous short-ID when the user also addressed someone specific.
+      // An explicit `@agent-all` is not ambiguity — it is the user asking
+      // to broadcast AND to call out a specific session. Keep both.
+      const r = parseMentions('@agent-all and @agent-sess-def67890 heads up', roster);
+      assert.deepEqual(r.mentions, ['all', 'sess-def67890']);
+      assert.equal(r.ambiguous, false);
+    });
+
+    it('dedupes repeated @agent-all tokens in a single message', () => {
+      const r = parseMentions('@agent-all @agent-all done', roster);
+      assert.deepEqual(r.mentions, ['all']);
+      assert.equal(r.ambiguous, false);
+    });
+
+    it('strips @agent-all from the message body like any other mention', () => {
+      const r = parseMentions('hello @agent-all world', roster);
+      assert.equal(r.stripped, 'hello world');
+    });
+
+    it('@agent-all coexists with an ambiguous short-ID: ambiguous=true, broadcast preserved', () => {
+      // An explicit broadcast already sets `'all'`. A sibling ambiguous
+      // short-ID does not add a duplicate (pushOnce guard) but still flips
+      // the ambiguous flag — observability for the "did you mean?" warning
+      // stays intact even though the broadcast intent is unambiguous.
+      const r = parseMentions('@agent-all also @agent-sess-abc help', roster);
+      assert.deepEqual(r.mentions, ['all']);
+      assert.equal(r.ambiguous, true);
+    });
   });
 });
