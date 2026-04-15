@@ -23,6 +23,17 @@ In any Claude Code session, add the marketplace and install the plugins you want
 
 Or use `/plugin` and browse the **Discover** tab to install interactively.
 
+## Customize defaults
+
+agentwright and wrightward both run zero-config. If you want to tune anything, drop a fully-defaulted config into your repo:
+
+```
+/agentwright:config-init        # writes .claude/agentwright.json
+/wrightward:config-init         # writes .claude/wrightward.json
+```
+
+Edit any value; delete the file to revert to built-in defaults. Pass `--force` to overwrite an existing file.
+
 ## Quick start
 
 ### agentwright

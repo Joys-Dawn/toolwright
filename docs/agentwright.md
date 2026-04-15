@@ -2,7 +2,7 @@
 
 > Chained audit pipelines with a spawned auditor and in-session verification. Run `/audit-run` — a headless `claude -p` subprocess audits a frozen snapshot, the current session independently verifies each finding and applies fixes to the live repo.
 
-**Version**: 1.7.2 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/agentwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/README.md)
+**Version**: 1.8.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/agentwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/README.md)
 
 ## Install
 
@@ -54,7 +54,7 @@ All seven live under the plugin's `/` namespace (they're in `commands/`, not ski
 | `/audit-reset` | `[run-id]` | Guided deletion of a run directory. |
 | `/audit-clean` | `[--logs-only]` | Prune retained artifacts per the retention policy. |
 
-## Skills (21)
+## Skills (22)
 
 Auto-discovered from `agentwright/skills/` and invokable as `/agentwright:<name>` or via the `Skill` tool.
 
@@ -106,6 +106,12 @@ Thin wrappers that invoke the built-in agents — use `/agentwright:<name>` inst
 | `/agentwright:verify [focus]` | verifier | Forked — reads session transcript + git diff |
 | `/agentwright:challenge [claim]` | detective (×2) | Inline — dispatches two detectives with opposing hypotheses |
 
+### Utilities
+
+| Skill | Focus |
+|---|---|
+| `/agentwright:config-init` | Write `.claude/agentwright.json` with every default populated. Pass `--force` to overwrite. |
+
 ## Agents (5)
 
 Invokable as `@agent-agentwright:<name>` or via the shortcut skills above.
@@ -123,6 +129,8 @@ All agents run with `permissionMode: dontAsk`.
 ## Config
 
 `.claude/agentwright.json` (all fields optional). See [`agentwright.example.json`](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/agentwright.example.json).
+
+Run `/agentwright:config-init` to drop the full default config into your repo — every key populated so you can edit pipelines, custom stages, and retention in place. Add `--force` to overwrite an existing file; delete the file to fall back to built-in defaults.
 
 ```json
 {

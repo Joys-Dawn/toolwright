@@ -18,6 +18,10 @@ Claude Code plugin for multi-agent coordination. When multiple Claude Code sessi
 
 No configuration needed — hooks activate automatically.
 
+### Customize defaults
+
+Run `/wrightward:config-init` to drop a fully-defaulted `.claude/wrightward.json` into your repo — every knob visible and editable in one place (timeouts, bus retention, Discord bridge, mirror policy). Edit any value; delete the file to revert. Pass `--force` to overwrite.
+
 ## Quick start
 
 1. Open two or more Claude Code sessions in the same repo

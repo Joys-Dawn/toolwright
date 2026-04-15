@@ -2,7 +2,7 @@
 
 > Multi-agent coordination for Claude Code. When two or more sessions work in the same repo, wrightward blocks conflicting writes, injects awareness context, and gives sessions a peer-to-peer message bus (seven MCP tools) to hand off tasks, watch files, and wake each other. Ships with an optional Discord bridge.
 
-**Version**: 3.6.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/wrightward) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/README.md)
+**Version**: 3.7.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/wrightward) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/README.md)
 
 ## Install
 
@@ -69,6 +69,7 @@ All live under `/wrightward:<name>`.
 | `/wrightward:ack` | Acknowledge a handoff with `accepted` / `rejected` / `dismissed`. |
 | `/wrightward:handoff` | Hand a task to another agent and release files atomically. |
 | `/wrightward:watch` | Register interest in a file — get notified when it frees up. |
+| `/wrightward:config-init` | Write `.claude/wrightward.json` with every default populated. Pass `--force` to overwrite. |
 
 ## Message bus (v3.0)
 
@@ -280,6 +281,8 @@ User overrides merge on top. Demote to `silent` via `mirrorPolicy` if noisy.
 
 `.claude/wrightward.json` (all fields optional). See [`wrightward.example.json`](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/wrightward.example.json).
 
+Run `/wrightward:config-init` to drop the full default config into your repo — every key populated so you can edit any knob in place. Add `--force` to overwrite an existing file; delete the file to fall back to built-in defaults.
+
 ### Base coordination
 
 | Key | Default | Description |
@@ -314,7 +317,7 @@ User overrides merge on top. Demote to `silent` via `mirrorPolicy` if noisy.
 | `discord.ALLOWED_SENDERS` | `[]` | Discord user IDs permitted to route inbound messages. |
 | `discord.POLL_INTERVAL_MS` | 3000 | How often to poll the broadcast channel and each active thread. |
 | `discord.THREAD_RENAME_ON_CONTEXT_UPDATE` | `true` | Whether `/wrightward:collab-context` task changes rename the thread. |
-| `discord.BOT_USER_AGENT` | `DiscordBot (https://github.com/Joys-Dawn/toolwright, 3.6.0)` | Override only with a reason; must start with the literal `DiscordBot` to avoid Cloudflare blocking. |
+| `discord.BOT_USER_AGENT` | `DiscordBot (https://github.com/Joys-Dawn/toolwright, 3.7.0)` | Override only with a reason; must start with the literal `DiscordBot` to avoid Cloudflare blocking. |
 | `discord.mirrorPolicy` | see above | Per-event-type override. |
 
 ### Disable in a repo

@@ -11,6 +11,10 @@ Add the marketplace and install the plugin:
 /plugin install agentwright@Joys-Dawn/toolwright
 ```
 
+### Customize defaults
+
+Run `/agentwright:config-init` to drop a fully-defaulted `.claude/agentwright.json` into your repo — pipelines, custom stages, and retention settings all visible and editable in one place. Edit any value; delete the file to revert. Pass `--force` to overwrite.
+
 ## How audits work
 
 1. A frozen snapshot of the codebase is created (`.gitignore`-aware)
