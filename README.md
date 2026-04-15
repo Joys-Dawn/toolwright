@@ -2,6 +2,8 @@
 
 Three [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugins that can be installed separately or together. All are zero-config — install and start using them immediately.
 
+> 📖 **Full docs:** <https://joys-dawn.github.io/toolwright/> — setup (including Discord bot walkthrough), config reference, MCP tools, hooks, and every option for all three plugins. Start there.
+
 | Plugin | What it does |
 |--------|-------------|
 | [agentwright](agentwright/) | Automated code audits that find and fix bugs, security issues, and bad practices. Also includes skills for planning, debugging, and testing. Run `/audit-run` and it does the rest. |

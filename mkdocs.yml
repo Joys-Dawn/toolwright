@@ -45,6 +45,9 @@ theme:
 
 nav:
   - Home: index.md
+  - agentwright: agentwright.md
+  - wrightward: wrightward.md
+  - timewright: timewright.md
 
 markdown_extensions:
   - abbr

@@ -190,7 +190,7 @@ When the bridge is disabled (default), Phases 1–2 behave identically to prior 
 | `ALLOWED_SENDERS` | `[]` | Array of Discord **user IDs** permitted to route inbound mentions. Empty blocks all inbound — send-only mode |
 | `POLL_INTERVAL_MS` | `3000` | How often to poll the broadcast channel and each active forum thread for new messages |
 | `THREAD_RENAME_ON_CONTEXT_UPDATE` | `true` | Whether `/wrightward:collab-context` task changes rename the Discord thread |
-| `BOT_USER_AGENT` | (default `DiscordBot (…, 3.2.0)`) | Override only if you have a reason; must start with the literal `DiscordBot` to avoid Cloudflare blocking |
+| `BOT_USER_AGENT` | (default `DiscordBot (…, x.x.x)`) | Override only if you have a reason; must start with the literal `DiscordBot` to avoid Cloudflare blocking |
 | `mirrorPolicy` | (see below) | Per-event-type override of what gets mirrored where |
 
 **Mirror policy defaults** (user overrides merge on top):
