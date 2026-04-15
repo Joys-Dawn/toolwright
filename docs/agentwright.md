@@ -128,7 +128,7 @@ All agents run with `permissionMode: dontAsk`.
 {
   "pipelines": {
     "default": ["correctness", "security", "best-practices"],
-    "full": ["correctness", "security", "best-practices", ["migration", "ui"], "test-coverage"]
+    "full": ["correctness", "security", ["best-practices", "perf"], ["my-checks", "ui"], "test-coverage"]
   },
   "customStages": {
     "perf": { "type": "skill", "skillId": "performance-investigation" },
@@ -142,6 +142,8 @@ All agents run with `permissionMode: dontAsk`.
   }
 }
 ```
+
+Custom stages are referenced by their key inside `pipelines` (e.g., `"perf"` in `full` above), or run directly with `/audit-step perf`.
 
 | Key | Default | Description |
 |---|---|---|

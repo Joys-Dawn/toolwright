@@ -31,7 +31,7 @@ Type `/undo` to revert Claude's changes from the last turn.
 | Tool | Covered |
 |---|---|
 | `Bash` | Any command that modifies tracked or untracked source files inside the repo — `rm -rf`, migrations, `git reset`, `sed`/`awk` rewrites. |
-| `Write` / `Edit` / `MultiEdit` | All in-repo file operations. |
+| `Write` / `Edit` | All in-repo file operations. |
 | `NotebookEdit` | Jupyter notebook changes. |
 
 `Read`/`Grep`/`Glob` don't trigger snapshots — they're free.
@@ -65,7 +65,7 @@ Combines `.gitignore` (via `git ls-files`) with an explicit exclusion set.
 |---|---|---|
 | [`on-session-start.js`](https://github.com/Joys-Dawn/toolwright/blob/master/timewright/hooks/on-session-start.js) | `SessionStart` | Resolves the git repo root from the launch `cwd` and records it at `<repoRoot>/.claude/timewright/root` so later hooks find the project root even if Claude `cd`s into a subdirectory. |
 | [`on-user-prompt-submit.js`](https://github.com/Joys-Dawn/toolwright/blob/master/timewright/hooks/on-user-prompt-submit.js) | `UserPromptSubmit` | Clears the stale marker and creates a snapshot. Skips on `/undo`. |
-| [`on-post-tool-use.js`](https://github.com/Joys-Dawn/toolwright/blob/master/timewright/hooks/on-post-tool-use.js) | `PostToolUse` on `Bash\|Write\|Edit\|MultiEdit\|NotebookEdit` | Flips the stale flag so the next `UserPromptSubmit` takes a fresh snapshot. |
+| [`on-post-tool-use.js`](https://github.com/Joys-Dawn/toolwright/blob/master/timewright/hooks/on-post-tool-use.js) | `PostToolUse` on `Bash\|Write\|Edit\|NotebookEdit` | Flips the stale flag so the next `UserPromptSubmit` takes a fresh snapshot. |
 
 All three hooks fail silently to stderr — they never block a session start, prompt, or tool call.
 

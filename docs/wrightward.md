@@ -53,7 +53,7 @@ Context injection is deduplicated — the same summary appears once per change.
 
 ### Collab state is protected
 
-Edit/Write on `.claude/collab/*` is hard-blocked by the guard hook. Bash is not intercepted — the block message and every collab skill tell the agent never to escalate to shell. If a claim looks stale, agents are told to wait 6 min — after which a crashed session is auto-evicted and its claims stop enforcing.
+Edit/Write on `.claude/collab/*` is hard-blocked by the guard hook. Bash is not intercepted — the block message and every collab skill tell the agent never to escalate to shell.
 
 ## Slash commands
 
