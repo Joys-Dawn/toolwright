@@ -7,7 +7,7 @@ Three [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugins that
 | Plugin | What it does |
 |--------|-------------|
 | [agentwright](agentwright/) | Automated code audits that find and fix bugs, security issues, and bad practices. Also includes skills for planning, debugging, and testing. Run `/audit-run` and it does the rest. |
-| [wrightward](wrightward/) | Multi-agent coordination — when two or more Claude Code sessions work in the same repo, wrightward blocks conflicting writes, injects awareness context, and gives the sessions a peer-to-peer message bus (with six MCP tools) to hand off tasks, watch files, and wake each other up via Claude Code channels. |
+| [wrightward](wrightward/) | Multi-agent coordination. When two or more Claude Code sessions work in the same repo, wrightward blocks conflicting writes, injects awareness context, and runs a peer-to-peer message bus (seven MCP tools) for handoffs, file watches, and inter-agent messages. Optional Discord bridge mirrors events to a forum channel (one thread per agent) and relays human replies back to the bus. |
 | [timewright](timewright/) | Undo for Claude's in-session source file changes — including Bash-driven mutations (file deletions, sed rewrites, git operations) that native `/rewind` misses. Type `/undo` to revert. |
 
 ## Installation
@@ -48,13 +48,26 @@ This audits files in your `git diff` through three stages (correctness → secur
 
 ### wrightward
 
-Open two or more Claude Code sessions in the same repo, then in each session:
+Open two or more Claude Code sessions in the same repo. The core coordination activates automatically — every Edit/Write is auto-tracked, and writes to another agent's active file are blocked with a summary of who owns it.
+
+For longer-lived claims and handoffs, use the slash commands:
 
 ```
-/wrightward:collab-context
+/wrightward:collab-context   # declare task + files you're about to touch
+/wrightward:handoff          # hand a task to another session (atomically releases files)
+/wrightward:watch <file>     # get notified when another session frees a file
+/wrightward:inbox            # check pending urgent events
+/wrightward:help             # full rulebook (tools, routing, etiquette)
 ```
 
-Declare which files each agent will touch. Each agent automatically receives context about what the others are working on as it reads and writes files. See [wrightward/README.md](wrightward/) for the full workflow.
+Sessions exchange urgent events (handoffs, blockers, findings, decisions, inter-agent messages) through a file-based bus; urgent events auto-inject as context on the next tool call.
+
+**Optional add-ons** (see the [wrightward docs](https://joys-dawn.github.io/toolwright/wrightward/) for setup):
+
+- **Channel push** (research preview, Claude Code ≥ 2.1.80) — wakes idle sessions between turns when they receive an urgent bus event, so handoffs don't wait for the user to type. Activated by launching Claude Code with `--dangerously-load-development-channels server:wrightward-bus` until wrightward is approved in the official channel allowlist.
+- **Discord bridge** — disabled by default (`discord.ENABLED: false`); flip it on in `.claude/wrightward.json`. Mirrors bus events to a Discord forum channel (thread per agent) and relays replies (thread replies, `@agent-<id>` mentions, `@agent-all` broadcasts) back into the bus. REST-only, coexists with the stock Discord plugin on the same bot token. Full setup walkthrough (bot creation, Message Content Intent, OAuth2 invite, channel IDs) in the docs.
+
+See [wrightward/README.md](wrightward/) or the [docs page](https://joys-dawn.github.io/toolwright/wrightward/) for the full reference.
 
 ### timewright
 
