@@ -156,4 +156,31 @@ function getBusSize(collabDir) {
   }
 }
 
-module.exports = { append, appendBatch, tailReader, readBookmark, writeBookmark, deleteBookmark, busPath };
+/**
+ * Initializes a session's delivery bookmark to the current tail of the bus log,
+ * but only if no bookmark exists yet. Without this, fresh sessions default to
+ * offset 0 and replay the entire historical bus on their first inbox scan.
+ *
+ * No-op when a bookmark already exists — so resumed sessions catch up from
+ * where they left off as before.
+ *
+ * `token` must match the enclosing withAgentsLock.
+ * @returns {boolean} true if a bookmark was written, false if one already existed.
+ */
+function initBookmarkToTail(token, collabDir, sessionId) {
+  assertLockHeld(token, collabDir);
+  const p = bookmarkPath(collabDir, sessionId);
+  if (fs.existsSync(p)) return false;
+  const endOffset = getBusSize(collabDir);
+  const meta = busMeta.readMeta(collabDir);
+  atomicWriteJson(p, {
+    lastDeliveredOffset: endOffset,
+    lastScannedOffset: endOffset,
+    lastDeliveredId: '',
+    lastDeliveredTs: 0,
+    generation: meta.generation
+  });
+  return true;
+}
+
+module.exports = { append, appendBatch, tailReader, readBookmark, writeBookmark, deleteBookmark, initBookmarkToTail, busPath };

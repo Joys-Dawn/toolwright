@@ -9,7 +9,7 @@ const { registerAgent, registerAgentInLock, readAgents, withAgentsLock } = requi
 const { loadConfig } = require('../lib/config');
 const { validateSessionId } = require('../lib/constants');
 const { scavengeExpiredFiles } = require('../lib/session-state');
-const { append } = require('../lib/bus-log');
+const { append, initBookmarkToTail } = require('../lib/bus-log');
 const { createEvent } = require('../lib/bus-schema');
 const { atomicWriteJson } = require('../lib/atomic-write');
 const { ticketPath } = require('../lib/mcp-ticket');
@@ -124,6 +124,16 @@ async function main() {
         } catch (err) {
           process.stderr.write('[collab/register] bus append failed: ' + (err.message || err) + '\n');
         }
+      }
+
+      // A fresh session has no bookmark file, so its first inbox scan would
+      // default to offset 0 and replay every historical broadcast on the bus.
+      // Anchor the bookmark to the current tail instead — resumed sessions
+      // with an existing bookmark are left untouched (no-op).
+      try {
+        initBookmarkToTail(token, collabDir, session_id);
+      } catch (err) {
+        process.stderr.write('[collab/register] bookmark init failed: ' + (err.message || err) + '\n');
       }
     });
   } else {

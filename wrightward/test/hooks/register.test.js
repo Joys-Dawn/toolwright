@@ -7,8 +7,10 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { ensureCollabDir } = require('../../lib/collab-dir');
-const { registerAgent } = require('../../lib/agents');
+const { registerAgent, withAgentsLock } = require('../../lib/agents');
 const { writeContext, readContext } = require('../../lib/context');
+const { append, readBookmark, writeBookmark } = require('../../lib/bus-log');
+const { createEvent } = require('../../lib/bus-schema');
 
 const HOOK = path.resolve(__dirname, '../../hooks/register.js');
 
@@ -214,6 +216,48 @@ describe('register hook', () => {
     assert.ok(agents['sess-compact'], 'agent must be registered even when announce is suppressed');
     const tickets = fs.readdirSync(path.join(collabDir, 'mcp-bindings'));
     assert.ok(tickets.length >= 1, 'binding ticket must be written on compact');
+  });
+
+  it('anchors a fresh session\'s bookmark at bus tail so history is not replayed', () => {
+    // Pre-populate the bus with events from an earlier coordination run — the
+    // scenario a new agent would otherwise inherit wholesale on first inbox
+    // scan because its default bookmark points at offset 0.
+    runHook({ session_id: 'sess-prior', cwd: tmpDir, source: 'startup' });
+    const collabDir = path.join(tmpDir, '.claude', 'collab');
+    withAgentsLock(collabDir, (token) => {
+      append(token, collabDir, createEvent('sess-prior', 'all', 'finding', 'old finding 1'));
+      append(token, collabDir, createEvent('sess-prior', 'all', 'decision', 'old decision'));
+    });
+    const busBefore = fs.statSync(path.join(collabDir, 'bus.jsonl')).size;
+
+    runHook({ session_id: 'sess-new', cwd: tmpDir, source: 'startup' });
+
+    const bm = readBookmark(collabDir, 'sess-new');
+    assert.ok(bm.lastScannedOffset >= busBefore,
+      'fresh session bookmark must be at or past the prior bus tail');
+    assert.equal(bm.lastScannedOffset, bm.lastDeliveredOffset,
+      'scanned and delivered offsets should be aligned for a tail-anchored init');
+  });
+
+  it('does not overwrite an existing bookmark on resume', () => {
+    runHook({ session_id: 'sess-resume', cwd: tmpDir, source: 'startup' });
+    const collabDir = path.join(tmpDir, '.claude', 'collab');
+    const existing = {
+      lastDeliveredOffset: 42,
+      lastScannedOffset: 42,
+      lastDeliveredId: 'evt-mid',
+      lastDeliveredTs: 1700000000,
+      generation: 0
+    };
+    withAgentsLock(collabDir, (token) => {
+      writeBookmark(token, collabDir, 'sess-resume', existing);
+    });
+
+    runHook({ session_id: 'sess-resume', cwd: tmpDir, source: 'resume' });
+
+    const bm = readBookmark(collabDir, 'sess-resume');
+    assert.deepEqual(bm, existing,
+      'resumed session must keep its prior bookmark so missed events catch up');
   });
 
   it('does not write bus files when BUS_ENABLED is false', () => {

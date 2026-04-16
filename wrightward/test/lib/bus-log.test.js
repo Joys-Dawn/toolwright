@@ -8,8 +8,10 @@ const os = require('os');
 const { ensureCollabDir } = require('../../lib/collab-dir');
 const { withAgentsLock, assertLockHeld } = require('../../lib/agents');
 const { createEvent } = require('../../lib/bus-schema');
-const { append, appendBatch, tailReader, readBookmark, writeBookmark, deleteBookmark, busPath } = require('../../lib/bus-log');
+const { append, appendBatch, tailReader, readBookmark, writeBookmark, deleteBookmark, initBookmarkToTail, busPath } = require('../../lib/bus-log');
 const { compact } = require('../../lib/bus-retention');
+const busMeta = require('../../lib/bus-meta');
+const { readInboxFresh } = require('../../lib/bus-delivery');
 
 describe('bus-log', () => {
   let tmpDir;
@@ -250,6 +252,76 @@ describe('bus-log', () => {
       assert.deepEqual(read, bookmark);
       // File must literally be bus-delivered/__bridge__.json, not escaped.
       assert.ok(fs.existsSync(path.join(collabDir, 'bus-delivered', '__bridge__.json')));
+    });
+
+    describe('initBookmarkToTail', () => {
+      it('anchors bookmark at bus tail when no bookmark exists', () => {
+        let busSize;
+        let wrote;
+        withAgentsLock(collabDir, (token) => {
+          append(token, collabDir, makeEvent('finding'));
+          busSize = append(token, collabDir, makeEvent('decision'));
+          wrote = initBookmarkToTail(token, collabDir, 'sess-new');
+        });
+        assert.equal(wrote, true);
+        const bm = readBookmark(collabDir, 'sess-new');
+        assert.equal(bm.lastDeliveredOffset, busSize);
+        assert.equal(bm.lastScannedOffset, busSize);
+        assert.equal(bm.lastDeliveredId, '');
+        assert.equal(bm.lastDeliveredTs, 0);
+        assert.equal(bm.generation, busMeta.readMeta(collabDir).generation);
+      });
+
+      it('is a no-op when bookmark already exists', () => {
+        const existing = {
+          lastDeliveredOffset: 100,
+          lastScannedOffset: 200,
+          lastDeliveredId: 'evt-existing',
+          lastDeliveredTs: 1700000000,
+          generation: 5
+        };
+        let wrote;
+        withAgentsLock(collabDir, (token) => {
+          writeBookmark(token, collabDir, 'sess-resumed', existing);
+          append(token, collabDir, makeEvent('finding'));
+          wrote = initBookmarkToTail(token, collabDir, 'sess-resumed');
+        });
+        assert.equal(wrote, false);
+        const bm = readBookmark(collabDir, 'sess-resumed');
+        assert.deepEqual(bm, existing);
+      });
+
+      it('initializes to offset 0 when bus is empty', () => {
+        withAgentsLock(collabDir, (token) => {
+          initBookmarkToTail(token, collabDir, 'sess-first');
+        });
+        const bm = readBookmark(collabDir, 'sess-first');
+        assert.equal(bm.lastDeliveredOffset, 0);
+        assert.equal(bm.lastScannedOffset, 0);
+      });
+
+      it('tracks current meta generation so post-compact bookmarks are not marked stale', () => {
+        let isStale;
+        withAgentsLock(collabDir, (token) => {
+          const old = makeEvent();
+          old.ts = Date.now() - 10 * 24 * 60 * 60 * 1000;
+          append(token, collabDir, old);
+          compact(token, collabDir, { BUS_RETENTION_DAYS_MS: 7 * 24 * 60 * 60 * 1000, BUS_RETENTION_MAX_EVENTS: 10000 });
+          initBookmarkToTail(token, collabDir, 'sess-post-compact');
+          ({ isStale } = readInboxFresh(token, collabDir, 'sess-post-compact'));
+        });
+        const bm = readBookmark(collabDir, 'sess-post-compact');
+        assert.equal(bm.generation, busMeta.readMeta(collabDir).generation);
+        assert.equal(isStale, false,
+          'tail-anchored bookmark must not be flagged stale by readInboxFresh');
+      });
+
+      it('throws a lock-assertion error when called without the lock token', () => {
+        assert.throws(
+          () => initBookmarkToTail(Symbol('fake'), collabDir, 'sess-x'),
+          /agents-lock token/
+        );
+      });
     });
   });
 

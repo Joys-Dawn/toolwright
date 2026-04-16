@@ -2,7 +2,7 @@
 
 > Multi-agent coordination for Claude Code. When two or more sessions work in the same repo, wrightward blocks conflicting writes, injects awareness context, and gives sessions a peer-to-peer message bus (eight MCP tools) to hand off tasks, watch files, and wake each other. Ships with an optional Discord bridge.
 
-**Version**: 3.8.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/wrightward) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/README.md)
+**Version**: 3.9.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/wrightward) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/README.md)
 
 ## Install
 
@@ -319,7 +319,7 @@ Run `/wrightward:config-init` to drop the full default config into your repo —
 | `discord.ALLOWED_SENDERS` | `[]` | Discord user IDs permitted to route inbound messages. |
 | `discord.POLL_INTERVAL_MS` | 3000 | How often to poll the broadcast channel and each active thread. |
 | `discord.THREAD_RENAME_ON_CONTEXT_UPDATE` | `true` | Whether `/wrightward:collab-context` task changes rename the thread. |
-| `discord.BOT_USER_AGENT` | `DiscordBot (https://github.com/Joys-Dawn/toolwright, 3.8.0)` | Override only with a reason; must start with the literal `DiscordBot` to avoid Cloudflare blocking. |
+| `discord.BOT_USER_AGENT` | `DiscordBot (https://github.com/Joys-Dawn/toolwright, 3.9.0)` | Override only with a reason; must start with the literal `DiscordBot` to avoid Cloudflare blocking. |
 | `discord.mirrorPolicy` | see above | Per-event-type override. |
 
 ### Disable in a repo
