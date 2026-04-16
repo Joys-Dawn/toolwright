@@ -6,7 +6,7 @@
 // abstract or links contain a GitHub/GitLab/HuggingFace URL — the
 // capability validator uses this as a strong positive signal.
 
-export { validateCapability as validator } from './capability-validator.mjs';
+export { validateCapability as validator, validateCapabilityBatch as batchValidator } from './capability-validator.mjs';
 
 const DEFAULT_CATEGORIES = [
   'cs.AI', 'cs.LG', 'cs.CL', 'cs.CV', 'cs.IR', 'cs.DB', 'cs.SE', 'cs.HC',

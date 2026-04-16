@@ -6,7 +6,7 @@
 // Filters by category (subject) since bioRxiv's broad firehose is mostly
 // wet-lab work that doesn't map to code-only products.
 
-export { validateCapability as validator } from './capability-validator.mjs';
+export { validateCapability as validator, validateCapabilityBatch as batchValidator } from './capability-validator.mjs';
 
 const BASE = 'https://api.biorxiv.org';
 const USER_AGENT = 'ideawright/0.1 (capability-miner)';

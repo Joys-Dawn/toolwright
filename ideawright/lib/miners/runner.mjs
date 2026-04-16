@@ -19,7 +19,7 @@ import * as github from './github.mjs';
 import * as arxiv from './arxiv.mjs';
 import * as biorxiv from './biorxiv.mjs';
 import * as pubmed from './pubmed.mjs';
-import { validateSignal } from './validator.mjs';
+import { validateSignal, validateSignalBatch } from './validator.mjs';
 import { computeId, getSourceCursor, insertIdea, setSourceCursor } from '../db.mjs';
 
 export const MINERS = { reddit, hn, github, arxiv, biorxiv, pubmed };
@@ -47,6 +47,7 @@ export async function runMiners({
   perSourceLimit,
   validationConcurrency = 3,
   logger = console,
+  _batchValidate,
 } = {}) {
   if (!db) throw new Error('runMiners: db is required');
 
@@ -94,13 +95,15 @@ export async function runMiners({
     const model = perSourceCfg.llm?.model ?? defaultModel ?? null;
     const sourceModule = SUPPLY_PIPELINE.has(id) ? 'A-tech' : 'A';
 
-    const { validated, inserted } = await validateAndInsert(
+    const batchSize = config.novelty?.batch_size ?? 10;
+    const batchValidate = _batchValidate ?? miner.batchValidator ?? validateSignalBatch;
+    const { validated, inserted } = await validateAndInsertBatch(
       db,
       obs,
-      validationConcurrency,
+      batchSize,
       logger,
       validate,
-      { model, sourceModule },
+      { model, sourceModule, batchValidate },
     );
     summary.validated += validated;
     summary.inserted += inserted;
@@ -139,28 +142,32 @@ function enabledSources(config) {
   return out;
 }
 
-async function validateAndInsert(db, observations, concurrency, logger, validate, opts = {}) {
+async function validateAndInsertBatch(db, observations, batchSize, logger, validate, opts = {}) {
   const state = { validated: 0, inserted: 0 };
-  const queue = [...observations];
-  const workers = Array.from({ length: Math.max(1, concurrency) }, () => worker());
-  await Promise.all(workers);
-  return state;
+  const batchFn = opts.batchValidate ?? validateSignalBatch;
+  // Chunk observations into batches and send one LLM call per batch
+  for (let i = 0; i < observations.length; i += batchSize) {
+    const batch = observations.slice(i, i + batchSize);
+    let verdicts;
+    try {
+      // Use batch validator (single claude -p call for the whole batch)
+      verdicts = await batchFn(batch, { model: opts.model });
+    } catch (err) {
+      logger.warn(`[validate] batch ${i}-${i + batch.length} failed: ${err.message}, falling back to per-item`);
+      // Fallback: validate individually so one bad item doesn't lose the whole batch
+      verdicts = await Promise.all(
+        batch.map(async (o) => {
+          try { return await validate(o, { model: opts.model }); }
+          catch { return { idea: null }; }
+        }),
+      );
+    }
 
-  async function worker() {
-    for (;;) {
-      const o = queue.shift();
-      if (!o) return;
-      let verdict;
-      try {
-        verdict = await validate(o, { model: opts.model });
-      } catch (err) {
-        logger.warn(`[validate] skip (${o.source_url}): ${err.message}`);
-        continue;
-      }
-      if (!verdict.idea) continue;
+    for (let j = 0; j < batch.length; j++) {
+      const verdict = verdicts[j];
+      if (!verdict?.idea) continue;
       state.validated += 1;
-
-      const idea = toIdea(verdict, o, opts.sourceModule);
+      const idea = toIdea(verdict, batch[j], opts.sourceModule);
       try {
         const res = insertIdea(db, idea);
         if (res.inserted) state.inserted += 1;
@@ -169,6 +176,7 @@ async function validateAndInsert(db, observations, concurrency, logger, validate
       }
     }
   }
+  return state;
 }
 
 function toIdea(verdict, obs, sourceModule = 'A') {

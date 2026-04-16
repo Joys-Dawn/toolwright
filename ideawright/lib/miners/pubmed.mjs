@@ -11,7 +11,7 @@
 
 import { createHash } from 'node:crypto';
 
-export { validateCapability as validator } from './capability-validator.mjs';
+export { validateCapability as validator, validateCapabilityBatch as batchValidator } from './capability-validator.mjs';
 
 const BASE = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils';
 const USER_AGENT = 'ideawright/0.1 (capability-miner)';

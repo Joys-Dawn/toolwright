@@ -68,3 +68,67 @@ export async function validateCapability(observation, { model, timeoutMs } = {})
   const result = await callJudge(opts);
   return normalizeVerdict(result);
 }
+
+const BATCH_SYSTEM = `You are a supply-side product-ideation synthesizer.
+
+You will receive a JSON array of recently published papers, open-source tools, or public datasets.
+For EACH item, decide whether this capability unlocks a novel code-only product that
+WASN'T feasible 12 months ago, and if so, synthesize ONE concrete idea.
+
+Decision gates — ALL must be true to emit an idea:
+  - is_real_need:  the idea addresses a plausible real user need (not a demo toy)
+  - code_only:     buildable with pure software (no hardware, no physical logistics)
+  - no_capital:    no large upfront $ (cloud costs under ~$500/mo OK; GPU farm = no)
+  - no_private_data: does not require proprietary/private dataset access
+  - the capability is genuinely NEW (not a reimplementation of a 5-year-old technique)
+
+Return a strict JSON ARRAY with one result per input item, in the same order.
+Each element has EXACTLY this shape:
+{
+  "index": integer (0-based position matching the input array),
+  "is_real_need": boolean,
+  "pain_score_0_10": integer,
+  "code_only": boolean,
+  "no_capital": boolean,
+  "no_private_data": boolean,
+  "idea": {
+    "title": "3-10 word specific product name, not generic",
+    "summary": "one or two sentence pitch that names the capability and the product",
+    "target_user": "who benefits — specific segment, not 'everyone'",
+    "category": "lowercase-kebab e.g. developer-tools, scientific-tooling, clinical-research",
+    "emerging_tech": "name the paper / tool / dataset this depends on, with id if provided",
+    "suggested_approach": "1-2 sentences on how a solo dev would build it"
+  }
+}
+
+pain_score_0_10 is an opportunity score: how badly a real user segment needs this, 0-10.
+
+Set "idea": null if any gate fails, or if the capability is already commoditized,
+or if no concrete product is plausible.
+
+NEVER wrap the JSON in prose or markdown code fences. Return ONLY the array.`;
+
+export async function validateCapabilityBatch(observations, { model, timeoutMs } = {}) {
+  if (!observations.length) return [];
+  const user = JSON.stringify(
+    observations.map((o) => ({
+      source: o.source,
+      source_url: o.source_url,
+      title: o.title,
+      abstract: o.quote,
+      authors: o.author,
+      published: o.created_at,
+      code_url: o.code_url ?? null,
+      categories: o.categories ?? null,
+      engagement: o.engagement,
+    })),
+    null,
+    2,
+  );
+  const opts = { system: BATCH_SYSTEM, user };
+  if (model) opts.model = model;
+  if (timeoutMs) opts.timeoutMs = timeoutMs ?? 120_000;
+  const results = await callJudge(opts);
+  const arr = Array.isArray(results) ? results : [results];
+  return arr.map((r) => normalizeVerdict(r));
+}

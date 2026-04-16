@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // callJudge spawns `claude -p` headless and returns parsed JSON.
 // Pattern mirrors agentwright's spawnAuditor but in single-shot JSON mode.
@@ -14,14 +17,33 @@ import { spawn } from 'node:child_process';
 // from `config.llm.model` by the runner).
 const DEFAULT_MODEL = process.env.IDEAWRIGHT_LLM_MODEL || 'claude-opus-4-6';
 
+// Sandbox cwd for spawned `claude -p` processes. The wrightward SessionStart
+// hook reads `<cwd>/.claude/wrightward.json` and exits early when ENABLED=false —
+// so each judge call boots without registering on the bus or polluting the
+// agent roster. Computed once and reused across all spawns.
+let _judgeCwd = null;
+function getJudgeCwd() {
+  if (_judgeCwd) return _judgeCwd;
+  const dir = join(tmpdir(), 'ideawright-judge-sandbox');
+  const cfgDir = join(dir, '.claude');
+  const cfgPath = join(cfgDir, 'wrightward.json');
+  if (!existsSync(cfgPath)) {
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(cfgPath, JSON.stringify({ ENABLED: false }, null, 2));
+  }
+  _judgeCwd = dir;
+  return dir;
+}
+
 export async function callJudge({
   system,
   user,
   model = DEFAULT_MODEL,
-  cwd = process.cwd(),
+  cwd,
   timeoutMs = 60_000,
 } = {}) {
   if (!system || !user) throw new Error('callJudge: system and user are required');
+  const spawnCwd = cwd ?? getJudgeCwd();
   return new Promise((resolve, reject) => {
     const args = [
       '-p', user,
@@ -30,7 +52,7 @@ export async function callJudge({
       '--model', model,
       '--permission-mode', 'dontAsk',
     ];
-    const child = spawn('claude', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn('claude', args, { cwd: spawnCwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => {
