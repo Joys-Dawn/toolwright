@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://joys-dawn.com/ideawright/contract.schema.json",
+  "title": "Idea",
+  "description": "Canonical shape of a candidate product idea in ideawright. Module A emits the base; B adds novelty; C adds feasibility + composite_rank.",
+  "type": "object",
+  "required": ["id", "title", "status", "pain_evidence", "source_urls"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "sha256(lowercase(trim(title)) + '|' + lowercase(trim(target_user))) — whitespace-collapsed."
+    },
+    "title": { "type": "string", "minLength": 3, "maxLength": 200 },
+    "summary": { "type": ["string", "null"], "maxLength": 1000 },
+    "target_user": { "type": ["string", "null"], "maxLength": 200 },
+    "category": { "type": ["string", "null"] },
+    "emerging_tech": { "type": ["string", "null"] },
+
+    "pain_evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_url", "quote"],
+        "additionalProperties": true,
+        "properties": {
+          "source_url": { "type": "string", "format": "uri" },
+          "quote": { "type": "string" },
+          "pain_score_0_10": { "type": "number", "minimum": 0, "maximum": 10 },
+          "engagement": {}
+        }
+      }
+    },
+    "source_urls": { "type": "array", "items": { "type": "string", "format": "uri" } },
+
+    "novelty": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "score_0_100": { "type": "number", "minimum": 0, "maximum": 100 },
+        "verdict": { "enum": ["novel", "niche", "crowded"] },
+        "competitors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "url": { "type": "string" },
+              "overlap": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          }
+        },
+        "queries_run": { "type": "array", "items": { "type": "string" } },
+        "verified_at": { "type": "string", "format": "date-time" }
+      }
+    },
+
+    "feasibility": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "code_only": { "type": "boolean" },
+        "no_capital": { "type": "boolean" },
+        "no_private_data": { "type": "boolean" },
+        "impl_sketch": { "type": "string" },
+        "effort": { "enum": ["hours", "days", "weeks"] },
+        "score_0_100": { "type": "number", "minimum": 0, "maximum": 100 },
+        "verdict": { "enum": ["go", "defer", "reject"] }
+      }
+    },
+
+    "composite_rank": { "type": ["number", "null"] },
+    "status": { "enum": ["new", "scored", "verified", "gated", "promoted", "archived"] },
+    "created_at": { "type": "string" },
+    "updated_at": { "type": "string" }
+  }
+}
