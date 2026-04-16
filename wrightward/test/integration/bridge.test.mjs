@@ -15,10 +15,11 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const { ensureCollabDir } = require('../../lib/collab-dir');
-const { registerAgent, withAgentsLock } = require('../../lib/agents');
+const { registerAgent, readAgents, withAgentsLock } = require('../../lib/agents');
 const { append, busPath } = require('../../lib/bus-log');
 const { createEvent, SYNTHETIC_SENDER } = require('../../lib/bus-schema');
 const { writeContext } = require('../../lib/context');
+const { handleFor } = require('../../lib/handles');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -185,8 +186,16 @@ describe('integration: bridge daemon', () => {
     // tick to no-op on historical events.
     await sleep(1500);
 
-    const postsBefore = fixture.calls.filter((c) => c.method === 'POST').length;
-    assert.equal(postsBefore, 0, 'no POSTs should fire for historical events');
+    // Startup reconciliation creates a thread for every registered session
+    // (replacing the removed lazy-create path) — so one forum thread-create
+    // POST is expected for sess-aaaaaaaa. What we really care about here
+    // is that historical BUS events are NOT mirrored to the broadcast
+    // channel. Separate the two when counting.
+    const broadcastPostsBefore = fixture.calls.filter((c) =>
+      c.method === 'POST' &&
+      c.path === '/api/v10/channels/' + BROADCAST_CHANNEL_ID + '/messages').length;
+    assert.equal(broadcastPostsBefore, 0,
+      'no broadcast POSTs should fire for historical events (seedBookmarkIfFresh contract)');
 
     // Now append ONE new session_started; policy → post_broadcast. Expect
     // exactly one POST to the broadcast channel.
@@ -230,8 +239,10 @@ describe('integration: bridge daemon', () => {
     assert.match(first.headers['user-agent'], /^DiscordBot /);
   });
 
-  it('routes an inbound @agent-<shortId> mention into bus.jsonl as a user_message', async () => {
+  it('routes an inbound @agent-<handle> mention into bus.jsonl as a user_message', async () => {
     registerAgent(collabDir, 'sess-ccccc111');
+    const cRoster = readAgents(collabDir);
+    const cHandle = handleFor('sess-ccccc111', cRoster['sess-ccccc111']);
     // First-run seeding swallows the first GET response (to avoid replaying
     // pre-existing broadcast history). Serve an empty seed response, then
     // the real @agent message on the next poll, then empty forever.
@@ -243,7 +254,7 @@ describe('integration: bridge daemon', () => {
         if (getCallCount === 2) {
           return { status: 200, body: [
             { id: 'msg-inbound-1', author: { id: 'user-allowed-1', bot: false },
-              content: '@agent-sess-ccc please check the logs' }
+              content: '@agent-' + cHandle + ' please check the logs' }
           ] };
         }
         return { status: 200, body: [] };

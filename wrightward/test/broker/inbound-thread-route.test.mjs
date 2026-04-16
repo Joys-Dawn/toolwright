@@ -14,6 +14,7 @@ const { busPath } = require('../../lib/bus-log');
 const { atomicWriteJson } = require('../../lib/atomic-write');
 const { DiscordApiError } = require('../../discord/api');
 const { createThreads } = require('../../discord/threads');
+const { handleFor } = require('../../lib/handles');
 
 // Mock API that keys message queues per channel so the poller's broadcast +
 // thread streams get isolated responses. Each channel's queue is drained in
@@ -111,11 +112,13 @@ describe('broker/inbound-poll thread routing', () => {
     });
     writeMarker(collabDir, { broadcast: 'seed-b', threads: { 'thread-A': 'seed-A' } });
 
+    const roster = agents.readAgents(collabDir);
+    const bHandle = handleFor('sess-bbbbbbbb2', roster['sess-bbbbbbbb2']);
     const api = makeChannelMockApi({
       'b': [[]],
       'thread-A': [[
         { id: 'mA1', author: { id: 'u1', bot: false },
-          content: '@agent-sess-bbbbbbbb2 look at this' }
+          content: '@agent-' + bHandle + ' look at this' }
       ]]
     });
 
@@ -140,11 +143,13 @@ describe('broker/inbound-poll thread routing', () => {
     });
     writeMarker(collabDir, { broadcast: 'seed-b', threads: { 'thread-A': 'seed-A' } });
 
+    const roster = agents.readAgents(collabDir);
+    const aHandle = handleFor('sess-aaaaaaaa1', roster['sess-aaaaaaaa1']);
     const api = makeChannelMockApi({
       'b': [[]],
       'thread-A': [[
         { id: 'mA1', author: { id: 'u1', bot: false },
-          content: '@agent-sess-aaaaaaaa1 ping' }
+          content: '@agent-' + aHandle + ' ping' }
       ]]
     });
 
@@ -162,10 +167,15 @@ describe('broker/inbound-poll thread routing', () => {
   });
 
   // Test 4 from plan.
-  it('routes ambiguous short-id alongside thread owner and sets meta.ambiguous_mention', async () => {
-    // Two sessions share the same 8-char prefix 'sess-xx'.
-    registerAgent(collabDir, 'sess-xxxx0001');
-    registerAgent(collabDir, 'sess-xxxx0002');
+  it('routes ambiguous name-only mention alongside thread owner and sets meta.ambiguous_mention', async () => {
+    // Two handles share the same name prefix 'twin' → `@agent-twin` is
+    // ambiguous and routes to 'all' per parseMentions semantics.
+    const ambigRoster = {
+      'sess-aaaaaaaa1': { registered_at: 1, last_active: 1, handle: 'solo-1' },
+      'sess-xxxx0001': { registered_at: 2, last_active: 2, handle: 'twin-1' },
+      'sess-xxxx0002': { registered_at: 3, last_active: 3, handle: 'twin-2' }
+    };
+    fs.writeFileSync(path.join(collabDir, 'agents.json'), JSON.stringify(ambigRoster));
     writeThreadsIndex(collabDir, {
       'sess-aaaaaaaa1': { thread_id: 'thread-A', archived_at: null, rendered_name: 't' }
     });
@@ -175,7 +185,7 @@ describe('broker/inbound-poll thread routing', () => {
       'b': [[]],
       'thread-A': [[
         { id: 'mA1', author: { id: 'u1', bot: false },
-          content: '@agent-sess-xxx something' }
+          content: '@agent-twin something' }
       ]]
     });
 
@@ -231,7 +241,7 @@ describe('broker/inbound-poll thread routing', () => {
       // First getMessagesAfter(thread-A, null, 1) returns newest message.
       'thread-A': [[
         { id: 'old-newest', author: { id: 'u1', bot: false },
-          content: '@agent-sess-aaa stale' }
+          content: 'stale pre-seed message' }
       ]]
     });
 
@@ -299,9 +309,11 @@ describe('broker/inbound-poll thread routing', () => {
       'thread-A': 'seed-A', 'thread-B': 'seed-B'
     } });
 
+    const roster9 = agents.readAgents(collabDir);
+    const aHandle9 = handleFor('sess-aaaaaaaa1', roster9['sess-aaaaaaaa1']);
     const api = makeChannelMockApi({
       'b': [[{ id: 'mb', author: { id: 'u1', bot: false },
-              content: '@agent-sess-aaaaaaaa1 from broadcast' }]],
+              content: '@agent-' + aHandle9 + ' from broadcast' }]],
       'thread-B': [[{ id: 'mB', author: { id: 'u1', bot: false },
                      content: 'from B thread' }]]
     });
@@ -442,9 +454,11 @@ describe('broker/inbound-poll thread routing', () => {
     writeMarker(collabDir, { broadcast: 'seed-b', threads: {} });
     writeThreadsIndex(collabDir, {});
 
+    const roster13 = agents.readAgents(collabDir);
+    const aHandle13 = handleFor('sess-aaaaaaaa1', roster13['sess-aaaaaaaa1']);
     const api = makeChannelMockApi({
       'b': [[{ id: 'mb', author: { id: 'u1', bot: false },
-              content: '@agent-sess-aaaaaaaa1 hi' }]]
+              content: '@agent-' + aHandle13 + ' hi' }]]
     });
 
     const p = createInboundPoller(collabDir, api, {
@@ -615,10 +629,12 @@ describe('broker/inbound-poll thread routing', () => {
   // so a corrupt index or buggy provider cannot starve the broadcast stream.
   it('isolates threadsProvider failures: broadcast drains when the provider throws', async () => {
     writeMarker(collabDir, { broadcast: 'seed-b', threads: {} });
+    const rosterIso = agents.readAgents(collabDir);
+    const aHandleIso = handleFor('sess-aaaaaaaa1', rosterIso['sess-aaaaaaaa1']);
     const api = makeChannelMockApi({
       'b': [[
         { id: 'mb-ok', author: { id: 'u1', bot: false },
-          content: '@agent-sess-aaaaaaaa1 broadcast is fine' }
+          content: '@agent-' + aHandleIso + ' broadcast is fine' }
       ]]
     });
 
@@ -669,5 +685,125 @@ describe('broker/inbound-poll thread routing', () => {
     assert.equal(events[0].to, 'sess-aaaaaaaa1');
     assert.equal(events[0].body, '(empty)',
       'MCI-disabled thread replies still route via thread context; body falls back to "(empty)"');
+  });
+
+  // Handle-form routing: the canonical addressing form the new feature
+  // promotes in inbox hints (`audience="bob-42"`) and Discord help text
+  // (`@agent-bob-42`). parseMentions already carries the resolution logic;
+  // these tests pin the end-to-end behavior from Discord message → bus event.
+  describe('handle-form mentions', () => {
+    it('resolves @agent-<handle> to the handle owner\'s sessionId', async () => {
+      // User types `@agent-bob-42` in the broadcast channel. The bridge must
+      // look up bob-42 in agents.json, map it to the full sessionId, and
+      // write `to: <full-UUID>` on the bus event. Without this round-trip,
+      // matchesSession would never deliver the event.
+      const roster = agents.readAgents(collabDir);
+      const bHandle = handleFor('sess-bbbbbbbb2', roster['sess-bbbbbbbb2']);
+      writeMarker(collabDir, { broadcast: 'seed-b', threads: {} });
+
+      const api = makeChannelMockApi({
+        'b': [[
+          { id: 'm1', author: { id: 'u1', bot: false },
+            content: '@agent-' + bHandle + ' please investigate' }
+        ]]
+      });
+
+      const p = createInboundPoller(collabDir, api, {
+        broadcastChannelId: 'b',
+        allowedSenders: ['u1'],
+        threadsProvider: makeThreadsProvider(collabDir)
+      });
+      await p.pollOnce();
+
+      const events = readBus(collabDir).filter((e) => e.type === 'user_message');
+      assert.equal(events.length, 1);
+      assert.equal(events[0].to, 'sess-bbbbbbbb2',
+        'event.to must be the full sessionId (UUID), never the handle — bus schema is UUID-canonical');
+      assert.equal(events[0].body, 'please investigate',
+        'handle mention token is stripped from the body like any other @agent- mention');
+    });
+
+    it('resolves @agent-<name-only> when only one handle starts with that name', async () => {
+      // Name-only mentions (`@agent-bob`) are the user-friendly form when
+      // there's no ambiguity. Only sess-aaaaaaaa1 and sess-bbbbbbbb2 are
+      // registered, and deriveHandle is a pure function of the UUID, so
+      // their names are deterministic but unknown at test-write time —
+      // pick the name dynamically from the derived handle.
+      const roster = agents.readAgents(collabDir);
+      const aHandle = handleFor('sess-aaaaaaaa1', roster['sess-aaaaaaaa1']);
+      const bHandle = handleFor('sess-bbbbbbbb2', roster['sess-bbbbbbbb2']);
+      const aName = aHandle.slice(0, aHandle.lastIndexOf('-'));
+      const bName = bHandle.slice(0, bHandle.lastIndexOf('-'));
+      // If this guard trips, the two derived names happen to collide and
+      // the unambiguous-name test can't be expressed on this roster. Use
+      // a bigger test skip rather than silently passing a vacuous test.
+      if (aName === bName) {
+        // Fall back to a one-live-session test using only sess-a.
+        writeMarker(collabDir, { broadcast: 'seed', threads: {} });
+        const api = makeChannelMockApi({
+          'b': [[
+            { id: 'm1', author: { id: 'u1', bot: false }, content: '@agent-' + aName + ' hey' }
+          ]]
+        });
+        const p = createInboundPoller(collabDir, api, {
+          broadcastChannelId: 'b', allowedSenders: ['u1'],
+          threadsProvider: makeThreadsProvider(collabDir)
+        });
+        await p.pollOnce();
+        const events = readBus(collabDir).filter((e) => e.type === 'user_message');
+        assert.equal(events.length, 1);
+        assert.equal(events[0].to, 'sess-aaaaaaaa1');
+        return;
+      }
+
+      writeMarker(collabDir, { broadcast: 'seed', threads: {} });
+      const api = makeChannelMockApi({
+        'b': [[
+          { id: 'm1', author: { id: 'u1', bot: false },
+            content: '@agent-' + bName + ' you\'re up' }
+        ]]
+      });
+      const p = createInboundPoller(collabDir, api, {
+        broadcastChannelId: 'b',
+        allowedSenders: ['u1'],
+        threadsProvider: makeThreadsProvider(collabDir)
+      });
+      await p.pollOnce();
+
+      const events = readBus(collabDir).filter((e) => e.type === 'user_message');
+      assert.equal(events.length, 1);
+      assert.equal(events[0].to, 'sess-bbbbbbbb2');
+    });
+
+    it('routes ambiguous name mention to broadcast "all" with ambiguous=true flag', async () => {
+      // Two live handles share the same name prefix → the user must
+      // disambiguate. Routing to broadcast + setting the flag lets
+      // downstream callers (e.g. a future disambiguation notifier) post a
+      // "did you mean X or Y?" reply without losing the message.
+      const ambigRoster = {
+        'sess-aaaaaaaa1': { registered_at: 1, last_active: 1, handle: 'twin-1' },
+        'sess-bbbbbbbb2': { registered_at: 2, last_active: 2, handle: 'twin-2' }
+      };
+      fs.writeFileSync(path.join(collabDir, 'agents.json'), JSON.stringify(ambigRoster));
+      writeMarker(collabDir, { broadcast: 'seed', threads: {} });
+
+      const api = makeChannelMockApi({
+        'b': [[
+          { id: 'm1', author: { id: 'u1', bot: false }, content: '@agent-twin hi' }
+        ]]
+      });
+      const p = createInboundPoller(collabDir, api, {
+        broadcastChannelId: 'b',
+        allowedSenders: ['u1'],
+        threadsProvider: makeThreadsProvider(collabDir)
+      });
+      await p.pollOnce();
+
+      const events = readBus(collabDir).filter((e) => e.type === 'user_message');
+      assert.equal(events.length, 1);
+      assert.equal(events[0].to, 'all');
+      assert.equal(events[0].meta.ambiguous_mention, true,
+        'ambiguous_mention flag lets callers surface "did you mean?" warnings');
+    });
   });
 });

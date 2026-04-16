@@ -250,4 +250,78 @@ describe('register hook', () => {
     assert.ok(envContent.includes(`export COLLAB_PROJECT_CWD='${tmpDir}'`),
       `expected COLLAB_PROJECT_CWD='${tmpDir}' in env file, got: ${envContent}`);
   });
+
+  describe('SessionStart additionalContext emission', () => {
+    // The hook writes a Claude Code SessionStart hook JSON to stdout telling
+    // the agent its own handle. Without this injection, a fresh session has
+    // no way to know its own name — peers would address it by handle in
+    // inbox hints, but the session couldn't ack or self-identify on Discord.
+    const { deriveHandle } = require('../../lib/handles');
+
+    it('emits additionalContext JSON with the session handle', () => {
+      const stdout = runHook({ session_id: 'test-sess-ctx', cwd: tmpDir });
+      const payload = JSON.parse(stdout.trim());
+      assert.equal(payload.hookSpecificOutput.hookEventName, 'SessionStart');
+      const msg = payload.hookSpecificOutput.additionalContext;
+      const expectedHandle = deriveHandle('test-sess-ctx');
+      assert.ok(msg.includes('**' + expectedHandle + '**'),
+        'context message must include the derived handle: ' + msg);
+      assert.ok(msg.includes('test-sess-ctx'),
+        'context message must mention the sessionId so the agent can cross-reference: ' + msg);
+      assert.match(msg, /wrightward_send_message/,
+        'context message must tell the agent how to address peers');
+      assert.match(msg, /wrightward_whoami/,
+        'context message must point at the self-discovery tool for post-compaction recovery');
+    });
+
+    it('mentions the Discord auto-chunk envelope so agents self-moderate length', () => {
+      // Agents otherwise have no way to know the bridge will split long
+      // messages across multiple Discord posts. Without this hint, a short
+      // ack and a 4000-char plan both look the same from the agent's side
+      // — and the agent can't judge whether to compress the ack.
+      const stdout = runHook({ session_id: 'test-sess-chunks', cwd: tmpDir });
+      const msg = JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext;
+      assert.match(msg, /auto-split|multiple Discord posts/i,
+        'context must describe the auto-chunking envelope: ' + msg);
+    });
+
+    it('does NOT emit additionalContext when BUS_ENABLED is false', () => {
+      // Tools are unavailable when the bus is off — injecting a message that
+      // tells the agent to call wrightward_send_message would be misleading.
+      const claudeDir = path.join(tmpDir, '.claude');
+      fs.mkdirSync(claudeDir, { recursive: true });
+      fs.writeFileSync(path.join(claudeDir, 'wrightward.json'),
+        JSON.stringify({ ENABLED: true, BUS_ENABLED: false }));
+      const stdout = runHook({ session_id: 'test-sess-quiet', cwd: tmpDir });
+      assert.equal(stdout.trim(), '',
+        'no context JSON should be emitted when BUS_ENABLED=false');
+    });
+
+    it('stdout contains exactly one JSON payload (Claude Code parses the first line)', () => {
+      // The SessionStart hook contract is "stdout JSON = additionalContext".
+      // Multiple newline-separated JSON blobs would break the parser or
+      // double-inject context.
+      const stdout = runHook({ session_id: 'test-sess-once', cwd: tmpDir });
+      const trimmed = stdout.trim();
+      // Single parse must succeed; trailing content would fail the
+      // zero-trailing-garbage assertion below.
+      const payload = JSON.parse(trimmed);
+      assert.ok(payload.hookSpecificOutput);
+      // The entire stdout is the one JSON object (plus trailing newline).
+      assert.equal(JSON.stringify(payload), trimmed.replace(/\s+$/, ''));
+    });
+
+    it('emits handle deterministically across re-registration of the same sessionId', () => {
+      // Resume / clear / compact all re-fire SessionStart with the same
+      // session_id. The handle MUST NOT change — it's keyed on the UUID
+      // and must be stable for the life of the session.
+      const out1 = runHook({ session_id: 'stable-sess', cwd: tmpDir, source: 'startup' });
+      const out2 = runHook({ session_id: 'stable-sess', cwd: tmpDir, source: 'resume' });
+      const p1 = JSON.parse(out1.trim()).hookSpecificOutput.additionalContext;
+      const p2 = JSON.parse(out2.trim()).hookSpecificOutput.additionalContext;
+      const handleOf = (s) => s.match(/\*\*([a-z]+-\d+)\*\*/)[1];
+      assert.equal(handleOf(p1), handleOf(p2),
+        'handle must not change between startup and resume for the same sessionId');
+    });
+  });
 });

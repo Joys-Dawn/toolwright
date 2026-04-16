@@ -10,6 +10,7 @@ const { registerAgent, withAgentsLock } = require('../../lib/agents');
 const { append, readBookmark, writeBookmark } = require('../../lib/bus-log');
 const { createEvent } = require('../../lib/bus-schema');
 const { scanAndFormatInbox, readInboxFresh, advanceBookmark, formatEventLine, hintForType } = require('../../lib/bus-delivery');
+const { deriveHandle } = require('../../lib/handles');
 
 describe('bus-delivery', () => {
   let tmpDir;
@@ -253,12 +254,16 @@ describe('bus-delivery', () => {
       });
     });
 
-    it('agent_message line carries a reply hint targeted at the sender', () => {
+    it('agent_message line carries a reply hint addressed by the sender handle', () => {
       withAgentsLock(collabDir, (token) => {
         const from = 'a1b2c3d4-1111-2222-3333-444455556666';
         append(token, collabDir, createEvent(from, 'sess-1', 'agent_message', 'yo'));
         const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
-        assert.match(result.text, /→ reply via wrightward_send_message audience="a1b2c3d4"/);
+        // Hint resolves the sender UUID to its deterministic handle so the
+        // reply audience is a human-readable name, not a UUID prefix.
+        const expectedHandle = deriveHandle(from);
+        assert.ok(result.text.includes(`audience="${expectedHandle}"`),
+          'expected handle in hint, got: ' + result.text);
       });
     });
 
@@ -306,12 +311,24 @@ describe('bus-delivery', () => {
   });
 
   describe('formatEventLine', () => {
-    it('includes type, full id, from8, body in that order', () => {
-      const ev = { id: 'abcd1234-5678-90ab-cdef-1234567890ab', ts: 1, from: 'fromabcd-1234-5678-90ab-cdef12345678',
+    it('includes type, full id, sender handle, body in that order', () => {
+      const from = 'fromabcd-1234-5678-90ab-cdef12345678';
+      const expectedHandle = deriveHandle(from);
+      const ev = { id: 'abcd1234-5678-90ab-cdef-1234567890ab', ts: 1, from,
         to: 'sess-1', type: 'handoff', body: 'B', meta: {}, severity: 'info', expires_at: null };
       const line = formatEventLine(ev);
       assert.equal(line,
-        `- [handoff id=abcd1234-5678-90ab-cdef-1234567890ab] from fromabcd: B → ack with wrightward_ack({id})`);
+        `- [handoff id=abcd1234-5678-90ab-cdef-1234567890ab] from ${expectedHandle}: B → ack with wrightward_ack({id})`);
+    });
+
+    it('uses roster handle when provided instead of deriving', () => {
+      // Mid-migration safety: when agents.json has a stored handle on the
+      // row, formatEventLine prefers it over re-deriving from the UUID.
+      const from = 'fromabcd-1234-5678-90ab-cdef12345678';
+      const ev = { id: 'x', ts: 1, from, to: 'sess-1', type: 'handoff',
+        body: 'B', meta: {}, severity: 'info' };
+      const roster = { [from]: { handle: 'bob-42' } };
+      assert.match(formatEventLine(ev, roster), /from bob-42/);
     });
 
     it('omits (re: …) when meta.task_ref is missing', () => {

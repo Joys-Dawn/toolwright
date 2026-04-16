@@ -1,6 +1,7 @@
 /**
  * MCP tool definitions and handlers for wrightward bus.
- * 6 tools: list_inbox, ack, send_note, send_handoff, watch_file, bus_status
+ * 8 tools: list_inbox, ack, send_note, send_handoff, watch_file, bus_status,
+ * send_message, whoami.
  */
 
 import { createRequire } from 'module';
@@ -11,7 +12,7 @@ import {
 } from '../broker/lifecycle.mjs';
 const require = createRequire(import.meta.url);
 
-const { withAgentsLock } = require('../lib/agents');
+const { withAgentsLock, readAgents } = require('../lib/agents');
 const { readBookmark, append, appendBatch } = require('../lib/bus-log');
 const { listInbox, writeInterest, writeAck, findEventById, buildFileFreedEvents } = require('../lib/bus-query');
 const { createEvent, URGENT_TYPES } = require('../lib/bus-schema');
@@ -20,6 +21,7 @@ const { getAllClaimedFiles } = require('../lib/session-state');
 const { projectRelative } = require('../lib/path-normalize');
 const busMeta = require('../lib/bus-meta');
 const { readInboxFresh, advanceBookmark } = require('../lib/bus-delivery');
+const { resolveAudience, handleFor } = require('../lib/handles');
 
 // Path canonicalization now lives in lib/path-normalize.projectRelative so
 // MCP tools, guard.js, and any future caller all converge on the same key.
@@ -73,7 +75,7 @@ function validateSendNoteArgs(args) {
 
 function validateSendHandoffArgs(args) {
   if (typeof args.to !== 'string' || args.to.trim().length === 0) {
-    throw new Error('to must be a non-empty string (target session ID)');
+    throw new Error('to must be a non-empty string (target peer handle, e.g. "bob-42")');
   }
   if (typeof args.task_ref !== 'string' || args.task_ref.length === 0) {
     throw new Error('task_ref must be a non-empty string');
@@ -97,7 +99,7 @@ function validateSendMessageArgs(args) {
     throw new Error('body must be a non-empty string');
   }
   if (typeof args.audience !== 'string' || args.audience.length === 0) {
-    throw new Error('audience must be a non-empty string ("user", "all", or a sessionId)');
+    throw new Error('audience must be a non-empty string ("user", "all", or a peer handle like "bob-42")');
   }
 }
 
@@ -128,11 +130,11 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'wrightward_send_note',
-    description: 'Log an observability entry to the bus. Use `kind` to signal importance: "note" (default) is a quiet log — persisted but non-urgent, shows only in Discord; "finding" is urgent and broadcasts to every agent — use when you discover something others MUST know (bug, gotcha, surprising behavior); "decision" is urgent and broadcasts — use when you make a choice others must know about (picked approach X, ruled out Y). To direct at a specific agent, set `to` to their sessionId.',
+    description: 'Log an observability entry to the bus. Use `kind` to signal importance: "note" (default) is a quiet log — persisted but non-urgent, shows only in Discord; "finding" is urgent and broadcasts to every agent — use when you discover something others MUST know (bug, gotcha, surprising behavior); "decision" is urgent and broadcasts — use when you make a choice others must know about (picked approach X, ruled out Y). To direct at a specific agent, set `to` to their handle (e.g. "bob-42").',
     inputSchema: {
       type: 'object',
       properties: {
-        to: { type: 'string', description: 'Target: session ID or "all" (default).' },
+        to: { type: 'string', description: 'Target: peer handle (e.g. "bob-42") or "all" (default).' },
         body: { type: 'string', description: 'Message body.' },
         kind: { type: 'string', enum: ['note', 'finding', 'decision'], description: 'Observability level. "note" quiet; "finding" and "decision" urgent. Defaults to "note".' },
         files: { type: 'array', items: { type: 'string' }, description: 'Related file paths.' }
@@ -146,7 +148,7 @@ const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
-        to: { type: 'string', description: 'Target session ID' },
+        to: { type: 'string', description: 'Target peer handle (e.g. "bob-42").' },
         task_ref: { type: 'string', description: 'Task reference' },
         files_unlocked: { type: 'array', items: { type: 'string' }, description: 'Files to release' },
         next_action: { type: 'string', description: 'Suggested next action for recipient' }
@@ -172,15 +174,20 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'wrightward_send_message',
-    description: 'Send a message via Discord. Use this to reply to the user when they have spoken to you in a Discord channel/thread (rather than the CLI). The Discord bridge must be running. Audience controls who else receives it: "user" replies to Discord only; "all" also broadcasts to every other active wrightward agent\'s inbox; a sessionId posts into that specific agent\'s Discord thread AND notifies them via the bus.',
+    description: 'Send a message via Discord. Use this to reply to the user when they have spoken to you in a Discord channel/thread (rather than the CLI). The Discord bridge must be running. Audience controls who else receives it: "user" replies to Discord only; "all" also broadcasts to every other active wrightward agent\'s inbox; a peer agent\'s handle (e.g. "bob-42") posts into that agent\'s Discord thread AND notifies them via the bus. The bridge automatically prefixes the sender\'s handle at the top of every broadcast/thread post — you do not need to self-identify in the body.',
     inputSchema: {
       type: 'object',
       properties: {
         body: { type: 'string', description: 'Message text. Truncated to 1800 chars in Discord.' },
-        audience: { type: 'string', description: '"user" (Discord-only reply), "all" (Discord broadcast + every active agent\'s inbox), or a target sessionId (that agent\'s thread + inbox)' }
+        audience: { type: 'string', description: '"user" (Discord-only reply), "all" (Discord broadcast + every active agent\'s inbox), or a peer handle like "bob-42" / "sam-17". Call wrightward_whoami to see your own handle.' }
       },
       required: ['body', 'audience']
     }
+  },
+  {
+    name: 'wrightward_whoami',
+    description: 'Return your own agent handle, session ID, and registration time. Use this when you need to remind yourself of your identity (e.g. after compaction), or to announce yourself unambiguously. Handles are deterministic per-session — the same session always gets the same handle.',
+    inputSchema: { type: 'object', properties: {} }
   }
 ];
 
@@ -218,10 +225,22 @@ export function handleToolCall(toolName, args, collabDir, sessionId, config, pro
         return handleBusStatus(collabDir, sessionId);
       case 'wrightward_send_message':
         return handleSendMessage(args, collabDir, sessionId);
+      case 'wrightward_whoami':
+        return handleWhoami(collabDir, sessionId);
       default:
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown tool: ' + toolName }) }] };
     }
   } catch (err) {
+    // Structured audience errors carry a `hint` that lists live handles —
+    // surface it so the agent can recover (e.g. retry with a valid handle)
+    // without calling wrightward_list_inbox just to learn names.
+    if (err && err.audienceError) {
+      return { content: [{ type: 'text', text: JSON.stringify({
+        error: err.audienceError.message,
+        hint: err.audienceError.hint,
+        live_handles: err.audienceError.liveHandles
+      }) }] };
+    }
     return { content: [{ type: 'text', text: JSON.stringify({ error: err.message }) }] };
   }
 }
@@ -328,9 +347,12 @@ function handleSendNote(args, collabDir, sessionId, _config, projectRoot) {
   // agents' contexts on their next tool call. See bus-schema URGENT_TYPES.
   const kind = args.kind || 'note';
 
+  const rawTarget = args.to || 'all';
+  const resolved = resolveAudience(collabDir, rawTarget);
+
   let id;
   withAgentsLock(collabDir, (token) => {
-    const event = createEvent(sessionId, args.to || 'all', kind, args.body, { files });
+    const event = createEvent(sessionId, resolved.target, kind, args.body, { files });
     append(token, collabDir, event);
     id = event.id;
   });
@@ -342,32 +364,57 @@ function handleSendNote(args, collabDir, sessionId, _config, projectRoot) {
 
 function handleSendMessage(args, collabDir, sessionId) {
   validateSendMessageArgs(args);
-  // `audience` is passed straight to event.to. Reserved values "user" and
-  // "all" (constants.BROADCAST_TARGETS) route to the Discord broadcast channel
-  // via mirror-policy; any other string is treated as a sessionId and routed
-  // to that thread + inbox. Self-targeting (audience === own sessionId) is
-  // allowed: matchesSession suppresses inbox echo, and the bridge will post
-  // into the session's own thread, which is harmless.
+  // resolveAudience guarantees the `to` field is either 'user', 'all', or a
+  // canonical session UUID owned by a live agent. This is the gate that
+  // prevents hallucinated UUIDs (valid-shape-but-no-session) from being
+  // persisted to bus.jsonl where matchesSession would silently drop them.
+  const resolved = resolveAudience(collabDir, args.audience);
   let id;
+  let recipientHandle;
   withAgentsLock(collabDir, (token) => {
-    const event = createEvent(sessionId, args.audience, 'agent_message', args.body);
+    const event = createEvent(sessionId, resolved.target, 'agent_message', args.body);
     append(token, collabDir, event);
     id = event.id;
+    if (resolved.type === 'sessionId') {
+      const roster = readAgents(collabDir);
+      recipientHandle = handleFor(resolved.target, roster[resolved.target]);
+    }
   });
   let hint;
-  if (args.audience === 'user') {
-    hint = 'Posted to Discord (user-facing channel/thread).';
-  } else if (args.audience === 'all') {
+  if (resolved.target === 'user') {
+    hint = 'Posted to Discord (user-facing channel).';
+  } else if (resolved.target === 'all') {
     hint = 'Broadcast to Discord + every active agent\'s inbox.';
   } else {
-    const sid8 = args.audience.substring(0, 8);
-    hint = `Posted to ${sid8}'s Discord thread and inbox.`;
+    hint = `Posted to ${recipientHandle}'s Discord thread and inbox.`;
   }
   return { content: [{ type: 'text', text: JSON.stringify({ id, hint }) }] };
 }
 
+function handleWhoami(collabDir, sessionId) {
+  const roster = readAgents(collabDir);
+  const row = roster[sessionId] || {};
+  const handle = handleFor(sessionId, row);
+  const registered_at = typeof row.registered_at === 'number' ? row.registered_at : null;
+  return { content: [{ type: 'text', text: JSON.stringify({
+    sessionId,
+    handle,
+    registered_at,
+    hint: `Use @agent-${handle} in Discord to address you; peers reach you via wrightward_send_message(audience="${handle}").`
+  }) }] };
+}
+
 function handleSendHandoff(args, collabDir, sessionId, config, projectRoot) {
   validateSendHandoffArgs(args);
+
+  // Resolve `to` against the live roster so callers can supply a handle
+  // (e.g. "bob-42") instead of a raw UUID. Consistent with send_message
+  // and send_note; rejects hallucinated targets before we write the event.
+  const resolved = resolveAudience(collabDir, args.to);
+  if (resolved.type !== 'sessionId') {
+    throw new Error('handoff target must be a specific agent handle (e.g. "bob-42"), not a broadcast target');
+  }
+  const targetSessionId = resolved.target;
 
   // Normalize + relativize agent-supplied paths so they match context/index keys.
   // Drop any paths outside the project root (relative lookup would succeed but
@@ -406,7 +453,7 @@ function handleSendHandoff(args, collabDir, sessionId, config, projectRoot) {
       releasedBy: sessionId,
       files: filesToUnlock,
       reason: 'handoff',
-      excludeRecipients: [args.to],
+      excludeRecipients: [targetSessionId],
       stillClaimed
     });
     if (fileFreedEvents.length > 0) {
@@ -421,7 +468,7 @@ function handleSendHandoff(args, collabDir, sessionId, config, projectRoot) {
       ? config.BUS_HANDOFF_TTL_MS
       : 30 * 60 * 1000;
     const expiresAt = ttlMs > 0 ? Date.now() + ttlMs : null;
-    const event = createEvent(sessionId, args.to, 'handoff', args.next_action, {
+    const event = createEvent(sessionId, targetSessionId, 'handoff', args.next_action, {
       task_ref: args.task_ref,
       files_unlocked: filesToUnlock,
       next_action: args.next_action,

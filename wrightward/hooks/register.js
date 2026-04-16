@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { ensureCollabDir } = require('../lib/collab-dir');
-const { registerAgent, registerAgentInLock, withAgentsLock } = require('../lib/agents');
+const { registerAgent, registerAgentInLock, readAgents, withAgentsLock } = require('../lib/agents');
 const { loadConfig } = require('../lib/config');
 const { validateSessionId } = require('../lib/constants');
 const { scavengeExpiredFiles } = require('../lib/session-state');
@@ -13,9 +13,39 @@ const { append } = require('../lib/bus-log');
 const { createEvent } = require('../lib/bus-schema');
 const { atomicWriteJson } = require('../lib/atomic-write');
 const { ticketPath } = require('../lib/mcp-ticket');
+const { handleFor } = require('../lib/handles');
 
 function shellQuote(value) {
   return '\'' + String(value).replace(/'/g, '\'\\\'\'') + '\'';
+}
+
+/**
+ * Emits a SessionStart hook JSON to stdout telling the agent its own handle.
+ * Claude Code's SessionStart hook treats stdout JSON as `additionalContext`
+ * and injects it into the agent's initial context.
+ *
+ * Fire-and-forget: any failure here is caught upstream by main()'s catch,
+ * which still exits 0. Context injection is nice-to-have; the agent can
+ * always discover its own handle via `wrightward_whoami` on demand.
+ */
+function emitSessionStartContext(collabDir, sessionId) {
+  const roster = readAgents(collabDir);
+  const row = roster[sessionId];
+  const handle = handleFor(sessionId, row);
+  const msg =
+    'You are agent **' + handle + '** (session `' + sessionId + '`). ' +
+    'Address peers by their handle: `wrightward_send_message(audience="<peer-handle>", body="...")`. ' +
+    'Broadcast to all agents: `audience="all"`. Reach the user on Discord: `audience="user"`. ' +
+    'You can also call `wrightward_whoami` at any time to re-confirm your handle. ' +
+    'Long messages are auto-split across multiple Discord posts; keep per-message content focused ' +
+    'so the user can follow along — a plan can span chunks, but a one-line ack should not.';
+  const payload = {
+    hookSpecificOutput: {
+      hookEventName: 'SessionStart',
+      additionalContext: msg
+    }
+  };
+  process.stdout.write(JSON.stringify(payload) + '\n');
 }
 
 function persistSessionEnv(sessionId, cwd) {
@@ -98,6 +128,15 @@ async function main() {
     });
   } else {
     registerAgent(collabDir, session_id);
+  }
+
+  if (config.BUS_ENABLED) {
+    try {
+      emitSessionStartContext(collabDir, session_id);
+    } catch (err) {
+      process.stderr.write('[collab/register] context emit failed: ' +
+        (err.message || err) + '\n');
+    }
   }
 
   persistSessionEnv(session_id, cwd);

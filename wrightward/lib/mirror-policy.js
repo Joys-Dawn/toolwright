@@ -113,6 +113,14 @@ function decide(event, policyConfig) {
   }
 
   if (rule.action === 'post_thread' || rule.action === 'post_thread_if_targeted') {
+    // Agent-to-user replies land in the sender's own thread so the user
+    // follows the conversation inline rather than having it scatter into the
+    // shared broadcast channel. Only agent_message gets this treatment —
+    // other event types with to="user" keep the broadcast default.
+    if (event.type === 'agent_message' && event.to === 'user' &&
+        typeof event.from === 'string' && event.from) {
+      return { action: 'post_thread', severity, target_session_id: event.from };
+    }
     // Both need a single-session target to post to a thread. Fallback for an
     // untargeted (broadcast or array) event differs by rule:
     //   post_thread              → promote to broadcast (event stays visible)

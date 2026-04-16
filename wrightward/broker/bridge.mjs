@@ -25,7 +25,7 @@ import { createInboundPoller } from './inbound-poll.mjs';
 
 const require = createRequire(import.meta.url);
 const { busPath, tailReader, readBookmark, writeBookmark } = require('../lib/bus-log');
-const { withAgentsLock } = require('../lib/agents');
+const { withAgentsLock, readAgents } = require('../lib/agents');
 const { mergePolicy } = require('../lib/mirror-policy');
 const { resolveCollabDir } = require('../lib/collab-dir');
 const { loadConfig } = require('../lib/config');
@@ -97,27 +97,58 @@ async function dispatchEvent(event, policy, threads, api, config, collabDir) {
   // Discord threads — noisy and confusing.
   if (event.meta && event.meta.source === 'discord') return false;
 
-  const decision = formatEvent(event, policy);
+  // Roster is read once per dispatch — the sender's handle renders at the
+  // TOP of the message (see discord/formatter.js buildContent), and the
+  // post_thread branch checks the target is still a live session.
+  const roster = readAgents(collabDir);
+  const decision = formatEvent(event, policy, roster);
 
   if (decision.action === 'silent') return false;
+  // Defensive: formatter returns `contents: []` for silent/rename_thread, but
+  // a mis-wired decision could produce an empty array on a post_* action.
+  // Nothing to post means nothing to do.
+  if (!decision.contents || decision.contents.length === 0) {
+    if (decision.action !== 'rename_thread') return false;
+  }
 
   if (decision.action === 'post_broadcast') {
-    await api.postMessage(config.discord.BROADCAST_CHANNEL_ID, decision.content);
+    // Loop over chunks so a body that exceeds Discord's 2000-byte cap is
+    // posted as ordered messages rather than silently truncated. On a
+    // mid-sequence failure, earlier chunks stay posted and the outer
+    // try/catch in runOutboundTick re-fires the whole event next tick —
+    // which duplicates already-posted chunks (accepted v1 tradeoff).
+    for (const chunk of decision.contents) {
+      await api.postMessage(config.discord.BROADCAST_CHANNEL_ID, chunk);
+    }
     return true;
   }
 
   if (decision.action === 'post_thread') {
     const sessionId = decision.target_session_id;
     if (!sessionId) return false;
-    // Lazy thread creation if the session doesn't have one yet. Happens when
-    // the bridge started AFTER the session's session_started event.
-    let threadId = threads.getThreadIdFor(sessionId);
-    if (!threadId) {
-      const ctx = readContext(collabDir, sessionId);
-      const taskHint = (ctx && ctx.task) || '';
-      threadId = await threads.ensureThreadForSession(sessionId, taskHint);
+    // Drop (don't lazy-create) when the target UUID isn't a live session.
+    // This is the fix for the ghost-UUID bug: agents that hallucinated
+    // plausible full UUIDs from 8-char hints used to get real Discord
+    // threads materialized here. Reconciliation on startup + handle-based
+    // addressing at the tool boundary means any target reaching this point
+    // with no roster row is either truly gone (race with session_ended) or
+    // a hallucinated UUID — either way, silently drop with a log.
+    if (!roster[sessionId]) {
+      appendLog(collabDir, '[bridge] post_thread dropped: ' + sessionId + ' not in agents.json');
+      return false;
     }
-    await api.postMessage(threadId, decision.content);
+    const threadId = threads.getThreadIdFor(sessionId);
+    if (!threadId) {
+      // Live session, no thread yet. Reconcile should have created it at
+      // startup — if we end up here, something raced. Log + drop rather
+      // than lazy-create: keeps the bridge's thread inventory predictable.
+      appendLog(collabDir, '[bridge] post_thread dropped: ' + sessionId +
+        ' has no thread (reconcile may have failed)');
+      return false;
+    }
+    for (const chunk of decision.contents) {
+      await api.postMessage(threadId, chunk);
+    }
     return true;
   }
 
@@ -307,6 +338,23 @@ async function main() {
   const policy = mergePolicy(config.discord.mirrorPolicy);
 
   seedBookmarkIfFresh(collabDir);
+
+  // Reconciliation pass: create a thread for every live session in
+  // agents.json that doesn't have one. Replaces the lazy-create path that
+  // used to live in dispatchEvent (removed to fix the ghost-UUID bug).
+  // Runs once at startup; subsequent session_started events are handled
+  // inline in the outbound tick. Failures are logged per-session and do
+  // not block startup.
+  try {
+    const result = await threads.reconcileThreads((line) => appendLog(collabDir, line));
+    appendLog(collabDir,
+      '[bridge] reconcile: created=' + result.created.length +
+      ' existing=' + result.existing.length +
+      ' failed=' + result.failed.length);
+  } catch (err) {
+    appendLog(collabDir, '[bridge] reconcile fatal: ' +
+      redactTokens(err.message || String(err)));
+  }
 
   const inbound = createInboundPoller(collabDir, api, {
     broadcastChannelId: config.discord.BROADCAST_CHANNEL_ID,

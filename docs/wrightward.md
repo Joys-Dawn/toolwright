@@ -1,8 +1,8 @@
 # wrightward
 
-> Multi-agent coordination for Claude Code. When two or more sessions work in the same repo, wrightward blocks conflicting writes, injects awareness context, and gives sessions a peer-to-peer message bus (seven MCP tools) to hand off tasks, watch files, and wake each other. Ships with an optional Discord bridge.
+> Multi-agent coordination for Claude Code. When two or more sessions work in the same repo, wrightward blocks conflicting writes, injects awareness context, and gives sessions a peer-to-peer message bus (eight MCP tools) to hand off tasks, watch files, and wake each other. Ships with an optional Discord bridge.
 
-**Version**: 3.7.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/wrightward) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/README.md)
+**Version**: 3.8.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/wrightward) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/README.md)
 
 ## Install
 
@@ -81,11 +81,12 @@ Sessions hand off work, watch files, and notify each other through `.claude/coll
 |---|---|---|---|
 | `wrightward_list_inbox` | — | `limit`, `types`, `mark_delivered` (default `true`) | List urgent events targeted at this session. Advances the bookmark. |
 | `wrightward_ack` | `id` | `decision` (`"accepted"` \| `"rejected"` \| `"dismissed"`) | Acknowledge a handoff. Routes the ack at the sender so they see it on their next tool call and in their Discord thread. |
-| `wrightward_send_note` | `body` | `to`, `kind` (`"note"` \| `"finding"` \| `"decision"`, default `"note"`), `files` | Log an observability entry. `note` is quiet; `finding`/`decision` are urgent and broadcast. |
-| `wrightward_send_handoff` | `to`, `task_ref`, `next_action` | `files_unlocked` | Hand work to another session. Atomically releases the listed files and emits `file_freed` to watchers. |
+| `wrightward_send_note` | `body` | `to` (handle or `"all"`), `kind` (`"note"` \| `"finding"` \| `"decision"`, default `"note"`), `files` | Log an observability entry. `note` is quiet; `finding`/`decision` are urgent and broadcast. |
+| `wrightward_send_handoff` | `to` (peer handle e.g. `"bob-42"`), `task_ref`, `next_action` | `files_unlocked` | Hand work to another session by handle. Atomically releases the listed files and emits `file_freed` to watchers. |
 | `wrightward_watch_file` | `file` | — | Register interest. You get a `file_freed` event when the owner releases it. |
 | `wrightward_bus_status` | — | — | Diagnostic — pending urgent count, recent timestamp, bound session ID, bridge status. |
-| `wrightward_send_message` | `body`, `audience` | — | Send a message via Discord. `audience` = `"user"` (Discord-only reply), `"all"` (Discord broadcast + every agent's inbox), or a sessionId (that agent's thread + inbox). Requires the Discord bridge to be running for Discord delivery. |
+| `wrightward_send_message` | `body`, `audience` | — | Send a message via Discord. `audience` = `"user"` (reply into the sender's own thread), `"all"` (Discord broadcast + every agent's inbox), or a peer handle like `"bob-42"` (that agent's thread + inbox). Requires the Discord bridge to be running for Discord delivery. |
+| `wrightward_whoami` | — | — | Return your own agent handle, session ID, and registration time. Handles are deterministic per-session; useful after compaction. |
 
 ### Event types (15)
 
@@ -169,7 +170,7 @@ An opt-in subprocess that mirrors bus events to Discord. REST-only (no gateway),
 
 When enabled:
 
-- Creates one **forum thread per agent** named `<task> (<shortId>)` and posts per-session events there.
+- Creates one **forum thread per agent** named `<task> (<handle>)` (e.g. `refactor auth (bob-42)`) and posts per-session events there. Handles are deterministic per-session — the same UUID always derives the same `<name>-<number>` handle.
 - Mirrors `session_started` / `session_ended` / broadcast handoffs / `user_message` targeted at `"all"` into a shared **broadcast text channel**.
 - Watches the broadcast channel and every live agent thread for inbound messages, routing them back into `bus.jsonl` as `user_message` events.
 - Renames a thread when `/wrightward:collab-context` updates the session's task.
@@ -241,7 +242,7 @@ Verify with `wrightward_bus_status` — the `bridge` sub-object should show `run
 All gated on `ALLOWED_SENDERS`:
 
 - **Reply in an agent's forum thread** → delivered to that thread's session without an `@mention`.
-- **`@agent-<id>` in broadcast or thread** → delivered to the mentioned session(s). Fan-out works: a thread reply with extra `@agent-<id>` mentions goes to the union of the thread owner and mentioned sessions.
+- **`@agent-<handle>` in broadcast or thread** → delivered to the mentioned session(s). Both full handle (`@agent-bob-42`) and name-only (`@agent-bob`) resolve; name-only matches a single agent by name, otherwise broadcasts with `ambiguous_mention: true`. Fan-out works: a thread reply with extra `@agent-<handle>` mentions goes to the union of the thread owner and mentioned sessions.
 - **`@agent-all`** → every registered agent. `ambiguous_mention` stays `false` for explicit all-broadcasts.
 
 ### Mirror policy defaults
@@ -250,7 +251,7 @@ User overrides merge on top. Demote to `silent` via `mirrorPolicy` if noisy.
 
 | Event type | Destination |
 |---|---|
-| `user_message`, `handoff`, `blocker`, `agent_message` | Recipient's thread. Promotes to broadcast when sent to `"all"`. |
+| `user_message`, `handoff`, `blocker`, `agent_message` | Recipient's thread. Promotes to broadcast when sent to `"all"`. `agent_message` with `audience="user"` posts into the **sender's** own thread (not broadcast). |
 | `file_freed` | Recipient's thread (targeted only); `silent` when broadcast. |
 | `session_started`, `session_ended` | Broadcast channel. |
 | `note`, `finding`, `decision` | Target thread when sent to a sessionId; broadcast channel when sent to `"all"`. |
@@ -263,6 +264,7 @@ User overrides merge on top. Demote to `silent` via `mirrorPolicy` if noisy.
 - `ALLOWED_SENDERS` gates on Discord user ID, not channel membership. Access to the broadcast channel alone doesn't grant inbound rights.
 - Bot tokens, `Bot <token>` headers, and Discord webhook URLs are scrubbed from every `bridge.log` write and every inbound body before it reaches `bus.jsonl`.
 - Inbound content clamped at 4000 bytes on a UTF-8 boundary.
+- Outbound messages exceeding Discord's 2000-byte cap auto-split into ordered posts with `(n/N)` continuation markers, balanced code fences across chunks, and UTF-8-safe cuts — no silent truncation.
 - Discord-originated events use the reserved `system` sender with `meta.source: "discord"`. A loop guard prevents re-mirroring back to Discord.
 - Local operation keeps flowing if Discord is down — the bridge retries in the background.
 
@@ -317,7 +319,7 @@ Run `/wrightward:config-init` to drop the full default config into your repo —
 | `discord.ALLOWED_SENDERS` | `[]` | Discord user IDs permitted to route inbound messages. |
 | `discord.POLL_INTERVAL_MS` | 3000 | How often to poll the broadcast channel and each active thread. |
 | `discord.THREAD_RENAME_ON_CONTEXT_UPDATE` | `true` | Whether `/wrightward:collab-context` task changes rename the thread. |
-| `discord.BOT_USER_AGENT` | `DiscordBot (https://github.com/Joys-Dawn/toolwright, 3.7.0)` | Override only with a reason; must start with the literal `DiscordBot` to avoid Cloudflare blocking. |
+| `discord.BOT_USER_AGENT` | `DiscordBot (https://github.com/Joys-Dawn/toolwright, 3.8.0)` | Override only with a reason; must start with the literal `DiscordBot` to avoid Cloudflare blocking. |
 | `discord.mirrorPolicy` | see above | Per-event-type override. |
 
 ### Disable in a repo

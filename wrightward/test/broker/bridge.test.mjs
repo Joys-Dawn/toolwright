@@ -11,6 +11,16 @@ import {
   runDrainLoop
 } from '../../broker/bridge.mjs';
 
+// Seeds agents.json with a registered row for each given sessionId so the
+// bridge's roster-based post_thread guard (added when the ghost-UUID fix
+// removed the lazy-create path) accepts the target. Without a row, the
+// guard drops the post with a log — which is the correct behavior, but
+// breaks tests that used to rely on lazy-create materializing a thread.
+function seedRegisteredAgents(collabDir, sessionIds) {
+  const { registerAgent } = require('../../lib/agents');
+  for (const sid of sessionIds) registerAgent(collabDir, sid);
+}
+
 const require = createRequire(import.meta.url);
 const { ensureCollabDir } = require('../../lib/collab-dir');
 const { busPath, readBookmark, writeBookmark, append } = require('../../lib/bus-log');
@@ -144,6 +154,7 @@ describe('broker/bridge', () => {
     });
 
     it('posts to an existing mapped thread (getThreadIdFor returns non-null)', async () => {
+      seedRegisteredAgents(collabDir, ['sess-bbbbbbbb']);
       const threads = makeThreadsStub({
         getThreadIdFor: (sid) => (sid === 'sess-bbbbbbbb' ? 'thread-existing' : null)
       });
@@ -160,21 +171,64 @@ describe('broker/bridge', () => {
       assert.equal(api._calls.postMessage[0].channelId, 'thread-existing');
     });
 
-    it('creates a thread lazily when no mapping exists, then posts to the new thread', async () => {
+    // Reads the bridge log for assertions. appendLog writes to
+    // <collabDir>/bridge/bridge.log (see broker/lifecycle.mjs::logPath).
+    // Returns '' when the file doesn't exist so tests can assert absence.
+    function readBridgeLog() {
+      const p = path.join(collabDir, 'bridge', 'bridge.log');
+      return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+    }
+
+    it('drops post_thread (no lazy-create) when target is not in agents.json', async () => {
+      // Regression test for the ghost-UUID fix. Agents that hallucinated
+      // plausible full UUIDs used to get a real Discord thread materialized
+      // here by the lazy-create branch. The fix drops the post with a log
+      // entry — silent/successful dispatch MUST NOT happen and MUST NOT
+      // call ensureThreadForSession.
+      // No seedRegisteredAgents — agents.json has no row for the target.
       const threads = makeThreadsStub({
-        getThreadIdFor: () => null,
-        ensureThreadForSession: async (sid) => 'thread-new-' + sid
+        getThreadIdFor: () => null
+      });
+      const api = makeApiStub();
+      const event = {
+        type: 'handoff', from: 'sess-aaaaaaaa', to: 'sess-ghost',
+        body: 'hallucinated target'
+      };
+      const result = await dispatchEvent(event, policy, threads, api, BASE_CONFIG, collabDir);
+      assert.equal(result, false, 'must drop (return false), not succeed');
+      assert.equal(threads._calls.ensureThreadForSession.length, 0,
+        'lazy-create path removed — must not be exercised');
+      assert.equal(api._calls.postMessage.length, 0,
+        'no Discord post for a ghost target');
+      // Operator-visibility half of "drop with a log": a silent drop would
+      // leave operators blind when agents hallucinate UUIDs. Pin the exact
+      // reason string so a regression can't swap in a generic message.
+      assert.match(readBridgeLog(),
+        /post_thread dropped: sess-ghost not in agents\.json/);
+    });
+
+    it('drops post_thread when target IS registered but has no thread (reconcile race)', async () => {
+      // Registered agents must have had a thread created by the startup
+      // reconciliation pass. If reconcile failed mid-batch and a post lands
+      // for one of the gaps, drop rather than silently create — predictable
+      // thread inventory is worth the dropped event.
+      seedRegisteredAgents(collabDir, ['sess-bbbbbbbb']);
+      const threads = makeThreadsStub({
+        getThreadIdFor: () => null
       });
       const api = makeApiStub();
       const event = {
         type: 'handoff', from: 'sess-aaaaaaaa', to: 'sess-bbbbbbbb',
-        body: 'take over'
+        body: 'hey'
       };
       const result = await dispatchEvent(event, policy, threads, api, BASE_CONFIG, collabDir);
-      assert.equal(result, true);
-      assert.equal(threads._calls.ensureThreadForSession.length, 1);
-      assert.equal(threads._calls.ensureThreadForSession[0].sid, 'sess-bbbbbbbb');
-      assert.equal(api._calls.postMessage[0].channelId, 'thread-new-sess-bbbbbbbb');
+      assert.equal(result, false);
+      assert.equal(api._calls.postMessage.length, 0);
+      assert.equal(threads._calls.ensureThreadForSession.length, 0);
+      // Distinct reason from the not-in-agents.json path so operators can
+      // tell "hallucinated UUID" from "reconcile race" in bridge.log.
+      assert.match(readBridgeLog(),
+        /post_thread dropped: sess-bbbbbbbb has no thread \(reconcile may have failed\)/);
     });
 
     it('renames thread on context_updated (rename_thread action) using meta.new_task', async () => {
@@ -218,6 +272,169 @@ describe('broker/bridge', () => {
       };
       const result = await dispatchEvent(event, policy, threads, api, BASE_CONFIG, collabDir);
       assert.equal(result, false);
+    });
+
+    it('routes agent_message with to="user" to the sender\'s own thread (not broadcast)', async () => {
+      // v3.4 routing special case: replies addressed to the human user land
+      // in the sender's forum thread so the conversation stays inline. Pre-
+      // v3.4 these events broadcast, scattering the conversation.
+      seedRegisteredAgents(collabDir, ['sess-sender-a']);
+      const threads = makeThreadsStub({
+        getThreadIdFor: (sid) => (sid === 'sess-sender-a' ? 'thread-sender-a' : null)
+      });
+      const api = makeApiStub();
+      const event = {
+        type: 'agent_message', from: 'sess-sender-a', to: 'user',
+        body: 'hello human'
+      };
+      const result = await dispatchEvent(event, policy, threads, api, BASE_CONFIG, collabDir);
+      assert.equal(result, true);
+      assert.equal(api._calls.postMessage.length, 1);
+      assert.equal(api._calls.postMessage[0].channelId, 'thread-sender-a',
+        'must post to sender\'s thread, NOT broadcast channel');
+      assert.notEqual(api._calls.postMessage[0].channelId, 'broadcast-999');
+    });
+
+    it('posts multiple chunks for a long body to the broadcast channel in order', async () => {
+      // Bodies that exceed CONTENT_CAP (1800) split into ordered posts. The
+      // bridge must dispatch each chunk in sequence to the same channel —
+      // no silent truncation, no scatter across channels.
+      const { CONTENT_CAP } = require('../../discord/formatter');
+      const threads = makeThreadsStub();
+      const api = makeApiStub();
+      const longBody = 'x'.repeat(CONTENT_CAP * 3);
+      const event = {
+        type: 'session_started', from: 'sess-aaaaaaaa', to: 'all',
+        body: longBody
+      };
+      const result = await dispatchEvent(event, policy, threads, api, BASE_CONFIG, collabDir);
+      assert.equal(result, true);
+      assert.ok(api._calls.postMessage.length >= 3,
+        'expected ≥3 postMessage calls for 3× cap body, got ' + api._calls.postMessage.length);
+      for (const call of api._calls.postMessage) {
+        assert.equal(call.channelId, 'broadcast-999',
+          'every chunk must dispatch to the same channel');
+      }
+    });
+
+    it('posts multiple chunks for a long body to a thread in order', async () => {
+      const { CONTENT_CAP } = require('../../discord/formatter');
+      seedRegisteredAgents(collabDir, ['sess-bbbbbbbb']);
+      const threads = makeThreadsStub({
+        getThreadIdFor: (sid) => (sid === 'sess-bbbbbbbb' ? 'thread-bb' : null)
+      });
+      const api = makeApiStub();
+      const event = {
+        type: 'handoff', from: 'sess-aaaaaaaa', to: 'sess-bbbbbbbb',
+        body: 'z'.repeat(CONTENT_CAP * 2 + 200)
+      };
+      const result = await dispatchEvent(event, policy, threads, api, BASE_CONFIG, collabDir);
+      assert.equal(result, true);
+      assert.ok(api._calls.postMessage.length >= 2,
+        'expected ≥2 postMessage calls for 2× cap body');
+      for (const call of api._calls.postMessage) {
+        assert.equal(call.channelId, 'thread-bb',
+          'every chunk must land in the same thread');
+      }
+      // First chunk carries the full handle prefix; continuations carry ↳.
+      assert.match(api._calls.postMessage[0].content, /\[handoff\]/);
+      assert.match(api._calls.postMessage[1].content, /^↳/,
+        'second chunk should start with continuation marker');
+    });
+
+    it('drops agent_message + to="user" when sender is not in agents.json', async () => {
+      // Regression guard: the new routing points target_session_id at
+      // event.from. If the sender's sessionId hallucinated or was pruned
+      // between event write and dispatch, the same ghost-UUID drop path
+      // must fire — otherwise we'd create phantom threads for dead agents.
+      const threads = makeThreadsStub({
+        getThreadIdFor: () => null
+      });
+      const api = makeApiStub();
+      // No seedRegisteredAgents — sender sess-ghosted is absent.
+      const event = {
+        type: 'agent_message', from: 'sess-ghosted', to: 'user',
+        body: 'reply from a ghost'
+      };
+      const result = await dispatchEvent(event, policy, threads, api, BASE_CONFIG, collabDir);
+      assert.equal(result, false);
+      assert.equal(api._calls.postMessage.length, 0);
+      assert.equal(threads._calls.ensureThreadForSession.length, 0);
+      const log = fs.readFileSync(path.join(collabDir, 'bridge', 'bridge.log'), 'utf8');
+      assert.match(log,
+        /post_thread dropped: sess-ghosted not in agents\.json/);
+    });
+
+    it('drops agent_message + to="user" when sender is registered but has no thread', async () => {
+      // Reconcile race: sender exists in agents.json but the startup
+      // reconcile failed to create a thread for it. The bridge must drop
+      // (not lazy-create) to keep thread inventory predictable.
+      seedRegisteredAgents(collabDir, ['sess-sender-b']);
+      const threads = makeThreadsStub({
+        getThreadIdFor: () => null
+      });
+      const api = makeApiStub();
+      const event = {
+        type: 'agent_message', from: 'sess-sender-b', to: 'user',
+        body: 'reply'
+      };
+      const result = await dispatchEvent(event, policy, threads, api, BASE_CONFIG, collabDir);
+      assert.equal(result, false);
+      assert.equal(api._calls.postMessage.length, 0);
+      assert.equal(threads._calls.ensureThreadForSession.length, 0);
+      const log = fs.readFileSync(path.join(collabDir, 'bridge', 'bridge.log'), 'utf8');
+      assert.match(log,
+        /post_thread dropped: sess-sender-b has no thread \(reconcile may have failed\)/);
+    });
+
+    it('chunks a long agent_message + to="user" into ordered posts to sender\'s thread', async () => {
+      // Integration of the two changes: routing a long user-facing reply
+      // must BOTH land in the sender's thread AND split into ordered
+      // chunks. Neither half alone catches a regression that breaks both.
+      const { CONTENT_CAP } = require('../../discord/formatter');
+      seedRegisteredAgents(collabDir, ['sess-sender-c']);
+      const threads = makeThreadsStub({
+        getThreadIdFor: (sid) => (sid === 'sess-sender-c' ? 'thread-c' : null)
+      });
+      const api = makeApiStub();
+      const event = {
+        type: 'agent_message', from: 'sess-sender-c', to: 'user',
+        body: 'Here is the plan:\n' + 'q'.repeat(CONTENT_CAP * 2 + 500)
+      };
+      const result = await dispatchEvent(event, policy, threads, api, BASE_CONFIG, collabDir);
+      assert.equal(result, true);
+      assert.ok(api._calls.postMessage.length >= 2,
+        'long body must split into ≥2 chunks');
+      for (const call of api._calls.postMessage) {
+        assert.equal(call.channelId, 'thread-c',
+          'every chunk must land in the sender\'s own thread, not broadcast');
+      }
+    });
+
+    it('mid-sequence chunk failure throws (earlier chunks already posted)', async () => {
+      // If chunk 2 of 3 fails, chunk 1 stays posted in Discord and the error
+      // propagates to the outer drain loop. The bookmark won't advance, so
+      // next tick re-fires the whole event — chunk 1 duplicates on retry.
+      // That's the v1 tradeoff (see plan Risks section).
+      const { CONTENT_CAP } = require('../../discord/formatter');
+      const threads = makeThreadsStub();
+      let call = 0;
+      const api = makeApiStub({
+        postMessage: async () => {
+          call++;
+          if (call === 2) throw new Error('simulated Discord 5xx');
+          return { id: 'msg-' + call };
+        }
+      });
+      const event = {
+        type: 'session_started', from: 'sess-aaaaaaaa', to: 'all',
+        body: 'y'.repeat(CONTENT_CAP * 3)
+      };
+      await assert.rejects(
+        dispatchEvent(event, policy, threads, api, BASE_CONFIG, collabDir),
+        /simulated Discord 5xx/);
+      // Chunk 1 posted before the failure; no third chunk attempted.
+      assert.equal(call, 2, 'loop must abort on chunk 2 failure, not try chunk 3');
     });
   });
 

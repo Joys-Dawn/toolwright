@@ -7,7 +7,8 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const { ensureCollabDir } = require('../../lib/collab-dir');
-const { registerAgent, withAgentsLock } = require('../../lib/agents');
+const { registerAgent, readAgents, withAgentsLock } = require('../../lib/agents');
+const { handleFor } = require('../../lib/handles');
 const { writeContext } = require('../../lib/context');
 const { append, readBookmark, busPath } = require('../../lib/bus-log');
 const { createEvent } = require('../../lib/bus-schema');
@@ -22,6 +23,10 @@ describe('mcp/tools', () => {
   let collabDir;
   let config;
 
+  function handleOf(sid) {
+    return handleFor(sid, readAgents(collabDir)[sid]);
+  }
+
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-tools-'));
     collabDir = ensureCollabDir(tmpDir);
@@ -34,7 +39,7 @@ describe('mcp/tools', () => {
   });
 
   describe('getToolDefinitions', () => {
-    it('returns 7 tools', () => {
+    it('returns the expected tool set including wrightward_whoami', () => {
       const tools = getToolDefinitions();
       const names = tools.map(t => t.name).sort();
       assert.deepEqual(names, [
@@ -45,6 +50,7 @@ describe('mcp/tools', () => {
         'wrightward_send_message',
         'wrightward_send_note',
         'wrightward_watch_file',
+        'wrightward_whoami',
       ]);
     });
   });
@@ -230,10 +236,22 @@ describe('mcp/tools', () => {
       assert.equal(events[0].to, 'all');
     });
 
-    it('respects explicit to parameter', () => {
-      handleToolCall('wrightward_send_note', { to: 'sess-2', body: 'direct' }, collabDir, 'sess-1', config, tmpDir);
+    it('respects explicit to parameter (target must be a live agent)', () => {
+      registerAgent(collabDir, 'sess-2');
+      handleToolCall('wrightward_send_note', { to: handleOf('sess-2'), body: 'direct' }, collabDir, 'sess-1', config, tmpDir);
       const events = fs.readFileSync(busPath(collabDir), 'utf8').trim().split('\n').map(l => JSON.parse(l));
       assert.equal(events[0].to, 'sess-2');
+    });
+
+    it('rejects to=<unknown-session> with structured audience error', () => {
+      // Coverage for the ghost-UUID guard: unknown targets must fail at the
+      // tool boundary, not silently persist to bus.jsonl for a bridge to
+      // materialize a phantom thread around later.
+      const result = handleToolCall('wrightward_send_note',
+        { to: 'sess-ghost', body: 'to a ghost' }, collabDir, 'sess-1', config, tmpDir);
+      const data = JSON.parse(result.content[0].text);
+      assert.ok(data.error);
+      assert.match(data.error, /not a live agent/);
     });
 
     it('defaults kind to "note" when omitted (backwards compat)', () => {
@@ -278,6 +296,7 @@ describe('mcp/tools', () => {
     });
 
     it('releases files from context', () => {
+      registerAgent(collabDir, 'sess-2');
       writeContext(collabDir, 'sess-1', {
         task: 'work',
         files: [
@@ -288,7 +307,7 @@ describe('mcp/tools', () => {
       });
 
       handleToolCall('wrightward_send_handoff', {
-        to: 'sess-2', task_ref: 'T1', next_action: 'continue auth',
+        to: handleOf('sess-2'), task_ref: 'T1', next_action: 'continue auth',
         files_unlocked: ['auth.ts']
       }, collabDir, 'sess-1', config, tmpDir);
 
@@ -318,7 +337,7 @@ describe('mcp/tools', () => {
       });
 
       handleToolCall('wrightward_send_handoff', {
-        to: 'sess-2', task_ref: 'T1', next_action: 'take over',
+        to: handleOf('sess-2'), task_ref: 'T1', next_action: 'take over',
         files_unlocked: ['auth.ts']
       }, collabDir, 'sess-1', config, tmpDir);
 
@@ -334,8 +353,9 @@ describe('mcp/tools', () => {
     });
 
     it('appends handoff event with TTL', () => {
+      registerAgent(collabDir, 'sess-2');
       const result = handleToolCall('wrightward_send_handoff', {
-        to: 'sess-2', task_ref: 'T1', next_action: 'do it'
+        to: handleOf('sess-2'), task_ref: 'T1', next_action: 'do it'
       }, collabDir, 'sess-1', config, tmpDir);
       const data = JSON.parse(result.content[0].text);
       assert.ok(data.id);
@@ -347,6 +367,41 @@ describe('mcp/tools', () => {
       assert.ok(handoff);
       assert.ok(handoff.expires_at > Date.now());
       assert.equal(handoff.meta.task_ref, 'T1');
+    });
+
+    it('rejects broadcast audience (to="all" / "user") — handoff needs a specific recipient', () => {
+      // A handoff hands WORK to one peer — it's not a broadcast concept.
+      // resolveAudience happily returns a broadcast target for 'all'/'user';
+      // handleSendHandoff must then refuse rather than writing a degenerate
+      // handoff with to='all' (which would sit in every agent's inbox
+      // claiming they owe an ack).
+      for (const target of ['all', 'user']) {
+        const result = handleToolCall('wrightward_send_handoff', {
+          to: target, task_ref: 'T1', next_action: 'do it'
+        }, collabDir, 'sess-1', config, tmpDir);
+        const data = JSON.parse(result.content[0].text);
+        assert.ok(data.error, target + ' must be rejected, got: ' + JSON.stringify(data));
+        assert.match(data.error, /specific agent/i,
+          'error must explain handoff needs a specific recipient');
+      }
+    });
+
+    it('resolves to=<handle> (not just sessionId) for handoff targeting', () => {
+      // Handle-form addressing parity with send_message: passing a peer's
+      // handle must resolve to their UUID and land in event.to.
+      registerAgent(collabDir, 'sess-peer');
+      const { readAgents } = require('../../lib/agents');
+      const { handleFor } = require('../../lib/handles');
+      const peerHandle = handleFor('sess-peer', readAgents(collabDir)['sess-peer']);
+
+      handleToolCall('wrightward_send_handoff', {
+        to: peerHandle, task_ref: 'T1', next_action: 'by handle'
+      }, collabDir, 'sess-1', config, tmpDir);
+      const events = fs.readFileSync(busPath(collabDir), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+      const handoff = events.find(e => e.type === 'handoff');
+      assert.ok(handoff);
+      assert.equal(handoff.to, 'sess-peer',
+        'event.to must be the full sessionId, handle resolution happens at the tool boundary');
     });
   });
 
@@ -396,14 +451,42 @@ describe('mcp/tools', () => {
       assert.equal(evt.to, 'all');
     });
 
-    it('appends agent_message with audience as a sessionId', () => {
+    it('rejects audience=<unknown-session> with structured audience error', () => {
+      // The ghost-UUID fix's test at the send_message boundary: unknown
+      // targets get a structured error listing live handles, not a silent
+      // write to bus.jsonl.
       const result = handleToolCall('wrightward_send_message',
-        { body: 'hey peer', audience: 'sess-2aa' }, collabDir, 'sess-1', config, tmpDir);
+        { body: 'phantom', audience: 'ghost-session-id' }, collabDir, 'sess-1', config, tmpDir);
       const data = JSON.parse(result.content[0].text);
-      // Session-targeted message hint names the first 8 chars of the sessionId.
-      assert.match(data.hint, /sess-2aa's Discord thread and inbox/);
+      assert.ok(data.error);
+      assert.match(data.error, /not a live agent/);
+      assert.match(data.hint, /Live agents:|No live agents/);
+      assert.ok(Array.isArray(data.live_handles));
+      // Failed send must not persist an event — either bus.jsonl doesn't
+      // exist at all, or if it exists from a prior test append, it holds
+      // no agent_message events.
+      const bus = busPath(collabDir);
+      if (fs.existsSync(bus)) {
+        assert.equal(readEvents().filter(e => e.type === 'agent_message').length, 0,
+          'failed send must not persist an event');
+      }
+    });
+
+    it('resolves audience by handle (bob-42) when the peer is registered', () => {
+      // End-to-end test of the handle-addressing path: agent sends to
+      // `<handle>`, resolveAudience maps it to the peer UUID before
+      // createEvent; matchesSession routes by UUID as before.
+      const targetSid = 'sess-peer-xyz';
+      registerAgent(collabDir, targetSid);
+      const { handleFor } = require('../../lib/handles');
+      const roster = require('../../lib/agents').readAgents(collabDir);
+      const peerHandle = handleFor(targetSid, roster[targetSid]);
+
+      handleToolCall('wrightward_send_message',
+        { body: 'by handle', audience: peerHandle }, collabDir, 'sess-1', config, tmpDir);
       const evt = readEvents().find(e => e.type === 'agent_message');
-      assert.equal(evt.to, 'sess-2aa');
+      assert.ok(evt);
+      assert.equal(evt.to, targetSid, 'event.to must be the UUID, not the handle');
     });
 
     it('audience="all" lands in another agent\'s urgent inbox', () => {
@@ -432,11 +515,11 @@ describe('mcp/tools', () => {
       assert.equal(data.events.filter(e => e.type === 'agent_message').length, 0);
     });
 
-    it('audience=<sessionId> lands in that session\'s inbox only', () => {
+    it('audience=<handle> lands in that session\'s inbox only', () => {
       registerAgent(collabDir, 'sess-2');
       registerAgent(collabDir, 'sess-3');
       handleToolCall('wrightward_send_message',
-        { body: 'just for you', audience: 'sess-2' }, collabDir, 'sess-1', config, tmpDir);
+        { body: 'just for you', audience: handleOf('sess-2') }, collabDir, 'sess-1', config, tmpDir);
 
       const r2 = handleToolCall('wrightward_list_inbox', {}, collabDir, 'sess-2', config, tmpDir);
       assert.equal(JSON.parse(r2.content[0].text).events.filter(e => e.type === 'agent_message').length, 1);
@@ -454,6 +537,39 @@ describe('mcp/tools', () => {
       const result = handleToolCall('wrightward_list_inbox', {}, collabDir, 'sess-1', config, tmpDir);
       const data = JSON.parse(result.content[0].text);
       assert.equal(data.events.filter(e => e.type === 'agent_message').length, 0);
+    });
+  });
+
+  describe('wrightward_whoami', () => {
+    it('returns the bound session\'s handle and registered_at', () => {
+      const result = handleToolCall('wrightward_whoami', {}, collabDir, 'sess-1', config, tmpDir);
+      const data = JSON.parse(result.content[0].text);
+      assert.equal(data.sessionId, 'sess-1');
+      // Handle shape: `<name>-<number>` per HANDLE_PATTERN.
+      assert.match(data.handle, /^[a-z]+-\d{1,4}$/);
+      assert.equal(typeof data.registered_at, 'number');
+      assert.match(data.hint, /@agent-/);
+    });
+
+    it('handle is deterministic: whoami twice on the same session returns the same handle', () => {
+      // This is the property that prevents agent identity drift across
+      // context compaction / resume — the agent can re-discover its handle
+      // without relying on memory. Regression would silently break peer
+      // addressing coherence.
+      const r1 = JSON.parse(handleToolCall('wrightward_whoami', {}, collabDir, 'sess-1', config, tmpDir).content[0].text);
+      const r2 = JSON.parse(handleToolCall('wrightward_whoami', {}, collabDir, 'sess-1', config, tmpDir).content[0].text);
+      assert.equal(r1.handle, r2.handle);
+    });
+
+    it('still returns a handle for an unregistered session (derived from UUID)', () => {
+      // Defensive path: even if the roster somehow lost the row, whoami
+      // must return a deterministic handle derived from the UUID so the
+      // agent never sees a broken self-identity response.
+      const result = handleToolCall('wrightward_whoami', {}, collabDir, 'never-registered', config, tmpDir);
+      const data = JSON.parse(result.content[0].text);
+      assert.equal(data.sessionId, 'never-registered');
+      assert.match(data.handle, /^[a-z]+-\d{1,4}$/);
+      assert.equal(data.registered_at, null);
     });
   });
 
@@ -602,8 +718,9 @@ describe('mcp/tools', () => {
       // never auto-expire — same convention as writeInterest. The previous
       // `|| default` collapsed 0 to the 30-minute default.
       const cfg0 = { ...config, BUS_HANDOFF_TTL_MS: 0 };
+      registerAgent(collabDir, 'sess-2');
       handleToolCall('wrightward_send_handoff', {
-        to: 'sess-2', task_ref: 'T1', next_action: 'do it'
+        to: handleOf('sess-2'), task_ref: 'T1', next_action: 'do it'
       }, collabDir, 'sess-1', cfg0, tmpDir);
 
       const events = fs.readFileSync(busPath(collabDir), 'utf8').trim().split('\n').map(l => JSON.parse(l));

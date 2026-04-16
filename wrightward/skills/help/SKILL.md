@@ -4,11 +4,14 @@ Quick reference for multi-agent coordination. Use when you're unsure which tool 
 
 ## Messaging (MCP tools)
 
+Agents are addressed by **handle** — a deterministic `<name>-<number>` derived from the session (e.g. `bob-42`). Your own handle appears in your SessionStart context; call `wrightward_whoami` if you need to re-confirm it. Name-only (`bob`) works when unambiguous, else it errors with the live handles listed.
+
 | Goal | Tool | Key parameters |
 |---|---|---|
-| Message another agent (urgent; also mirrors to Discord) | `wrightward_send_message` | `audience`: `"user"` (Discord-only reply), `"all"` (Discord broadcast + every agent's inbox), or a sessionId (that agent's thread + inbox) |
-| Log an observability entry | `wrightward_send_note` | `kind`: `"note"` (quiet; default), `"finding"` (urgent; broadcasts), or `"decision"` (urgent; broadcasts). `to`: sessionId or `"all"` (default). See "When to emit note/finding/decision" below. |
-| Hand off work + release files | `wrightward_send_handoff` | `to`: target sessionId (required); `files_unlocked`: files to release |
+| Know your own handle | `wrightward_whoami` | No args. Returns your handle, session ID, and registration time. |
+| Message another agent or reply to the user on Discord | `wrightward_send_message` | `audience`: `"user"` (reply into your own Discord thread so the user can follow inline), `"all"` (Discord broadcast + every agent's inbox), or a peer handle like `"bob-42"` (that agent's thread + inbox). |
+| Log an observability entry | `wrightward_send_note` | `kind`: `"note"` (quiet; default), `"finding"` (urgent; broadcasts), or `"decision"` (urgent; broadcasts). `to`: peer handle or `"all"` (default). See "When to emit note/finding/decision" below. |
+| Hand off work + release files | `wrightward_send_handoff` | `to`: target handle (e.g. `"bob-42"`, required); `files_unlocked`: files to release |
 | Watch a file another agent owns | `wrightward_watch_file` | You get a `file_freed` event when they release it |
 | Acknowledge a handoff (notifies the original sender) | `wrightward_ack` | `id`: handoff event id; `decision`: `accepted`, `rejected`, or `dismissed`. Routes the ack at the sender so they see it on their next tool call + in their Discord thread. |
 | Check inbox manually | `wrightward_list_inbox` | Returns urgent events only |
@@ -30,16 +33,18 @@ Tool responses include a `hint` field on success (e.g., "Broadcast to all agents
 
 Messages from a human on Discord arrive as `user_message` events with `meta.source === "discord"`, tagged `(Discord)` in the injected context.
 
-**To reply to Discord**, call `wrightward_send_message` with `audience="user"`. Plain assistant output is CLI-only and never reaches Discord.
+**To reply to Discord**, call `wrightward_send_message` with `audience="user"`. The reply lands inline in your own forum thread (not the broadcast channel) so the user can follow the conversation in context. Plain assistant output is CLI-only and never reaches Discord.
+
+**Long outbound messages auto-split into multiple Discord posts** (continuation marker `↳ (n/N)` on each chunk, code fences balanced across the boundary) — no silent truncation. Keep per-message content focused so the user can follow along: a plan can span chunks, but a one-line ack should not.
 
 Inbound routing:
 - Reply in an agent's forum thread → routes to that agent (no `@mention` needed)
-- `@agent-<id>` in broadcast or thread → fans out to the mentioned session(s)
+- `@agent-<handle>` in broadcast or thread → fans out to the mentioned session(s). Accepts full handles (`@agent-bob-42`) and name-only (`@agent-bob` — resolves if unambiguous, otherwise broadcasts).
 - `@agent-all` → broadcasts to every registered agent
 
 ## When to emit note/finding/decision
 
-All three are logged to the bus and mirror to Discord by default (sender's thread if `to=<sessionId>`, broadcast channel if `to="all"`). They differ by how loudly they announce themselves:
+All three are logged to the bus and mirror to Discord by default (recipient's thread if `to=<handle>`, broadcast channel if `to="all"`). They differ by how loudly they announce themselves:
 
 - **`note`** (non-urgent) — casual observation. Logged for the record; appears on Discord only. Other agents will NOT be auto-notified. Use for running commentary, low-signal FYI, or anything the reader can read-or-skip at their leisure.
 - **`finding`** (urgent) — you discovered something others MUST know. Bug, gotcha, surprising behavior, environmental constraint, something that invalidates an assumption. Fans out to every agent's inbox on their next tool call. Use sparingly.
@@ -51,7 +56,7 @@ Reserve `finding` and `decision` for events where acting on stale info would was
 
 - `handoff` — work handed to you; acknowledge with `wrightward_ack`
 - `user_message` — from a human (CLI or Discord); if from Discord, reply via `wrightward_send_message audience="user"`
-- `agent_message` — another agent's message; recipients are in the event's `to` field (`"all"` or a sessionId)
+- `agent_message` — another agent's message; recipients are in the event's `to` field (`"all"` or a sessionId the bus resolved from a handle)
 - `ack` — the recipient of a handoff you sent has accepted/rejected/dismissed it
 - `finding` — another agent discovered something you MUST know
 - `decision` — another agent made a choice that affects your work

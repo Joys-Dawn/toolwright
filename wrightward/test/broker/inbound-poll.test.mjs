@@ -8,8 +8,9 @@ import { createInboundPoller, readMarker, writeMarker } from '../../broker/inbou
 
 const require = createRequire(import.meta.url);
 const { ensureCollabDir } = require('../../lib/collab-dir');
-const { registerAgent } = require('../../lib/agents');
+const { registerAgent, readAgents } = require('../../lib/agents');
 const { busPath } = require('../../lib/bus-log');
+const { handleFor } = require('../../lib/handles');
 
 function makeMockApi(messagesQueue) {
   const calls = [];
@@ -31,13 +32,16 @@ function readBus(collabDir) {
 }
 
 describe('broker/inbound-poll', () => {
-  let tmpDir, collabDir;
+  let tmpDir, collabDir, aHandle, bHandle;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-inbound-'));
     collabDir = ensureCollabDir(tmpDir);
     registerAgent(collabDir, 'sess-abcdef12');
     registerAgent(collabDir, 'sess-12345678');
+    const roster = readAgents(collabDir);
+    aHandle = handleFor('sess-abcdef12', roster['sess-abcdef12']);
+    bHandle = handleFor('sess-12345678', roster['sess-12345678']);
   });
 
   afterEach(() => {
@@ -69,7 +73,7 @@ describe('broker/inbound-poll', () => {
 
     it('filters bot messages', async () => {
       const api = makeMockApi([[
-        { id: 'm1', author: { id: 'u1', bot: true }, content: '@agent-sess-abcdef12 hi' }
+        { id: 'm1', author: { id: 'u1', bot: true }, content: '@agent-' + aHandle + ' hi' }
       ]]);
       const p = createInboundPoller(collabDir, api, {
         broadcastChannelId: 'b', allowedSenders: ['u1']
@@ -81,7 +85,7 @@ describe('broker/inbound-poll', () => {
 
     it('rejects messages from non-allowlisted users', async () => {
       const api = makeMockApi([[
-        { id: 'm1', author: { id: 'u-not-allowed', bot: false }, content: '@agent-sess-abcdef12 hi' }
+        { id: 'm1', author: { id: 'u-not-allowed', bot: false }, content: '@agent-' + aHandle + ' hi' }
       ]]);
       const p = createInboundPoller(collabDir, api, {
         broadcastChannelId: 'b', allowedSenders: ['u1']
@@ -93,7 +97,7 @@ describe('broker/inbound-poll', () => {
 
     it('rejects all inbound when allowedSenders is empty', async () => {
       const api = makeMockApi([[
-        { id: 'm1', author: { id: 'u1', bot: false }, content: '@agent-sess-abcdef12 hi' }
+        { id: 'm1', author: { id: 'u1', bot: false }, content: '@agent-' + aHandle + ' hi' }
       ]]);
       const p = createInboundPoller(collabDir, api, {
         broadcastChannelId: 'b', allowedSenders: []
@@ -102,10 +106,10 @@ describe('broker/inbound-poll', () => {
       assert.equal(r.ingested, 0);
     });
 
-    it('ingests message matching a known session short-id', async () => {
+    it('ingests message matching a known agent handle', async () => {
       writeMarker(collabDir, 'seed'); // skip first-run seeding
       const api = makeMockApi([[
-        { id: 'm1', author: { id: 'u1', bot: false }, content: '@agent-sess-abc please fix auth' }
+        { id: 'm1', author: { id: 'u1', bot: false }, content: '@agent-' + aHandle + ' please fix auth' }
       ]]);
       const p = createInboundPoller(collabDir, api, {
         broadcastChannelId: 'b', allowedSenders: ['u1']
@@ -125,7 +129,7 @@ describe('broker/inbound-poll', () => {
       const SECRET = 'MTExMTExMTExMTExMTExMTEx.XxXxXx.abcdefghijklmnopqrstuvwxyz_';
       const api = makeMockApi([[
         { id: 'm1', author: { id: 'u1', bot: false },
-          content: '@agent-sess-abc token is ' + SECRET + ' please rotate' }
+          content: '@agent-' + aHandle + ' token is ' + SECRET + ' please rotate' }
       ]]);
       const p = createInboundPoller(collabDir, api, {
         broadcastChannelId: 'b', allowedSenders: ['u1']
@@ -141,9 +145,9 @@ describe('broker/inbound-poll', () => {
     it('bookmarks the newest message ID (Discord returns newest-first)', async () => {
       writeMarker(collabDir, 'seed');
       const api = makeMockApi([[
-        { id: 'm3', author: { id: 'u1', bot: false }, content: '@agent-sess-abc c' },
-        { id: 'm2', author: { id: 'u1', bot: false }, content: '@agent-sess-abc b' },
-        { id: 'm1', author: { id: 'u1', bot: false }, content: '@agent-sess-abc a' }
+        { id: 'm3', author: { id: 'u1', bot: false }, content: '@agent-' + aHandle + ' c' },
+        { id: 'm2', author: { id: 'u1', bot: false }, content: '@agent-' + aHandle + ' b' },
+        { id: 'm1', author: { id: 'u1', bot: false }, content: '@agent-' + aHandle + ' a' }
       ]]);
       const p = createInboundPoller(collabDir, api, {
         broadcastChannelId: 'b', allowedSenders: ['u1']
@@ -159,7 +163,7 @@ describe('broker/inbound-poll', () => {
 
     it('passes last-polled id to getMessagesAfter on subsequent poll', async () => {
       const api = makeMockApi([
-        [{ id: 'm1', author: { id: 'u1', bot: false }, content: '@agent-sess-abc hi' }],
+        [{ id: 'm1', author: { id: 'u1', bot: false }, content: '@agent-' + aHandle + ' hi' }],
         [] // second poll returns nothing
       ]);
       const p = createInboundPoller(collabDir, api, {
@@ -177,9 +181,9 @@ describe('broker/inbound-poll', () => {
       // every @agent-<id> mention in the recent 50 messages — potentially
       // replaying commands from a prior session.
       const api = makeMockApi([[
-        { id: 'old-3', author: { id: 'u1', bot: false }, content: '@agent-sess-abc stale-a' },
-        { id: 'old-2', author: { id: 'u1', bot: false }, content: '@agent-sess-abc stale-b' },
-        { id: 'old-1', author: { id: 'u1', bot: false }, content: '@agent-sess-abc stale-c' }
+        { id: 'old-3', author: { id: 'u1', bot: false }, content: '@agent-' + aHandle + ' stale-a' },
+        { id: 'old-2', author: { id: 'u1', bot: false }, content: '@agent-' + aHandle + ' stale-b' },
+        { id: 'old-1', author: { id: 'u1', bot: false }, content: '@agent-' + aHandle + ' stale-c' }
       ]]);
       const p = createInboundPoller(collabDir, api, {
         broadcastChannelId: 'b', allowedSenders: ['u1']
@@ -194,7 +198,7 @@ describe('broker/inbound-poll', () => {
 
     it('persists bookmark across instances (restart recovery)', async () => {
       const api = makeMockApi([[
-        { id: 'msg-xyz', author: { id: 'u1', bot: false }, content: '@agent-sess-abc ping' }
+        { id: 'msg-xyz', author: { id: 'u1', bot: false }, content: '@agent-' + aHandle + ' ping' }
       ]]);
       const p1 = createInboundPoller(collabDir, api, {
         broadcastChannelId: 'b', allowedSenders: ['u1']
@@ -222,14 +226,19 @@ describe('broker/inbound-poll', () => {
       assert.equal(readBus(collabDir).filter(e => e.type === 'user_message').length, 0);
     });
 
-    it('marks ambiguous-mention meta when short-id collides', async () => {
+    it('marks ambiguous-mention meta when name-only handle collides', async () => {
       writeMarker(collabDir, 'seed');
-      // Two sessions sharing the same 8-char short id → ambiguous.
-      const { registerAgent } = require('../../lib/agents');
-      registerAgent(collabDir, 'sess-xxxxyyyy1');
-      registerAgent(collabDir, 'sess-xxxxyyyy2');
+      // Two handles sharing the same name prefix → `@agent-twin` is ambiguous.
+      const { writeAgents } = require('../../lib/agents');
+      const ambigRoster = {
+        'sess-abcdef12': { registered_at: 1, last_active: 1, handle: aHandle },
+        'sess-12345678': { registered_at: 2, last_active: 2, handle: bHandle },
+        'sess-xxxxyyyy1': { registered_at: 3, last_active: 3, handle: 'twin-1' },
+        'sess-xxxxyyyy2': { registered_at: 4, last_active: 4, handle: 'twin-2' }
+      };
+      writeAgents(collabDir, ambigRoster);
       const api = makeMockApi([[
-        { id: 'm1', author: { id: 'u1', bot: false }, content: '@agent-sess-xxx help' }
+        { id: 'm1', author: { id: 'u1', bot: false }, content: '@agent-twin help' }
       ]]);
       const p = createInboundPoller(collabDir, api, {
         broadcastChannelId: 'b', allowedSenders: ['u1']
@@ -244,7 +253,7 @@ describe('broker/inbound-poll', () => {
     it('routes @agent-all from broadcast to the all target without ambiguity', async () => {
       // End-to-end: a user types `@agent-all` in the broadcast channel and
       // every registered session must receive the message. Distinct from
-      // the ambiguous-short-id path above — meta.ambiguous_mention stays
+      // the ambiguous name-only path above — meta.ambiguous_mention stays
       // false because the broadcast was explicit, not a collision fallback.
       writeMarker(collabDir, 'seed');
       const api = makeMockApi([[

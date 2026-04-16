@@ -8,6 +8,7 @@ const os = require('os');
 const { createThreads, indexPath, threadName, readIndex } = require('../../discord/threads');
 const { DiscordApiError, MAX_THREAD_NAME_LEN } = require('../../discord/api');
 const { ensureCollabDir } = require('../../lib/collab-dir');
+const { deriveHandle } = require('../../lib/handles');
 
 function makeMockApi() {
   const calls = {
@@ -36,31 +37,40 @@ function makeMockApi() {
   return api;
 }
 
+// Plants a row in agents.json so ensureThreadForSession can resolve a
+// deterministic handle — needed because the new threadName signature is
+// `(task, handle)` and ensureThreadForSession looks up handle via
+// readAgents(collabDir).
+function seedRoster(collabDir, rows) {
+  const file = path.join(collabDir, 'agents.json');
+  fs.writeFileSync(file, JSON.stringify(rows));
+}
+
 describe('discord/threads', () => {
   describe('threadName', () => {
-    it('formats task with short-ID suffix', () => {
-      assert.equal(threadName('auth refactor', 'sess-abcdefgh12'), 'auth refactor (sess-abc)');
+    it('formats task with handle suffix', () => {
+      assert.equal(threadName('auth refactor', 'bob-42'), 'auth refactor (bob-42)');
     });
 
     it('falls back to "session" when task is empty', () => {
-      assert.equal(threadName('', 'sess-abcdef12'), 'session (sess-abc)');
+      assert.equal(threadName('', 'bob-42'), 'session (bob-42)');
     });
 
-    it('omits shortId suffix when sessionId is empty', () => {
+    it('omits handle suffix when handle is empty', () => {
       assert.equal(threadName('work', ''), 'work');
     });
 
     it('truncates at 100 chars with … ellipsis', () => {
       const longTask = 'x'.repeat(200);
-      const name = threadName(longTask, 'sess-12345678');
+      const name = threadName(longTask, 'bob-42');
       assert.ok(name.length <= MAX_THREAD_NAME_LEN);
-      assert.ok(name.endsWith(' (sess-123)'));
+      assert.ok(name.endsWith(' (bob-42)'));
       assert.match(name, /…/);
     });
 
     it('never exceeds MAX_THREAD_NAME_LEN', () => {
       for (const len of [50, 88, 89, 100, 150, 500]) {
-        const name = threadName('a'.repeat(len), 'sess-12345678');
+        const name = threadName('a'.repeat(len), 'bob-4217');
         assert.ok(name.length <= MAX_THREAD_NAME_LEN,
           'len=' + len + ' produced ' + name.length + ' chars');
       }
@@ -84,8 +94,11 @@ describe('discord/threads', () => {
     });
 
     describe('ensureThreadForSession', () => {
-      it('creates a thread and stores the mapping', async () => {
+      it('creates a thread and stores the mapping using the session handle', async () => {
         const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-abc12345': { registered_at: 1, last_active: 1, handle: 'bob-42' }
+        });
         const threads = createThreads(collabDir, api, 'forum-1');
 
         const threadId = await threads.ensureThreadForSession('sess-abc12345', 'auth work');
@@ -93,17 +106,33 @@ describe('discord/threads', () => {
         assert.equal(api.calls.createForumThread.length, 1);
         const createCall = api.calls.createForumThread[0];
         assert.equal(createCall.forumChannelId, 'forum-1');
-        assert.equal(createCall.name, 'auth work (sess-abc)');
+        assert.equal(createCall.name, 'auth work (bob-42)');
+        assert.match(createCall.content, /bob-42/);
 
-        // Verify persistence
         const idx = readIndex(collabDir);
         assert.ok(idx['sess-abc12345']);
         assert.equal(idx['sess-abc12345'].thread_id, threadId);
         assert.equal(idx['sess-abc12345'].archived_at, null);
+        assert.equal(idx['sess-abc12345'].rendered_name, 'auth work (bob-42)');
+      });
+
+      it('derives a handle when the session is not in agents.json', async () => {
+        // Defensive path — tests can create threads without seeding the roster;
+        // we still render a deterministic handle via deriveHandle.
+        const api = makeMockApi();
+        const threads = createThreads(collabDir, api, 'forum-1');
+        const sid = 'sess-ghost';
+        const expected = deriveHandle(sid);
+        const threadId = await threads.ensureThreadForSession(sid, 'task');
+        assert.ok(threadId);
+        assert.equal(api.calls.createForumThread[0].name, 'task (' + expected + ')');
       });
 
       it('returns existing thread_id without re-creating on re-call', async () => {
         const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-a': { registered_at: 1, last_active: 1, handle: 'bob-42' }
+        });
         const threads = createThreads(collabDir, api, 'forum-1');
 
         const t1 = await threads.ensureThreadForSession('sess-a', 'task');
@@ -113,9 +142,10 @@ describe('discord/threads', () => {
       });
 
       it('re-creates thread if previous was archived', async () => {
-        // If a session is reopened after its thread was archived, a new thread
-        // should be created so the session has a live place to post.
         const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-a': { registered_at: 1, last_active: 1, handle: 'bob-42' }
+        });
         const threads = createThreads(collabDir, api, 'forum-1');
 
         await threads.ensureThreadForSession('sess-a', 'first');
@@ -127,6 +157,9 @@ describe('discord/threads', () => {
 
       it('persists atomically via atomicWriteJson', async () => {
         const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-a': { registered_at: 1, last_active: 1, handle: 'bob-42' }
+        });
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-a', 'task');
         assert.ok(fs.existsSync(indexPath(collabDir)));
@@ -134,23 +167,26 @@ describe('discord/threads', () => {
 
       it('throws if createForumThread returns no id', async () => {
         const api = makeMockApi();
-        api.createForumThread = async () => ({ /* no id */ });
+        api.createForumThread = async () => ({});
         const threads = createThreads(collabDir, api, 'forum-1');
         await assert.rejects(() => threads.ensureThreadForSession('sess-a', 'x'), /no id/);
       });
     });
 
     describe('renameThread', () => {
-      it('PATCHes the thread with a new name', async () => {
+      it('PATCHes the thread with a new name (handle-based suffix)', async () => {
         const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-a': { registered_at: 1, last_active: 1, handle: 'bob-42' }
+        });
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-a', 'old task');
-        api.calls.editChannel = []; // reset
+        api.calls.editChannel = [];
 
         const result = await threads.renameThread('sess-a', 'new task');
         assert.ok(result);
         assert.equal(api.calls.editChannel.length, 1);
-        assert.match(api.calls.editChannel[0].patch.name, /new task \(sess-a\)/);
+        assert.equal(api.calls.editChannel[0].patch.name, 'new task (bob-42)');
       });
 
       it('returns null when session has no thread', async () => {
@@ -163,6 +199,9 @@ describe('discord/threads', () => {
 
       it('returns null (no-op) when thread is archived', async () => {
         const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-a': { registered_at: 1, last_active: 1, handle: 'bob-42' }
+        });
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-a', 'task');
         await threads.archiveThread('sess-a');
@@ -174,6 +213,9 @@ describe('discord/threads', () => {
       it('propagates 429 errors from API (rate-limit lives in api.js, not threads.js)', async () => {
         const api = makeMockApi();
         api.editChannel = async () => { throw new DiscordApiError(429, 'rate limited'); };
+        seedRoster(collabDir, {
+          'sess-a': { registered_at: 1, last_active: 1, handle: 'bob-42' }
+        });
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-a', 'task');
         await assert.rejects(() => threads.renameThread('sess-a', 'new'),
@@ -182,20 +224,20 @@ describe('discord/threads', () => {
 
       it('skips the PATCH when the rendered name is unchanged', async () => {
         const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-a': { registered_at: 1, last_active: 1, handle: 'bob-42' }
+        });
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-a', 'same task');
-        api.calls.editChannel = []; // reset post-create state
+        api.calls.editChannel = [];
 
-        // Same task → same rendered name → no PATCH.
         const r1 = await threads.renameThread('sess-a', 'same task');
         assert.equal(api.calls.editChannel.length, 0);
         assert.ok(r1, 'returns the existing thread_id without firing PATCH');
 
-        // A real rename does fire the PATCH and updates rendered_name.
         await threads.renameThread('sess-a', 'new task');
         assert.equal(api.calls.editChannel.length, 1);
 
-        // Repeat of the new task → still no PATCH.
         await threads.renameThread('sess-a', 'new task');
         assert.equal(api.calls.editChannel.length, 1,
           'no additional PATCH for the same rendered name');
@@ -203,22 +245,29 @@ describe('discord/threads', () => {
 
       it('skips the PATCH when two distinct long task strings render to the same name', async () => {
         const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-x': { registered_at: 1, last_active: 1, handle: 'bob-42' }
+        });
         const threads = createThreads(collabDir, api, 'forum-1');
-        // Long task that will truncate at the 100-char-minus-suffix limit.
         const longA = 'a'.repeat(200) + '-first-distinguishing-suffix';
         const longB = 'a'.repeat(200) + '-second-different-suffix-that-still-gets-lost-post-truncation';
         await threads.ensureThreadForSession('sess-x', longA);
         api.calls.editChannel = [];
         await threads.renameThread('sess-x', longB);
-        // Both tasks truncate to a 100-char name with ' (sess-x)' suffix —
-        // same rendered name → PATCH must not fire.
         assert.equal(api.calls.editChannel.length, 0);
       });
     });
 
     describe('archiveThread', () => {
+      function seed() {
+        seedRoster(collabDir, {
+          'sess-a': { registered_at: 1, last_active: 1, handle: 'bob-42' }
+        });
+      }
+
       it('PATCHes with {archived: true} and records archived_at', async () => {
         const api = makeMockApi();
+        seed();
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-a', 'task');
 
@@ -241,6 +290,7 @@ describe('discord/threads', () => {
 
       it('is idempotent on already-archived sessions', async () => {
         const api = makeMockApi();
+        seed();
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-a', 'task');
         await threads.archiveThread('sess-a');
@@ -253,12 +303,11 @@ describe('discord/threads', () => {
       });
 
       it('treats Discord 400 "already archived" as success', async () => {
-        // Discord auto-archives inactive threads; our local state may not
-        // reflect that. Archive attempt then succeeds as a no-op.
         const api = makeMockApi();
         api.archiveThread = async () => {
           throw new DiscordApiError(400, 'Thread is archived');
         };
+        seed();
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-a', 'task');
         const r = await threads.archiveThread('sess-a');
@@ -270,6 +319,7 @@ describe('discord/threads', () => {
       it('treats Discord 404 (missing thread) as success', async () => {
         const api = makeMockApi();
         api.archiveThread = async () => { throw new DiscordApiError(404, 'Unknown Channel'); };
+        seed();
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-a', 'task');
         const r = await threads.archiveThread('sess-a');
@@ -279,6 +329,7 @@ describe('discord/threads', () => {
       it('propagates other API errors', async () => {
         const api = makeMockApi();
         api.archiveThread = async () => { throw new DiscordApiError(500, 'server error'); };
+        seed();
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-a', 'task');
         await assert.rejects(() => threads.archiveThread('sess-a'),
@@ -289,6 +340,10 @@ describe('discord/threads', () => {
     describe('listActiveThreads', () => {
       it('returns only non-archived entries with expected shape', async () => {
         const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-live': { registered_at: 1, last_active: 1, handle: 'bob-42' },
+          'sess-done': { registered_at: 2, last_active: 2, handle: 'sam-17' }
+        });
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-live', 'live task');
         await threads.ensureThreadForSession('sess-done', 'done task');
@@ -310,11 +365,10 @@ describe('discord/threads', () => {
       });
 
       it('ignores entries without thread_id (defensive against corrupt rows)', async () => {
-        // Corrupt row test — write an entry missing `thread_id` directly to
-        // the index, then confirm listActiveThreads survives and returns the
-        // valid rows only. Regressions in ensureThreadForSession that produce
-        // malformed entries should not crash the inbound poller downstream.
         const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-valid': { registered_at: 1, last_active: 1, handle: 'bob-42' }
+        });
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-valid', 'task');
 
@@ -331,21 +385,28 @@ describe('discord/threads', () => {
     });
 
     describe('pruneArchivedBefore', () => {
+      function seed(ids) {
+        const rows = {};
+        for (const id of ids) {
+          rows[id] = { registered_at: 1, last_active: 1, handle: 'bob-' + id.length };
+        }
+        seedRoster(collabDir, rows);
+      }
+
       it('deletes archived threads older than the cutoff and removes them from the index', async () => {
         const api = makeMockApi();
+        seed(['sess-old']);
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-old', 'long-finished');
         await threads.archiveThread('sess-old');
 
-        // Pretend the archive happened in the past — bridge.archiveThread
-        // stamps Date.now(); back-date by mutating the index directly.
         const idxPath = indexPath(collabDir);
         const idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
         const originalThreadId = idx['sess-old'].thread_id;
-        idx['sess-old'].archived_at = Date.now() - 30 * 24 * 60 * 60 * 1000; // 30 days ago
+        idx['sess-old'].archived_at = Date.now() - 30 * 24 * 60 * 60 * 1000;
         fs.writeFileSync(idxPath, JSON.stringify(idx));
 
-        const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000; // older than 7 days
+        const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
         const result = await threads.pruneArchivedBefore(cutoff);
 
         assert.deepEqual(result.deleted, ['sess-old']);
@@ -353,14 +414,12 @@ describe('discord/threads', () => {
         assert.deepEqual(result.skipped, []);
         assert.equal(api.calls.deleteThread.length, 1);
         assert.equal(api.calls.deleteThread[0].threadId, originalThreadId);
-        // Index entry must be removed so we don't keep retrying a dead thread.
         assert.equal(readIndex(collabDir)['sess-old'], undefined);
       });
 
       it('skips entries that are not archived', async () => {
-        // Live (un-archived) threads must never be deleted by prune — only
-        // archived_at-stamped entries are candidates.
         const api = makeMockApi();
+        seed(['sess-live']);
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-live', 'in-progress');
 
@@ -368,16 +427,16 @@ describe('discord/threads', () => {
         assert.deepEqual(result.deleted, []);
         assert.deepEqual(result.skipped, ['sess-live']);
         assert.equal(api.calls.deleteThread.length, 0);
-        assert.ok(readIndex(collabDir)['sess-live'], 'live entry must remain');
+        assert.ok(readIndex(collabDir)['sess-live']);
       });
 
       it('skips archived entries newer than the cutoff', async () => {
         const api = makeMockApi();
+        seed(['sess-recent']);
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-recent', 'task');
         await threads.archiveThread('sess-recent');
 
-        // Cutoff = 1 hour ago; entry archived just now → newer than cutoff → skip.
         const result = await threads.pruneArchivedBefore(Date.now() - 60 * 60 * 1000);
         assert.deepEqual(result.deleted, []);
         assert.deepEqual(result.skipped, ['sess-recent']);
@@ -385,16 +444,15 @@ describe('discord/threads', () => {
       });
 
       it('treats Discord 404 (already deleted) as success and removes the index entry', async () => {
-        // Discord may have purged the thread under us. Idempotent path: we
-        // don't keep retrying a dead reference — drop it from the local map.
         const api = makeMockApi();
         api.deleteThread = async () => { throw new DiscordApiError(404, 'Unknown Channel'); };
+        seed(['sess-gone']);
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-gone', 'task');
         await threads.archiveThread('sess-gone');
         const idxPath = indexPath(collabDir);
         const idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
-        idx['sess-gone'].archived_at = 1; // way before cutoff
+        idx['sess-gone'].archived_at = 1;
         fs.writeFileSync(idxPath, JSON.stringify(idx));
 
         const result = await threads.pruneArchivedBefore(Date.now());
@@ -404,10 +462,9 @@ describe('discord/threads', () => {
       });
 
       it('treats Discord 403 (lost permission) as success and removes the index entry', async () => {
-        // If the bot was kicked or its role was downgraded, DELETE returns
-        // 403 — we can't manage the thread anymore, so drop it locally.
         const api = makeMockApi();
         api.deleteThread = async () => { throw new DiscordApiError(403, 'Missing Access'); };
+        seed(['sess-noperm']);
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-noperm', 'task');
         await threads.archiveThread('sess-noperm');
@@ -422,10 +479,9 @@ describe('discord/threads', () => {
       });
 
       it('records other API errors in failed[] without removing the entry', async () => {
-        // 500/network/etc. are transient — keep the entry so a future prune
-        // can retry. Anything we can't classify as "permanently gone" stays.
         const api = makeMockApi();
         api.deleteThread = async () => { throw new DiscordApiError(500, 'server error'); };
+        seed(['sess-flaky']);
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-flaky', 'task');
         await threads.archiveThread('sess-flaky');
@@ -439,7 +495,6 @@ describe('discord/threads', () => {
         assert.equal(result.failed.length, 1);
         assert.equal(result.failed[0].sid, 'sess-flaky');
         assert.match(result.failed[0].error, /server error/);
-        // Entry remains so the next prune can retry.
         assert.ok(readIndex(collabDir)['sess-flaky']);
       });
 
@@ -447,18 +502,17 @@ describe('discord/threads', () => {
         let callIdx = 0;
         const api = makeMockApi();
         api.deleteThread = async () => {
-          // First archived candidate: succeeds. Second: 500.
           callIdx++;
           if (callIdx === 2) throw new DiscordApiError(500, 'transient');
           return null;
         };
+        seed(['sess-1', 'sess-2', 'sess-3']);
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-1', 't');
         await threads.ensureThreadForSession('sess-2', 't');
         await threads.ensureThreadForSession('sess-3', 't');
         await threads.archiveThread('sess-1');
         await threads.archiveThread('sess-2');
-        // sess-3 stays live (un-archived) → must be skipped, not deleted.
 
         const idxPath = indexPath(collabDir);
         const idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
@@ -485,12 +539,15 @@ describe('discord/threads', () => {
     describe('lookup helpers', () => {
       it('getThreadIdFor returns stored thread id', async () => {
         const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-a': { registered_at: 1, last_active: 1, handle: 'bob-42' }
+        });
         const threads = createThreads(collabDir, api, 'forum-1');
         const tid = await threads.ensureThreadForSession('sess-a', 'task');
         assert.equal(threads.getThreadIdFor('sess-a'), tid);
       });
 
-      it('getThreadIdFor returns null for unknown session', async () => {
+      it('getThreadIdFor returns null for unknown session', () => {
         const api = makeMockApi();
         const threads = createThreads(collabDir, api, 'forum-1');
         assert.equal(threads.getThreadIdFor('unknown'), null);
@@ -498,10 +555,80 @@ describe('discord/threads', () => {
 
       it('listSessions returns all keys from the index', async () => {
         const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-a': { registered_at: 1, last_active: 1, handle: 'bob-42' },
+          'sess-b': { registered_at: 2, last_active: 2, handle: 'sam-17' }
+        });
         const threads = createThreads(collabDir, api, 'forum-1');
         await threads.ensureThreadForSession('sess-a', 'task-a');
         await threads.ensureThreadForSession('sess-b', 'task-b');
         assert.deepEqual(threads.listSessions().sort(), ['sess-a', 'sess-b']);
+      });
+    });
+
+    describe('reconcileThreads', () => {
+      it('creates a thread for every live session missing one', async () => {
+        const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-a': { registered_at: 1, last_active: 1, handle: 'bob-42' },
+          'sess-b': { registered_at: 2, last_active: 2, handle: 'sam-17' },
+          'sess-c': { registered_at: 3, last_active: 3, handle: 'eve-8' }
+        });
+        const threads = createThreads(collabDir, api, 'forum-1');
+
+        const result = await threads.reconcileThreads();
+        assert.deepEqual(result.created.sort(), ['sess-a', 'sess-b', 'sess-c']);
+        assert.deepEqual(result.existing, []);
+        assert.deepEqual(result.failed, []);
+        assert.equal(api.calls.createForumThread.length, 3);
+      });
+
+      it('skips sessions that already have a non-archived thread', async () => {
+        const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-a': { registered_at: 1, last_active: 1, handle: 'bob-42' },
+          'sess-b': { registered_at: 2, last_active: 2, handle: 'sam-17' },
+          'sess-c': { registered_at: 3, last_active: 3, handle: 'eve-8' }
+        });
+        const threads = createThreads(collabDir, api, 'forum-1');
+        await threads.ensureThreadForSession('sess-a', '');
+        await threads.ensureThreadForSession('sess-b', '');
+        api.calls.createForumThread = [];
+
+        const result = await threads.reconcileThreads();
+        assert.deepEqual(result.created, ['sess-c']);
+        assert.deepEqual(result.existing.sort(), ['sess-a', 'sess-b']);
+        assert.equal(api.calls.createForumThread.length, 1);
+      });
+
+      it('keeps going when a single create fails — reports in failed[]', async () => {
+        let callIdx = 0;
+        const api = makeMockApi();
+        const origCreate = api.createForumThread;
+        api.createForumThread = async (...args) => {
+          callIdx++;
+          if (callIdx === 2) throw new DiscordApiError(500, 'flaky');
+          return origCreate(...args);
+        };
+        seedRoster(collabDir, {
+          'sess-a': { registered_at: 1, last_active: 1, handle: 'bob-42' },
+          'sess-b': { registered_at: 2, last_active: 2, handle: 'sam-17' },
+          'sess-c': { registered_at: 3, last_active: 3, handle: 'eve-8' }
+        });
+        const threads = createThreads(collabDir, api, 'forum-1');
+        const logs = [];
+        const result = await threads.reconcileThreads((line) => logs.push(line));
+        assert.equal(result.created.length, 2, 'two successes');
+        assert.equal(result.failed.length, 1, 'one failure');
+        assert.match(result.failed[0].error, /flaky/);
+        assert.ok(logs.some((l) => /reconcile: failed/.test(l)));
+      });
+
+      it('returns empty result when agents.json is empty', async () => {
+        const api = makeMockApi();
+        const threads = createThreads(collabDir, api, 'forum-1');
+        const result = await threads.reconcileThreads();
+        assert.deepEqual(result, { created: [], existing: [], failed: [] });
       });
     });
   });

@@ -4,7 +4,7 @@ Claude Code plugin for multi-agent coordination. When multiple Claude Code sessi
 
 - **File conflict prevention** — auto-tracks Edits/Writes; blocks overlapping writes with a summary of who owns the file.
 - **Awareness context** — injects short summaries of other agents' active work into the guard hook's output.
-- **Message bus** — six MCP tools for sending notes, handoffs, file-watch registrations, and inbox checks between sessions.
+- **Message bus** — eight MCP tools for sending notes, handoffs, file-watch registrations, and inbox checks between sessions.
 - **Channel push** (research preview) — optional wake-up `notifications/claude/channel` ping when an idle session receives an urgent bus event.
 - **Zero network I/O by default** — all state is local files in `.claude/collab/` (auto-gitignored). No daemon, no IPC, no external services unless the optional Discord bridge (v3.2) is explicitly enabled.
 - **Optional Discord observability** — opt-in bridge that mirrors bus events to a Discord forum (thread per agent) and relays inbound messages (thread replies or `@agent-…` mentions in the broadcast channel) back into the bus.
@@ -68,7 +68,7 @@ On top of file coordination, wrightward runs a file-based peer-to-peer message b
 - Events are appended to `.claude/collab/bus.jsonl` (append-only, length-bounded, self-compacting).
 - Per-session delivery bookmarks in `.claude/collab/bus-delivered/<sessionId>.json` track what each session has already seen.
 - Urgent events are delivered via **Path 1** — the guard/heartbeat hooks inject pending events as `additionalContext` on the session's next tool call, then advance the bookmark. This is the sole source of truth for event delivery.
-- A bundled MCP server (`wrightward-bus`) exposes seven tools for the model to use directly.
+- A bundled MCP server (`wrightward-bus`) exposes eight tools for the model to use directly.
 
 ### MCP tools
 
@@ -76,10 +76,11 @@ On top of file coordination, wrightward runs a file-based peer-to-peer message b
 |------|-------------|
 | `wrightward_list_inbox` | List urgent events targeted at this session. Advances the delivery bookmark by default. |
 | `wrightward_ack` | Acknowledge a handoff (`accepted` / `rejected` / `dismissed`). Looks up the original event and routes the ack at its sender so they see the decision on their next tool call and in their Discord thread. |
-| `wrightward_send_note` | Log an observability entry. `kind="note"` (default) is quiet; `"finding"` and `"decision"` are urgent and fan out to every agent's inbox. All three mirror to Discord. |
-| `wrightward_send_handoff` | Hand work off to another session. Optionally releases files in the same atomic step. |
+| `wrightward_send_note` | Log an observability entry. Target with a peer handle (e.g. `"bob-42"`) or `"all"`. `kind="note"` (default) is quiet; `"finding"` and `"decision"` are urgent and fan out to every agent's inbox. All three mirror to Discord. |
+| `wrightward_send_handoff` | Hand work off to another session by handle. Optionally releases files in the same atomic step. |
 | `wrightward_watch_file` | Register interest in a file — the sender is notified when it frees up. |
-| `wrightward_send_message` | Send a peer message or Discord reply. `audience="user"` replies on Discord only; `"all"` broadcasts; a sessionId targets one agent. |
+| `wrightward_send_message` | Send a peer message or Discord reply. `audience="user"` replies into the sender's own Discord thread (inline with the user); `"all"` broadcasts; a peer handle like `"bob-42"` targets that agent. |
+| `wrightward_whoami` | Return your own agent handle, session ID, and registration time. Useful after compaction or when announcing yourself — handles are deterministic per-session. |
 | `wrightward_bus_status` | Diagnostic: event counts, bookmark positions, recent activity. |
 
 ### Skill wrappers
@@ -149,7 +150,7 @@ An optional subprocess that mirrors bus events to a Discord server in near-real-
 
 When enabled, the bridge:
 
-- creates one Discord **forum thread per agent** named `<task> (<shortId>)` and posts per-session events there;
+- creates one Discord **forum thread per agent** named `<task> (<handle>)` (e.g. `refactor auth (bob-42)`) and posts per-session events there;
 - mirrors `session_started` / `session_ended` / broadcast handoffs / `user_message` targeted at `"all"` into a shared **broadcast text channel**;
 - watches the broadcast channel **and every live (non-archived) agent thread** for inbound messages and routes them back into `bus.jsonl` as `user_message` events;
 - renames a thread when `/wrightward:collab-context` updates the session's task string (throttled by Discord's own per-bucket rate limits).
@@ -157,8 +158,8 @@ When enabled, the bridge:
 Inbound routing has two forms:
 
 - **Reply inside an agent's forum thread** → the message is delivered to that thread's session without an `@mention`. Useful when you're already watching the thread and want to respond in context.
-- **Post in the broadcast channel with `@agent-<id>`** → the message is delivered to the mentioned session(s). Fan-out is supported: a reply that also includes `@agent-<id>` mentions is delivered to the union of the thread owner and the mentioned sessions (deduped).
-- **`@agent-all`** → explicit broadcast: the message is delivered to every registered agent. Works in the broadcast channel or inside a thread (in a thread, the thread owner is already included in the broadcast). Distinct from an ambiguous short-ID — `ambiguous_mention` stays `false`.
+- **Post in the broadcast channel with `@agent-<handle>`** → the message is delivered to the mentioned session(s). Both full handles (`@agent-bob-42`) and name-only (`@agent-bob`) resolve — name-only resolves if exactly one agent matches, otherwise it broadcasts with `ambiguous_mention: true`. Fan-out is supported: a thread reply with extra `@agent-<handle>` mentions is delivered to the union of the thread owner and the mentioned sessions (deduped).
+- **`@agent-all`** → explicit broadcast: the message is delivered to every registered agent. Works in the broadcast channel or inside a thread (in a thread, the thread owner is already included in the broadcast). Distinct from an ambiguous handle — `ambiguous_mention` stays `false`.
 
 Both forms are gated on `ALLOWED_SENDERS`, sanitized for tokens/webhook URLs, and UTF-8-clamped before append. If Discord's Message Content Intent is **off** for your bot, thread replies still route to the thread owner (the body may be empty) — broadcast @mentions, however, require MCI because the body is the only signal.
 
@@ -199,7 +200,7 @@ When the bridge is disabled (default), Phases 1–2 behave identically to prior 
 
 **Mirror policy defaults** (user overrides merge on top):
 
-- `user_message`, `handoff`, `blocker`, `file_freed`, `agent_message` → post into the recipient's thread.
+- `user_message`, `handoff`, `blocker`, `file_freed`, `agent_message` → post into the recipient's thread. Special case: `agent_message` with `audience="user"` posts into the **sender's** own thread so user-facing replies stay inline rather than scattering into the broadcast channel.
 - `session_started`, `session_ended` → post into the broadcast channel.
 - `note`, `finding`, `decision` → post into the target thread when sent to a sessionId; promote to the broadcast channel when sent to `"all"`. Demote to `silent` via `mirrorPolicy` if you find them noisy.
 - `ack` → post into the original handoff sender's thread so they see your decision without grepping. Demotable to `silent`.
@@ -211,6 +212,7 @@ When the bridge is disabled (default), Phases 1–2 behave identically to prior 
 - **`ALLOWED_SENDERS` gates on Discord user ID, not channel membership.** Giving someone access to the broadcast channel alone does **not** let them inject into your bus — only IDs explicitly listed in `ALLOWED_SENDERS` can route mentions. Empty list = send-only.
 - **Token redaction.** Bot tokens, `Bot <token>` headers, and Discord webhook URLs (incl. `canary.discord.com`, `ptb.discord.com`, `discordapp.com`, versioned `/api/v10/webhooks/...`) are scrubbed from every `bridge.log` write and every inbound message body before it reaches `bus.jsonl`.
 - **UTF-8 + length cap on inbound.** Inbound message content is clamped at 4000 bytes on a UTF-8 boundary before append, preventing pathological payloads.
+- **Outbound auto-chunking.** Discord's 2000-byte per-message cap is enforced by splitting long bodies into ordered posts (sender attribution + `(n/N)` marker on every chunk, code fences balanced across the boundary) — no content is silently truncated. SessionStart advises agents to keep per-message content focused; a plan may span chunks, a one-line ack should not.
 - **The bridge is a subprocess**, not a sender: events originating from Discord use the reserved `system` sender with `meta.source: "discord"`. A loop-guard prevents the bridge from re-mirroring Discord-sourced events back to Discord.
 - **Local operation is never blocked by Discord.** If Discord API is down, the bridge logs and retries; `bus.jsonl` flow and local agents are unaffected. Auth failures (401) trip a persistent 1-hour circuit breaker across all sessions to prevent spawn loops after token rotation.
 
@@ -226,9 +228,11 @@ Phase 2's channel doorbell requires Claude Code ≥ 2.1.80 and either approved-a
 
 | Skill | Description |
 |-------|-------------|
+| `/wrightward:help` | Rulebook — tool reference, coordination rules, Discord routing, event types, etiquette |
 | `/wrightward:collab-context` | Declare or update the current task and claimed files (`+` create, `~` modify, `-` delete) |
 | `/wrightward:collab-release` | Release specific files so other agents can work on them immediately |
 | `/wrightward:collab-done` | Release all file claims and exit coordination |
+| `/wrightward:config-init` | Write `.claude/wrightward.json` with every default populated; pass `--force` to overwrite |
 | `/wrightward:inbox` | List pending urgent messages from other agents |
 | `/wrightward:ack` | Acknowledge a handoff or other urgent event |
 | `/wrightward:handoff` | Hand a task off to another agent, releasing listed files |

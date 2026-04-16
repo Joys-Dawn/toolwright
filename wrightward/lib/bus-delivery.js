@@ -1,8 +1,9 @@
 'use strict';
 
 const { readBookmark, writeBookmark } = require('./bus-log');
-const { assertLockHeld } = require('./agents');
+const { assertLockHeld, readAgents } = require('./agents');
 const { listInbox } = require('./bus-query');
+const { handleFor } = require('./handles');
 const busMeta = require('./bus-meta');
 
 /**
@@ -78,8 +79,13 @@ function advanceBookmark(token, collabDir, sessionId, { delivered, endOffset, bo
  * applies. Hints point the agent at the exact tool to call next so the
  * auto-injection is self-contained (no forced second tool call just to
  * discover what to do).
+ *
+ * `roster` is consulted to render the sender's handle in the agent_message
+ * reply hint. When absent or the sender is not in the roster, falls back to
+ * the derived handle from the UUID (still deterministic — matches what the
+ * peer would have if it were live).
  */
-function hintForType(event) {
+function hintForType(event, roster) {
   switch (event.type) {
     case 'handoff':
       return ' → ack with wrightward_ack({id})';
@@ -89,8 +95,11 @@ function hintForType(event) {
       }
       return '';
     case 'agent_message': {
-      const from8 = (event.from || '').substring(0, 8);
-      return ` → reply via wrightward_send_message audience="${from8}"`;
+      const from = event.from || '';
+      if (!from) return '';
+      const row = roster && typeof roster === 'object' ? roster[from] : undefined;
+      const handle = handleFor(from, row);
+      return ` → reply via wrightward_send_message audience="${handle}"`;
     }
     case 'file_freed': {
       const file = event.meta && event.meta.file;
@@ -108,18 +117,22 @@ function hintForType(event) {
 
 /**
  * Formats one urgent event as a single inbox line. Shape:
- *   - [<type> id=<full-id>] from <from8>[ (Discord)][ (re: <task_ref>)]: <body>[ → <hint>]
+ *   - [<type> id=<full-id>] from <handle>[ (Discord)][ (re: <task_ref>)]: <body>[ → <hint>]
  *
  * Full id (not short) is emitted so the agent can pass it verbatim to
- * `wrightward_ack` without ambiguity.
+ * `wrightward_ack` without ambiguity. `roster` is the current agents.json
+ * map — the sender's handle is looked up (falling back to a derived handle
+ * if the sender is absent from the roster, which is still deterministic).
  */
-function formatEventLine(event) {
-  const shortFrom = (event.from || '').substring(0, 8);
+function formatEventLine(event, roster) {
+  const from = event.from || '';
+  const row = roster && typeof roster === 'object' ? roster[from] : undefined;
+  const fromLabel = from ? handleFor(from, row) : '';
   const discordTag = event.meta && event.meta.source === 'discord' ? ' (Discord)' : '';
   const taskRef = event.meta && typeof event.meta.task_ref === 'string' ? event.meta.task_ref : '';
   const reClause = taskRef ? ` (re: ${taskRef})` : '';
-  const hint = hintForType(event);
-  return `- [${event.type} id=${event.id}] from ${shortFrom}${discordTag}${reClause}: ${event.body}${hint}`;
+  const hint = hintForType(event, roster);
+  return `- [${event.type} id=${event.id}] from ${fromLabel}${discordTag}${reClause}: ${event.body}${hint}`;
 }
 
 /**
@@ -148,9 +161,10 @@ function scanAndFormatInbox(token, collabDir, sessionId, config) {
     return { text: null, eventCount: 0 };
   }
 
+  const roster = readAgents(collabDir);
   const lines = ['Urgent messages from other agents:'];
   for (const e of capped) {
-    lines.push(formatEventLine(e));
+    lines.push(formatEventLine(e, roster));
   }
   if (fresh.length > cap) {
     lines.push(`(${fresh.length - cap} more — use /wrightward:inbox to see all)`);

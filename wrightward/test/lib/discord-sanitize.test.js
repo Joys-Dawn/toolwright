@@ -141,10 +141,12 @@ describe('discord-sanitize', () => {
   });
 
   describe('parseMentions', () => {
+    // Roster uses explicit handles. `bob-42` and `bob-99` share the name
+    // `bob` so `@agent-bob` is an ambiguous name-only mention.
     const roster = {
-      'sess-abc12345': {},
-      'sess-def67890': {},
-      'sess-abc12346': {} // same short-ID prefix as sess-abc12345 → ambiguous short
+      'sess-alice': { handle: 'alice-1' },
+      'sess-bob': { handle: 'bob-42' },
+      'sess-bob2': { handle: 'bob-99' }
     };
 
     it('returns empty mentions and empty stripped for empty content', () => {
@@ -166,76 +168,38 @@ describe('discord-sanitize', () => {
       assert.equal(r.ambiguous, false);
     });
 
-    it('matches full session ID in @agent-<sessionId>', () => {
-      const r = parseMentions('@agent-sess-def67890 please review', roster);
-      assert.deepEqual(r.mentions, ['sess-def67890']);
-      assert.equal(r.stripped, 'please review');
-    });
-
-    it('matches a short-ID (first 8 chars) when unambiguous', () => {
-      const r = parseMentions('@agent-sess-def please', { 'sess-def67890': {} });
-      // 'sess-def' is 8 chars — first 8 of 'sess-def67890'. Short-ID match.
-      assert.deepEqual(r.mentions, ['sess-def67890']);
-    });
-
-    it('routes ambiguous short-ID to "all" with ambiguous=true', () => {
-      // 'sess-abc' is the 8-char prefix of both sess-abc12345 and sess-abc12346.
-      const r = parseMentions('@agent-sess-abc help', roster);
-      assert.deepEqual(r.mentions, ['all']);
-      assert.equal(r.ambiguous, true);
-    });
-
-    it('full-ID match resolves to single session without ambiguity', () => {
-      // Full-ID mentions never trigger ambiguity — even when the roster has
-      // short-ID collisions among other sessions. Fan-out only comes from
-      // resolving multiple *distinct* mentions.
-      const r = parseMentions('@agent-sess-abc12345', roster);
-      assert.deepEqual(r.mentions, ['sess-abc12345']);
-      assert.equal(r.ambiguous, false);
-    });
-
     it('drops ambiguous "all" when a sibling concrete mention also resolved', () => {
-      // Respects user intent: if the message contains at least one
-      // unambiguous full-ID mention, a sibling ambiguous short-ID must NOT
+      // Respects user intent: if the message contains at least one concrete
+      // handle mention, a sibling ambiguous name-only mention must NOT
       // broadcast to everyone (which would dilute the targeted intent). The
       // `ambiguous` flag still fires so callers can surface a "did you mean?"
       // warning alongside the targeted delivery.
-      const r = parseMentions('@agent-sess-abc then @agent-sess-def67890', roster);
-      assert.deepEqual(r.mentions, ['sess-def67890']);
+      const r = parseMentions('@agent-bob then @agent-alice-1', roster);
+      assert.deepEqual(r.mentions, ['sess-alice']);
       assert.equal(r.ambiguous, true);
     });
 
     it('keeps "all" when the only mention is ambiguous (no concrete sibling)', () => {
       // Still broadcast when the user gave us nothing more specific to work
-      // with — the ambiguous short-ID is the only signal, so broadcasting is
+      // with — the ambiguous name is the only signal, so broadcasting is
       // the safest fallback.
-      const r = parseMentions('@agent-sess-abc please', roster);
+      const r = parseMentions('@agent-bob please', roster);
       assert.deepEqual(r.mentions, ['all']);
       assert.equal(r.ambiguous, true);
     });
 
-    it('drops ambiguous "all" when a concrete short-ID mention also resolved', () => {
-      // Symmetry: both full-ID and unambiguous short-ID count as "concrete"
-      // for the drop-`all` rule. Here `sess-def` is a unique short-ID that
-      // resolves to sess-def67890; the ambiguous `sess-abc` sibling should
-      // not override it with a broadcast.
-      const r = parseMentions('@agent-sess-abc and @agent-sess-def', roster);
-      assert.deepEqual(r.mentions, ['sess-def67890']);
-      assert.equal(r.ambiguous, true);
-    });
-
     it('drops mentions that match no roster entry', () => {
-      const r = parseMentions('@agent-unknown hello', roster);
+      const r = parseMentions('@agent-unknown-99 hello', roster);
       assert.deepEqual(r.mentions, []);
       assert.equal(r.stripped, 'hello');
     });
 
     it('strips all @agent- tokens and returns every resolved target', () => {
-      const r = parseMentions('@agent-sess-def67890 fix @agent-sess-abc12345 now', roster);
+      const r = parseMentions('@agent-bob-42 fix @agent-alice-1 now', roster);
       assert.doesNotMatch(r.stripped, /@agent-/);
       assert.equal(r.stripped, 'fix now');
       // Fan-out preserves message order.
-      assert.deepEqual(r.mentions, ['sess-def67890', 'sess-abc12345']);
+      assert.deepEqual(r.mentions, ['sess-bob', 'sess-alice']);
     });
 
     it('matches free-text @agent-<id> even inside <...> brackets', () => {
@@ -243,8 +207,8 @@ describe('discord-sanitize', () => {
       // adopt that syntax for agent routing — but our free-text regex still
       // picks up the `@agent-<id>` substring inside brackets. What matters is
       // that we never route `<@<numeric>>` (that test follows).
-      const r = parseMentions('<@agent-sess-def67890> hi', roster);
-      assert.deepEqual(r.mentions, ['sess-def67890']);
+      const r = parseMentions('<@agent-alice-1> hi', roster);
+      assert.deepEqual(r.mentions, ['sess-alice']);
     });
 
     it('ignores <@12345> pure numeric Discord mentions', () => {
@@ -259,24 +223,18 @@ describe('discord-sanitize', () => {
     });
 
     it('collapses extra whitespace left behind after stripping mentions', () => {
-      const r = parseMentions('hello @agent-sess-def67890    how are you', roster);
+      const r = parseMentions('hello @agent-alice-1    how are you', roster);
       assert.equal(r.stripped, 'hello how are you');
     });
 
-    // Test #14 from plan.
-    it('returns every mention in message order when short-IDs do not collide', () => {
-      const roster2 = {
-        'sess-aaaaaaaa': {},
-        'sess-bbbbbbbb': {}
-      };
-      const r = parseMentions('@agent-sess-aaa and @agent-sess-bbb', roster2);
-      assert.deepEqual(r.mentions, ['sess-aaaaaaaa', 'sess-bbbbbbbb']);
+    it('returns every mention in message order across multiple unambiguous handles', () => {
+      const r = parseMentions('@agent-bob-42 and @agent-alice-1', roster);
+      assert.deepEqual(r.mentions, ['sess-bob', 'sess-alice']);
     });
 
-    // Test #15 from plan.
     it('dedupes the same session mentioned multiple times', () => {
-      const r = parseMentions('@agent-sess-def67890 @agent-sess-def67890 done', roster);
-      assert.deepEqual(r.mentions, ['sess-def67890']);
+      const r = parseMentions('@agent-alice-1 @agent-alice-1 done', roster);
+      assert.deepEqual(r.mentions, ['sess-alice']);
     });
 
     // Test #16 from plan (explicit empty-mentions ambiguous=false).
@@ -286,12 +244,12 @@ describe('discord-sanitize', () => {
       assert.equal(r.ambiguous, false);
     });
 
-    it('keeps ambiguous=false if only full-ID mentions are present', () => {
-      // Pin: ambiguity is per-mention and must only latch when an actual
-      // short-ID collision fires. Multiple clean full-ID mentions do not
-      // count as ambiguous even when the roster has unrelated collisions.
-      const r = parseMentions('@agent-sess-abc12345 and @agent-sess-def67890', roster);
-      assert.deepEqual(r.mentions, ['sess-abc12345', 'sess-def67890']);
+    it('keeps ambiguous=false when only full-handle mentions are present', () => {
+      // Pin: ambiguity is per-mention and must only latch when a name-only
+      // collision fires. Multiple clean full-handle mentions do not count
+      // as ambiguous even when the roster has siblings sharing a name.
+      const r = parseMentions('@agent-bob-42 and @agent-alice-1', roster);
+      assert.deepEqual(r.mentions, ['sess-bob', 'sess-alice']);
       assert.equal(r.ambiguous, false);
     });
 
@@ -308,11 +266,11 @@ describe('discord-sanitize', () => {
 
     it('preserves @agent-all alongside concrete mentions (explicit intent not filtered)', () => {
       // The concrete-sibling filter exists to drop `'all'` contributed by
-      // an ambiguous short-ID when the user also addressed someone specific.
-      // An explicit `@agent-all` is not ambiguity — it is the user asking
-      // to broadcast AND to call out a specific session. Keep both.
-      const r = parseMentions('@agent-all and @agent-sess-def67890 heads up', roster);
-      assert.deepEqual(r.mentions, ['all', 'sess-def67890']);
+      // an ambiguous name-only mention when the user also addressed someone
+      // specific. An explicit `@agent-all` is not ambiguity — it is the
+      // user asking to broadcast AND to call out a specific session. Keep both.
+      const r = parseMentions('@agent-all and @agent-alice-1 heads up', roster);
+      assert.deepEqual(r.mentions, ['all', 'sess-alice']);
       assert.equal(r.ambiguous, false);
     });
 
@@ -327,14 +285,76 @@ describe('discord-sanitize', () => {
       assert.equal(r.stripped, 'hello world');
     });
 
-    it('@agent-all coexists with an ambiguous short-ID: ambiguous=true, broadcast preserved', () => {
+    it('@agent-all coexists with an ambiguous name-only mention: ambiguous=true, broadcast preserved', () => {
       // An explicit broadcast already sets `'all'`. A sibling ambiguous
-      // short-ID does not add a duplicate (pushOnce guard) but still flips
-      // the ambiguous flag — observability for the "did you mean?" warning
-      // stays intact even though the broadcast intent is unambiguous.
-      const r = parseMentions('@agent-all also @agent-sess-abc help', roster);
+      // name-only mention does not add a duplicate (pushOnce guard) but
+      // still flips the ambiguous flag — observability for the "did you
+      // mean?" warning stays intact even though the broadcast intent is
+      // unambiguous.
+      const r = parseMentions('@agent-all also @agent-bob help', roster);
       assert.deepEqual(r.mentions, ['all']);
       assert.equal(r.ambiguous, true);
+    });
+  });
+
+  describe('parseMentions — handle-form mentions', () => {
+    // Handle-form addressing is the canonical mention form. `@agent-bob-42`
+    // (full handle) and `@agent-bob` (name-only, resolved if unambiguous)
+    // are what every Discord-facing surface advertises.
+
+    const rosterWithHandles = {
+      'sess-aaaaaaaa-1111': { handle: 'bob-42' },
+      'sess-bbbbbbbb-2222': { handle: 'sam-17' },
+      'sess-cccccccc-3333': { handle: 'bob-99' }
+    };
+
+    it('resolves full handle (@agent-bob-42) to the matching sessionId', () => {
+      const r = parseMentions('@agent-bob-42 please review', rosterWithHandles);
+      assert.deepEqual(r.mentions, ['sess-aaaaaaaa-1111']);
+      assert.equal(r.stripped, 'please review');
+      assert.equal(r.ambiguous, false);
+    });
+
+    it('resolves name-only (@agent-sam) when unambiguous', () => {
+      // sam only has one live session (sam-17) — name alone is enough.
+      const r = parseMentions('@agent-sam hi', rosterWithHandles);
+      assert.deepEqual(r.mentions, ['sess-bbbbbbbb-2222']);
+      assert.equal(r.ambiguous, false);
+    });
+
+    it('routes ambiguous name (@agent-bob) to "all" with ambiguous=true', () => {
+      // Two live `bob-*` handles — the user must disambiguate. Routing to
+      // broadcast plus the ambiguous flag lets the bridge post a "did you
+      // mean bob-42 or bob-99?" warning without losing the message.
+      const r = parseMentions('@agent-bob do the thing', rosterWithHandles);
+      assert.deepEqual(r.mentions, ['all']);
+      assert.equal(r.ambiguous, true);
+    });
+
+    it('unknown handle (@agent-eve-8) is dropped silently', () => {
+      const r = parseMentions('@agent-eve-8 hello', rosterWithHandles);
+      assert.deepEqual(r.mentions, []);
+      assert.equal(r.ambiguous, false);
+    });
+
+    it('derives handle on the fly for legacy rows missing the handle field', () => {
+      // Roster row from before the handle rollout has no `handle` — but
+      // parseMentions must still match the derived value so the mention
+      // resolves the first time, not "after the next heartbeat".
+      const { deriveHandle } = require('../../lib/handles');
+      const sid = 'legacy-sess-uuid-abc';
+      const derived = deriveHandle(sid);
+      const legacyRoster = { [sid]: { /* no handle field */ } };
+      const r = parseMentions('@agent-' + derived + ' yo', legacyRoster);
+      assert.deepEqual(r.mentions, [sid]);
+    });
+
+    it('handle-form resolution does not flip ambiguous=true when the mention lands cleanly', () => {
+      // Regression guard: if the handle matches exactly, ambiguous should
+      // stay false even when the name segment alone would have been
+      // ambiguous. Explicit `bob-42` is unambiguous by construction.
+      const r = parseMentions('@agent-bob-42 pinned', rosterWithHandles);
+      assert.equal(r.ambiguous, false);
     });
   });
 });

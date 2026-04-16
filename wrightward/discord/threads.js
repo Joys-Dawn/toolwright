@@ -5,6 +5,9 @@ const fs = require('fs');
 const { atomicWriteJson } = require('../lib/atomic-write');
 const { DiscordApiError, MAX_THREAD_NAME_LEN } = require('./api');
 const { SHORT_ID_LEN } = require('../lib/constants');
+const { readAgents } = require('../lib/agents');
+const { handleFor } = require('../lib/handles');
+const { readContext } = require('../lib/context');
 
 const INDEX_FILE = 'bus-index/discord-threads.json';
 
@@ -25,14 +28,19 @@ function writeIndex(collabDir, idx) {
 }
 
 /**
- * Builds a Discord-compatible thread name: `<task> (<shortId>)`.
+ * Builds a Discord-compatible thread name: `<task> (<handle>)`.
  * Truncated at MAX_THREAD_NAME_LEN (100 chars) with an ellipsis marker.
- * Always includes the shortId suffix so users can distinguish sessions whose
+ * Always includes the handle suffix so users can distinguish sessions whose
  * tasks happen to collide.
+ *
+ * `handle` is the `<name>-<number>` form derived from the session UUID
+ * (see lib/handles.js). Pass an empty string only in tests that don't
+ * care about identity — in production every caller routes through
+ * `readAgents` to obtain the live handle.
  */
-function threadName(task, sessionId) {
-  const shortId = (sessionId || '').substring(0, SHORT_ID_LEN);
-  const suffix = shortId ? ' (' + shortId + ')' : '';
+function threadName(task, handle) {
+  const h = typeof handle === 'string' ? handle : '';
+  const suffix = h ? ' (' + h + ')' : '';
   const maxTaskLen = MAX_THREAD_NAME_LEN - suffix.length;
   let t = (typeof task === 'string' ? task : '').trim() || 'session';
   if (t.length > maxTaskLen) {
@@ -56,6 +64,11 @@ function createThreads(collabDir, api, forumChannelId) {
   if (!api) throw new Error('api required');
   if (!forumChannelId) throw new Error('forumChannelId required');
 
+  function handleForSession(sessionId) {
+    const roster = readAgents(collabDir);
+    return handleFor(sessionId, roster[sessionId]);
+  }
+
   async function ensureThreadForSession(sessionId, task) {
     const idx = readIndex(collabDir);
     const existing = idx[sessionId];
@@ -63,8 +76,9 @@ function createThreads(collabDir, api, forumChannelId) {
       return existing.thread_id;
     }
 
-    const name = threadName(task, sessionId);
-    const initialBody = '[wrightward] session ' + sessionId.substring(0, SHORT_ID_LEN) + ' started';
+    const handle = handleForSession(sessionId);
+    const name = threadName(task, handle);
+    const initialBody = '[wrightward] session ' + handle + ' started';
     const thread = await api.createForumThread(forumChannelId, name, initialBody);
     const threadId = thread && thread.id ? thread.id : null;
     if (!threadId) {
@@ -81,7 +95,8 @@ function createThreads(collabDir, api, forumChannelId) {
     const entry = idx[sessionId];
     if (!entry || !entry.thread_id) return null;
     if (entry.archived_at) return null;
-    const name = threadName(newTask, sessionId);
+    const handle = handleForSession(sessionId);
+    const name = threadName(newTask, handle);
     // Dedup against the last rendered name. Discord's channel PATCH bucket
     // is 2 per 10 minutes per channel — a no-op PATCH burns quota and can
     // 429-block the next real rename for up to 10 minutes. Two different
@@ -190,6 +205,47 @@ function createThreads(collabDir, api, forumChannelId) {
     return { deleted, failed, skipped };
   }
 
+  /**
+   * Walks agents.json and ensures every live session has a non-archived
+   * Discord thread. Called once at bridge startup so late-joining sessions
+   * (registered while the bridge was down) get a thread without relying on
+   * the removed lazy-create path in dispatchEvent.
+   *
+   * Creates sequentially to avoid burst-creating N threads and getting
+   * rate-limited by Discord's forum-channel thread-create quota. Per-session
+   * failures are logged via `onError` but do not abort the pass — a single
+   * bad session should not starve the rest.
+   *
+   * @param {(line: string) => void} [onError] - logger for per-session failures
+   * @returns {{ created: string[], existing: string[], failed: {sessionId, error}[] }}
+   */
+  async function reconcileThreads(onError) {
+    const roster = readAgents(collabDir);
+    const created = [];
+    const existing = [];
+    const failed = [];
+    for (const sessionId of Object.keys(roster)) {
+      const existingThreadId = getThreadIdFor(sessionId);
+      if (existingThreadId) {
+        existing.push(sessionId);
+        continue;
+      }
+      try {
+        const ctx = readContext(collabDir, sessionId);
+        const taskHint = (ctx && ctx.task) || '';
+        await ensureThreadForSession(sessionId, taskHint);
+        created.push(sessionId);
+      } catch (err) {
+        const msg = (err && err.message) || String(err);
+        failed.push({ sessionId, error: msg });
+        if (typeof onError === 'function') {
+          onError('[bridge] reconcile: failed for ' + sessionId + ': ' + msg);
+        }
+      }
+    }
+    return { created, existing, failed };
+  }
+
   return {
     ensureThreadForSession,
     renameThread,
@@ -197,7 +253,8 @@ function createThreads(collabDir, api, forumChannelId) {
     getThreadIdFor,
     listSessions,
     listActiveThreads,
-    pruneArchivedBefore
+    pruneArchivedBefore,
+    reconcileThreads
   };
 }
 

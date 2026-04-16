@@ -63,6 +63,18 @@ function isWriteTool(toolName) {
 // the short-ID suffix rendered in their thread title).
 const SHORT_ID_LEN = 8;
 
+// Handle format: `<name>-<number>` where name is lowercase letters from
+// lib/wordlist.js and number is 0..MAX_HANDLE_NUMBER. Used by handles.js
+// (derivation) and discord-sanitize.js (mention parsing) as the single
+// source-of-truth shape check.
+const HANDLE_PATTERN = /^[a-z]+-\d{1,4}$/;
+const MAX_HANDLE_NUMBER = 9999;
+
+// Just the "name" portion — matches `@agent-bob` without a trailing number.
+// Used by parseMentions to detect the name-only mention form and attempt
+// unambiguous resolution against the roster.
+const HANDLE_NAME_PATTERN = /^[a-z]+$/;
+
 module.exports = {
   SESSION_ID_PATTERN,
   RESERVED_SYNTHETIC_SENDER,
@@ -73,5 +85,8 @@ module.exports = {
   validateSessionId,
   isWriteTool,
   WRITE_TOOLS,
-  SHORT_ID_LEN
+  SHORT_ID_LEN,
+  HANDLE_PATTERN,
+  HANDLE_NAME_PATTERN,
+  MAX_HANDLE_NUMBER
 };

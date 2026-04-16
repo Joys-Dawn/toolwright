@@ -136,11 +136,36 @@ describe('mirror-policy', () => {
       assert.equal(r.target_session_id, undefined);
     });
 
-    it('agent_message to "user" → post_broadcast (Discord-only reply)', () => {
-      // "user" is a reserved audience that no real session matches in
-      // matchesSession, so the bridge MUST fall through to the broadcast
-      // channel rather than try to ensure a thread for sessionId="user".
+    it('agent_message to "user" → post_thread in sender\'s thread (not broadcast)', () => {
+      // Agent replying to the human user lands in the sender's own forum
+      // thread so the conversation stays inline rather than scattering into
+      // the shared broadcast channel. This is the v3.4 special case —
+      // before that, to="user" broadcast like to="all".
       const r = decide(ev('agent_message', 'user', 'sess-A'));
+      assert.equal(r.action, 'post_thread');
+      assert.equal(r.target_session_id, 'sess-A',
+        'target must be the SENDER (event.from), not "user"');
+    });
+
+    it('handoff to "user" → post_broadcast (special case is agent_message-only)', () => {
+      // Only agent_message gets routed to the sender's thread for to="user".
+      // Other event types keep the broadcast fallback so a stray handoff
+      // addressed to "user" still surfaces to the operator.
+      const r = decide(ev('handoff', 'user', 'sess-A'));
+      assert.equal(r.action, 'post_broadcast');
+      assert.equal(r.target_session_id, undefined);
+    });
+
+    it('note to "user" → post_broadcast (special case is agent_message-only)', () => {
+      const r = decide(ev('note', 'user', 'sess-A'));
+      assert.equal(r.action, 'post_broadcast');
+    });
+
+    it('agent_message to "user" with missing from → falls through to broadcast', () => {
+      // Defensive: without a sender sessionId we have no thread to post to,
+      // so broadcast is the only reasonable fallback. Prevents a crash on
+      // malformed events.
+      const r = decide(ev('agent_message', 'user', ''));
       assert.equal(r.action, 'post_broadcast');
       assert.equal(r.target_session_id, undefined);
     });

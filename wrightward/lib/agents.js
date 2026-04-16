@@ -115,16 +115,20 @@ function writeAgents(collabDir, agents) {
 
 /**
  * Writes a registration row for this session. Caller must hold withAgentsLock.
- * Preserves registered_at if the row already exists.
+ * Preserves registered_at if the row already exists; `handle` is always set
+ * from deriveHandle — deterministic on sessionId, so re-setting is a no-op
+ * when the row already carries the right value.
  */
 function registerAgentInLock(collabDir, sessionId) {
+  const { deriveHandle } = require('./handles');
   const agents = readAgents(collabDir);
   const now = Date.now();
   const existing = agents[sessionId] || {};
   agents[sessionId] = {
     ...existing,
     registered_at: existing.registered_at || now,
-    last_active: now
+    last_active: now,
+    handle: deriveHandle(sessionId)
   };
   writeAgents(collabDir, agents);
 }
@@ -136,13 +140,16 @@ function registerAgent(collabDir, sessionId) {
 }
 
 function updateHeartbeatInLock(collabDir, sessionId) {
+  const { deriveHandle } = require('./handles');
   const agents = readAgents(collabDir);
+  const now = Date.now();
   if (agents[sessionId]) {
-    agents[sessionId].last_active = Date.now();
+    agents[sessionId].last_active = now;
   } else {
     agents[sessionId] = {
-      registered_at: Date.now(),
-      last_active: Date.now()
+      registered_at: now,
+      last_active: now,
+      handle: deriveHandle(sessionId)
     };
   }
   writeAgents(collabDir, agents);
