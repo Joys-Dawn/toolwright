@@ -20,10 +20,20 @@
     "ALLOWED_SENDERS": [],
     "POLL_INTERVAL_MS": 3000,
     "THREAD_RENAME_ON_CONTEXT_UPDATE": true,
+    "BOT_USER_AGENT": null,
     "mirrorPolicy": {
-      "note": { "action": "silent" },
-      "finding": { "action": "silent" },
-      "decision": { "action": "silent" }
+      "user_message": { "action": "post_thread" },
+      "agent_message": { "action": "post_thread" },
+      "handoff": { "action": "post_thread" },
+      "ack": { "action": "post_thread" },
+      "blocker": { "action": "post_thread" },
+      "note": { "action": "post_thread" },
+      "finding": { "action": "post_thread" },
+      "decision": { "action": "post_thread" },
+      "file_freed": { "action": "post_thread_if_targeted" },
+      "session_started": { "action": "post_broadcast" },
+      "session_ended": { "action": "post_broadcast" },
+      "context_updated": { "action": "rename_thread" }
     }
   }
 }
