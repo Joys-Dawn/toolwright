@@ -123,26 +123,9 @@ The expected banner reads *"Listening for channel messages from: server:wrightwa
 
 Once the plugin is on Anthropic's allowlist, the `--channels plugin:wrightward@<marketplace>` form will work without the `server:` workaround and without the dev flag.
 
-### Launching from VS Code / Cursor
+### IDE extensions are not supported for channels
 
-The Claude Code VS Code / Cursor extension supports [`claudeCode.claudeProcessWrapper`](https://code.claude.com/docs/en/vs-code) — an executable that wraps the `claude` binary and can prepend CLI args.
-
-**Windows — `claude-dev.cmd`:**
-```cmd
-@echo off
-claude --dangerously-load-development-channels server:wrightward-bus %*
-```
-
-**POSIX — `claude-dev.sh`:**
-```sh
-#!/usr/bin/env sh
-exec claude --dangerously-load-development-channels server:wrightward-bus "$@"
-```
-
-Then in `settings.json`:
-```json
-{ "claudeCode.claudeProcessWrapper": "C:\\Users\\<you>\\bin\\claude-dev.cmd" }
-```
+Channels only work when Claude Code is launched from a plain terminal (CLI). The **VS Code and Cursor extensions do not deliver `notifications/claude/channel` wake-up pings** — the Path 2 doorbell is silently dropped regardless of `claudeCode.claudeProcessWrapper` or dev-flag configuration. Path 1 (on-next-tool-call delivery) still works inside the IDEs, so urgent events surface on the session's next tool call — you just don't get between-turn wake-ups. If you need channels, launch `claude` from a terminal.
 
 ## Discord bridge (v3.2, opt-in)
 

@@ -130,39 +130,9 @@ Adds a `notifications/claude/channel` wake-up ping so idle sessions notice new e
 
 Expected banner: *"Listening for channel messages from: server:wrightward-bus"*.
 
-### VS Code / Cursor wrapper
+### IDE extensions are not supported
 
-Both IDEs share the `claudeCode.claudeProcessWrapper` setting — point it at a script that prepends the dev flag. Step 1 above is still required; the wrapper only handles the flag.
-
-1. Save a wrapper script. Typical path: `%USERPROFILE%\bin\` (Windows) or `~/bin/` (POSIX). The location is arbitrary — just point `settings.json` at wherever you save it.
-
-    === "Windows (`claude-dev.cmd`)"
-        ```cmd
-        @echo off
-        claude --dangerously-load-development-channels server:wrightward-bus %*
-        ```
-
-    === "POSIX (`claude-dev.sh`)"
-        ```sh
-        #!/usr/bin/env sh
-        exec claude --dangerously-load-development-channels server:wrightward-bus "$@"
-        ```
-
-2. On POSIX: `chmod +x ~/bin/claude-dev.sh`.
-
-3. Point the extension at the wrapper in User or Workspace `settings.json`:
-
-    === "Windows"
-        ```json
-        { "claudeCode.claudeProcessWrapper": "C:\\Users\\<you>\\bin\\claude-dev.cmd" }
-        ```
-
-    === "POSIX"
-        ```json
-        { "claudeCode.claudeProcessWrapper": "/home/<you>/bin/claude-dev.sh" }
-        ```
-
-4. Reload the IDE window. On next session, look for the "Listening for channel messages…" banner.
+Channels only work when Claude Code is launched from a plain terminal. The **VS Code and Cursor extensions do not deliver `notifications/claude/channel` wake-up pings** — the Path 2 doorbell is silently dropped regardless of `claudeCode.claudeProcessWrapper` or dev-flag configuration. Path 1 still works inside the IDEs (urgent events inject on the session's next tool call), so you won't lose delivery — just between-turn wake-ups. Launch `claude` from a terminal if you need the doorbell.
 
 ## Discord bridge (v3.2)
 
