@@ -130,6 +130,10 @@ Adds a `notifications/claude/channel` wake-up ping so idle sessions notice new e
 
 Expected banner: *"Listening for channel messages from: server:wrightward-bus"*.
 
+### Wait ~10 seconds between concurrent agent launches
+
+When spinning up multiple CLI agents in the same repo, wait about 10 seconds between each `claude ...` command. The MCP server binds to its session via a ticket file written by the SessionStart hook; on Windows (and other setups where `process.ppid` doesn't match the Claude Code process directly), the fallback scanner refuses to bind across more than one unclaimed ticket in its 10-second freshness window. Launching 2+ agents back-to-back leaves them all unbound — channel wake-ups silently stop until the session restarts. Spacing launches by 10s or more avoids this.
+
 ### IDE extensions are not supported
 
 Channels only work when Claude Code is launched from a plain terminal. The **VS Code and Cursor extensions do not deliver `notifications/claude/channel` wake-up pings** — the Path 2 doorbell is silently dropped regardless of `claudeCode.claudeProcessWrapper` or dev-flag configuration. Path 1 still works inside the IDEs (urgent events inject on the session's next tool call), so you won't lose delivery — just between-turn wake-ups. Launch `claude` from a terminal if you need the doorbell.

@@ -123,6 +123,10 @@ The expected banner reads *"Listening for channel messages from: server:wrightwa
 
 Once the plugin is on Anthropic's allowlist, the `--channels plugin:wrightward@<marketplace>` form will work without the `server:` workaround and without the dev flag.
 
+### Wait ~10 seconds between concurrent agent launches
+
+When spinning up multiple CLI agents in the same repo, wait about 10 seconds between each `claude ...` command. The MCP server binds to its session by correlating a ticket file written by the SessionStart hook; on Windows (and other setups where `process.ppid` doesn't match the Claude Code process directly), the fallback scanner refuses to bind across more than one unclaimed ticket in its 10-second freshness window. Launching 2+ agents back-to-back leaves them all unbound — channel wake-ups silently stop working until you restart. Spacing launches by 10s or more sidesteps this entirely.
+
 ### IDE extensions are not supported for channels
 
 Channels only work when Claude Code is launched from a plain terminal (CLI). The **VS Code and Cursor extensions do not deliver `notifications/claude/channel` wake-up pings** — the Path 2 doorbell is silently dropped regardless of `claudeCode.claudeProcessWrapper` or dev-flag configuration. Path 1 (on-next-tool-call delivery) still works inside the IDEs, so urgent events surface on the session's next tool call — you just don't get between-turn wake-ups. If you need channels, launch `claude` from a terminal.
