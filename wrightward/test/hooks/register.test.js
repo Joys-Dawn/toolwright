@@ -367,5 +367,35 @@ describe('register hook', () => {
       assert.equal(handleOf(p1), handleOf(p2),
         'handle must not change between startup and resume for the same sessionId');
     });
+
+    it('appends a post-compaction warning on source=compact', () => {
+      // Without this, agents that had a skill invoked pre-compaction will
+      // reflexively re-run the skill when Claude Code re-attaches its content
+      // after compaction — even if the work was already finished.
+      const stdout = runHook({ session_id: 'sess-compact-ctx', cwd: tmpDir, source: 'compact' });
+      const msg = JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext;
+      assert.match(msg, /compact/i,
+        'compaction warning must mention compaction: ' + msg);
+      assert.match(msg, /Read the compaction summary/i,
+        'must instruct the agent to read the summary to find where it left off: ' + msg);
+      assert.match(msg, /Do NOT re-invoke/i,
+        'must tell the agent not to re-invoke skills reflexively: ' + msg);
+      assert.match(msg, /in the middle of executing/i,
+        'must gate re-invocation on the summary saying the skill was mid-execution: ' + msg);
+    });
+
+    it('does NOT append the compaction warning on source=startup', () => {
+      const stdout = runHook({ session_id: 'sess-startup-ctx', cwd: tmpDir, source: 'startup' });
+      const msg = JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext;
+      assert.doesNotMatch(msg, /compact|compaction/i,
+        'startup must not carry the compaction warning: ' + msg);
+    });
+
+    it('does NOT append the compaction warning on source=resume', () => {
+      const stdout = runHook({ session_id: 'sess-resume-ctx', cwd: tmpDir, source: 'resume' });
+      const msg = JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext;
+      assert.doesNotMatch(msg, /compact|compaction/i,
+        'resume must not carry the compaction warning: ' + msg);
+    });
   });
 });

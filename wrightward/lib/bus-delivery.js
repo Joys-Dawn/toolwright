@@ -127,7 +127,13 @@ function hintForType(event, roster) {
 function formatEventLine(event, roster) {
   const from = event.from || '';
   const row = roster && typeof roster === 'object' ? roster[from] : undefined;
-  const fromLabel = from ? handleFor(from, row) : '';
+  // user_message events carry `from = SYNTHETIC_SENDER` (the bus runtime, not a
+  // real session). Running that through handleFor would hash it into a fake
+  // agent-looking handle like 'quinn-3740' and trick the agent into thinking
+  // the human has a handle. Label the sender as 'user' instead.
+  const fromLabel = event.type === 'user_message'
+    ? 'user'
+    : (from ? handleFor(from, row) : '');
   const discordTag = event.meta && event.meta.source === 'discord' ? ' (Discord)' : '';
   const taskRef = event.meta && typeof event.meta.task_ref === 'string' ? event.meta.task_ref : '';
   const reClause = taskRef ? ` (re: ${taskRef})` : '';

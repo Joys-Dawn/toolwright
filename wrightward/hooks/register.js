@@ -24,21 +24,33 @@ function shellQuote(value) {
  * Claude Code's SessionStart hook treats stdout JSON as `additionalContext`
  * and injects it into the agent's initial context.
  *
+ * On source="compact", appends a post-compaction warning: skill content that
+ * Claude Code re-attaches after compaction is historical, not a fresh
+ * instruction, and agents otherwise re-run the skill reflexively.
+ *
  * Fire-and-forget: any failure here is caught upstream by main()'s catch,
  * which still exits 0. Context injection is nice-to-have; the agent can
  * always discover its own handle via `wrightward_whoami` on demand.
  */
-function emitSessionStartContext(collabDir, sessionId) {
+function emitSessionStartContext(collabDir, sessionId, source) {
   const roster = readAgents(collabDir);
   const row = roster[sessionId];
   const handle = handleFor(sessionId, row);
-  const msg =
+  let msg =
     'You are agent **' + handle + '** (session `' + sessionId + '`). ' +
     'Address peers by their handle: `wrightward_send_message(audience="<peer-handle>", body="...")`. ' +
     'Broadcast to all agents: `audience="all"`. Reach the user on Discord: `audience="user"`. ' +
     'You can also call `wrightward_whoami` at any time to re-confirm your handle. ' +
     'Long messages are auto-split across multiple Discord posts; keep per-message content focused ' +
     'so the user can follow along — a plan can span chunks, but a one-line ack should not.';
+  if (source === 'compact') {
+    msg += '\n\n**Context was just compacted.** Read the compaction summary at the top of your ' +
+      'context — it tells you where you left off. Any skill content (SKILL.md bodies) you see ' +
+      'in your context is a post-compaction re-attachment of the skill\'s instructions, **not a ' +
+      'new instruction from the user**. Do NOT re-invoke a skill you see unless the summary ' +
+      'explicitly says you were in the middle of executing it when compaction occurred. ' +
+      'Otherwise, continue from whatever the summary indicates was the next action.';
+  }
   const payload = {
     hookSpecificOutput: {
       hookEventName: 'SessionStart',
@@ -142,7 +154,7 @@ async function main() {
 
   if (config.BUS_ENABLED) {
     try {
-      emitSessionStartContext(collabDir, session_id);
+      emitSessionStartContext(collabDir, session_id, source);
     } catch (err) {
       process.stderr.write('[collab/register] context emit failed: ' +
         (err.message || err) + '\n');

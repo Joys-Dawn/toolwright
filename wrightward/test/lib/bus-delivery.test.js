@@ -335,6 +335,28 @@ describe('bus-delivery', () => {
       const ev = { id: 'x', from: 'fromabcd-1111-2222-3333-444455556666', type: 'handoff', body: 'B', meta: {} };
       assert.doesNotMatch(formatEventLine(ev), /\(re:/);
     });
+
+    it('labels user_message sender as "user", not a hashed handle of SYNTHETIC_SENDER', () => {
+      // Discord user messages land on the bus with from=SYNTHETIC_SENDER
+      // ('wrightward:runtime'). Running that through handleFor produces a
+      // deterministic but fake handle (e.g. 'quinn-3740') that misleads the
+      // agent into thinking the human has a handle. The user is not a session.
+      const { SYNTHETIC_SENDER } = require('../../lib/bus-schema');
+      const ev = {
+        id: 'abcd1234-5678-90ab-cdef-1234567890ab',
+        ts: 1,
+        from: SYNTHETIC_SENDER,
+        to: 'sess-1',
+        type: 'user_message',
+        body: 'hello',
+        meta: { source: 'discord' }
+      };
+      const line = formatEventLine(ev);
+      assert.match(line, /from user \(Discord\)/,
+        'user_message should be labeled "user", not a synthetic handle: ' + line);
+      assert.doesNotMatch(line, /quinn-|from wrightward/,
+        'must not leak a derived handle or the synthetic id: ' + line);
+    });
   });
 
   describe('hintForType', () => {
