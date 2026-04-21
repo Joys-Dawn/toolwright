@@ -2,7 +2,7 @@
 
 > Single-slot undo for Claude's in-session changes — including Bash-driven mutations (deletions, `sed`/`git` rewrites) that native `/rewind` misses.
 
-**Version**: 1.2.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/timewright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/timewright/README.md)
+**Version**: 1.2.1 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/timewright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/timewright/README.md)
 
 ## Install
 

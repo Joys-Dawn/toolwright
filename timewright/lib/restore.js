@@ -9,7 +9,7 @@ const {
   readMetadata,
   markFresh
 } = require('./state');
-const { getRealRepoHead } = require('./snapshot');
+const { getRealRepoHead, runGit } = require('./snapshot');
 
 // Files at or below this size are compared via a single readFileSync on
 // each side. Anything larger is compared chunk-by-chunk via streamCompare,
@@ -105,6 +105,14 @@ function filesEqual(aPath, bPath) {
   return streamCompare(aPath, bPath);
 }
 
+function getGitVisibleFiles(cwd) {
+  const result = runGit(cwd, ['ls-files', '-co', '--exclude-standard', '-z']);
+  if (result.status !== 0) return null;
+  return new Set(
+    (result.stdout || '').split('\0').filter(Boolean).map(f => path.normalize(f))
+  );
+}
+
 /**
  * Computes the diff between the snapshot at `cwd` and the current working
  * tree. Returns { modified, added, removed, headDrift, metadata } where:
@@ -132,9 +140,12 @@ function computeDiff(cwd) {
     }
   }
 
+  const gitVisible = getGitVisibleFiles(cwd);
+
   const workingFiles = new Map();
   for (const entry of walk(cwd)) {
     if (entry.kind === 'file' || entry.kind === 'symlink') {
+      if (gitVisible && !gitVisible.has(entry.rel)) continue;
       workingFiles.set(entry.rel, entry.abs);
     }
   }
@@ -237,10 +248,12 @@ function restoreSnapshot(cwd) {
   }
 
   // Pass 2: delete working-tree files not present in the snapshot.
+  const gitVisible = getGitVisibleFiles(cwd);
   const toDelete = [];
   const dirsSeen = [];
   for (const entry of walk(cwd)) {
     if (entry.kind === 'file' || entry.kind === 'symlink') {
+      if (gitVisible && !gitVisible.has(entry.rel)) continue;
       if (!snapshotFiles.has(entry.rel)) {
         toDelete.push({ abs: entry.abs, rel: entry.rel });
       }

@@ -126,6 +126,28 @@ describe('computeDiff', () => {
       'unchanged file should NOT appear in modified');
   });
 
+  it('excludes gitignored files from the working-tree side of the diff', (t) => {
+    if (!isGitAvailable()) { t.skip(); return; }
+    ({ cwd } = initRepoWithCommit({
+      '.gitignore': 'ignored.log\nbuild/\n',
+      'tracked.txt': 'hello\n'
+    }));
+    createSnapshot(cwd);
+
+    writeFile(cwd, 'ignored.log', 'should not appear');
+    writeFile(cwd, 'build/output.js', 'should not appear either');
+    writeFile(cwd, 'legit-new.txt', 'this one is real');
+
+    const diff = computeDiff(cwd);
+
+    assert.ok(!diff.added.includes('ignored.log'),
+      'gitignored file must not appear in the diff');
+    assert.ok(!diff.added.includes(path.join('build', 'output.js')),
+      'file under gitignored directory must not appear in the diff');
+    assert.ok(diff.added.includes('legit-new.txt'),
+      'non-ignored new file must still appear in the diff');
+  });
+
   it('handles large files via streaming compare without running out of memory', (t) => {
     if (!isGitAvailable()) { t.skip(); return; }
     // 2 MB of identical content — exceeds the 1 MB inline-compare threshold
@@ -326,6 +348,28 @@ describe('restoreSnapshot', () => {
     assert.equal(readFileIfExists(cwd, 'a.txt'), 'alpha\n');
     assert.equal(readFileIfExists(cwd, 'b.txt'), 'bravo\n');
     assert.equal(readFileIfExists(cwd, 'new.txt'), null);
+  });
+
+  it('does not delete gitignored files during restore', (t) => {
+    if (!isGitAvailable()) { t.skip(); return; }
+    ({ cwd } = initRepoWithCommit({
+      '.gitignore': 'local.db\nlogs/\n',
+      'tracked.txt': 'hello\n'
+    }));
+
+    writeFile(cwd, 'local.db', 'precious user data');
+    writeFile(cwd, 'logs/app.log', 'user log file');
+    createSnapshot(cwd);
+
+    writeFile(cwd, 'tracked.txt', 'MUTATED\n');
+    restoreSnapshot(cwd);
+
+    assert.equal(readFileIfExists(cwd, 'tracked.txt'), 'hello\n',
+      'tracked file must be reverted');
+    assert.equal(readFileIfExists(cwd, 'local.db'), 'precious user data',
+      'gitignored file must survive restore');
+    assert.equal(readFileIfExists(cwd, 'logs/app.log'), 'user log file',
+      'file under gitignored directory must survive restore');
   });
 
   it('prunes empty directories left behind after deleting added files', (t) => {
