@@ -23,16 +23,18 @@ Undo every filesystem change Claude made since the most recent user prompt, incl
 
 5. **If `headDrift` is not null**: warn the user loudly. The real git HEAD has moved since the snapshot was taken (they ran `git reset`, `git checkout`, `git rebase`, or similar outside Claude). Show both `headDrift.snapshot` and `headDrift.current` SHAs and explain that undoing will overwrite their current state with snapshot-era state that assumed the old HEAD. Ask whether to proceed anyway before the AskUserQuestion below.
 
-6. Show the user a summary of what will change:
+6. **If `multiAgent` is present and `multiAgent.active` is `true`**: warn the user that multiple agents (show `multiAgent.count` and `multiAgent.handles`) are active in this repo. The snapshot captures the entire working tree — undoing will revert **all** agents' changes since the snapshot was taken, not just the calling agent's. This warning does not block — continue to the summary below.
+
+7. Show the user a summary of what will change:
    - **Modified (will be reverted)**: list `modified` — Claude changed these, undo will restore them.
    - **Added (will be DELETED)**: list `added` — these exist now but did not exist in the snapshot. Undo will delete them. **This is the dangerous set** — call it out explicitly, since it may include files the user created in parallel in their IDE.
    - **Removed (will be restored)**: list `removed` — the snapshot had these but they are gone from the working tree.
 
    If any list has more than 20 entries, show the first 20 and note how many more there are.
 
-7. Use `AskUserQuestion` to confirm. Ask: "Apply this undo? This will overwrite the working tree to match the snapshot." Offer two choices: "Yes, undo" and "No, cancel".
+8. Use `AskUserQuestion` to confirm. Ask: "Apply this undo? This will overwrite the working tree to match the snapshot." Offer two choices: "Yes, undo" and "No, cancel".
 
-8. **On "Yes, undo"**: using the **Bash tool**, run:
+9. **On "Yes, undo"**: using the **Bash tool**, run:
 
    ```
    node "${CLAUDE_PLUGIN_ROOT}/bin/undo.js" --apply
@@ -43,4 +45,4 @@ Undo every filesystem change Claude made since the most recent user prompt, incl
    - If `ok` is `true` but `errors` is a non-empty list, tell the user the undo was **partially** applied and show the list of files that failed (often caused by Windows symlink privilege issues, filesystem permissions, or files held open by another process).
    - If `ok` is `false`, show the `error` field to the user.
 
-9. **On "No, cancel"**: tell the user nothing was changed and stop.
+10. **On "No, cancel"**: tell the user nothing was changed and stop.

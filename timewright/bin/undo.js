@@ -10,6 +10,9 @@
 // NOT via `!` preprocessing — otherwise --apply runs before the user can
 // confirm. See the audit finding in the source history for details.
 
+const fs = require('fs');
+const path = require('path');
+
 const { computeDiff, restoreSnapshot } = require('../lib/restore');
 const { resolveRepoRoot } = require('../lib/root');
 
@@ -20,6 +23,24 @@ function die(msg, code = 1) {
 
 function printJson(obj) {
   process.stdout.write(JSON.stringify(obj, null, 2) + '\n');
+}
+
+function detectMultiAgent(cwd) {
+  const agentsPath = path.join(cwd, '.claude', 'collab', 'agents.json');
+  try {
+    const data = JSON.parse(fs.readFileSync(agentsPath, 'utf8'));
+    const agents = Object.values(data);
+    if (agents.length > 1) {
+      return {
+        active: true,
+        count: agents.length,
+        handles: agents.map(a => a.handle).filter(Boolean)
+      };
+    }
+  } catch {
+    // No collab directory or agents.json — single-agent session
+  }
+  return { active: false };
 }
 
 function cmdDiff(cwd) {
@@ -54,6 +75,10 @@ function cmdDiff(cwd) {
     headDrift: diff.headDrift,
     snapshotCreatedAt: diff.metadata ? diff.metadata.createdAt : null
   };
+  const multiAgent = detectMultiAgent(cwd);
+  if (multiAgent.active) {
+    summary.multiAgent = multiAgent;
+  }
   printJson(summary);
 }
 
