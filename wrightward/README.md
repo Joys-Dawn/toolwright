@@ -97,35 +97,17 @@ By default, peer messages surface on a session's next tool call (Path 1). Channe
 
 ### Launching with channels
 
-The plugin form `--channels plugin:wrightward@<marketplace>` requires wrightward to be on Anthropic's approved channel allowlist. Until it's approved, use the `server:` form instead — [Anthropic's documented workflow](https://code.claude.com/docs/en/channels-reference#test-during-the-research-preview) for plugin-developer channels:
+The plugin form `--channels plugin:wrightward@<marketplace>` requires wrightward to be on Anthropic's approved channel allowlist. Until it's approved, launch Claude Code with the development flag:
 
-1. **Add the server to your user-level MCP config** (`~/.mcp.json`):
+```
+claude --dangerously-load-development-channels plugin:wrightward@toolwright-joysdawn
+```
 
-    ```json
-    {
-      "mcpServers": {
-        "wrightward-bus": {
-          "type": "stdio",
-          "command": "node",
-          "args": ["/absolute/path/to/.claude/plugins/cache/<marketplace>/wrightward/<version>/mcp/server.mjs"]
-        }
-      }
-    }
-    ```
-
-2. **Launch Claude Code with the development flag:**
-
-    ```
-    claude --dangerously-load-development-channels server:wrightward-bus
-    ```
-
-The expected banner reads *"Listening for channel messages from: server:wrightward-bus"*. If you instead see "not on the approved channels allowlist", you used the `plugin:` form — switch to `server:` as above.
-
-Once the plugin is on Anthropic's allowlist, the `--channels plugin:wrightward@<marketplace>` form will work without the `server:` workaround and without the dev flag.
+Once the plugin is on Anthropic's channel allowlist, you can drop the `--dangerously-load-development-channels` flag.
 
 ### Wait ~10 seconds between concurrent agent launches
 
-When spinning up multiple CLI agents in the same repo, wait about 10 seconds between each `claude ...` command. The MCP server binds to its session by correlating a ticket file written by the SessionStart hook; on Windows (and other setups where `process.ppid` doesn't match the Claude Code process directly), the fallback scanner refuses to bind across more than one unclaimed ticket in its 10-second freshness window. Launching 2+ agents back-to-back leaves them all unbound — channel wake-ups silently stop working until you restart. Spacing launches by 10s or more sidesteps this entirely.
+When spinning up multiple CLI agents in the same repo, wait about 10 seconds between each `claude ...` command. The MCP server binds to its session by correlating a ticket file written by the SessionStart hook; on Windows (and other setups where `process.ppid` doesn't match the Claude Code process directly), the fallback scanner refuses to bind across more than one unclaimed ticket in its 10-second freshness window. Launching 2+ agents back-to-back leaves them all unbound — channel wake-ups silently stop working until you restart. Spacing launches by 10s sidesteps this entirely.
 
 ### IDE extensions are not supported for channels
 
@@ -209,7 +191,7 @@ When the bridge is disabled (default), Phases 1–2 behave identically to prior 
 
 ### Dependency note: the bridge does NOT require the Channels research-preview flag
 
-Phase 2's channel doorbell requires Claude Code ≥ 2.1.80 and either approved-allowlist inclusion or launching with `--dangerously-load-development-channels server:wrightward-bus`. The Discord bridge is **independent of this** — it is a subprocess that posts via REST and has no `notifications/claude/channel` dependency. The bridge functions fully even if channels are disabled; you just won't get between-turn wake-ups locally.
+Phase 2's channel doorbell requires Claude Code ≥ 2.1.80 and either approved-allowlist inclusion or launching with `--dangerously-load-development-channels plugin:wrightward@toolwright-joysdawn`. The Discord bridge is **independent of this** — it is a subprocess that posts via REST and has no `notifications/claude/channel` dependency. The bridge functions fully even if channels are disabled; you just won't get between-turn wake-ups locally.
 
 ## Skills
 

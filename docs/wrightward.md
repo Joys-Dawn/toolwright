@@ -24,13 +24,13 @@ Add to your global `~/.claude/settings.json` to skip consent dialogs:
       "Skill(wrightward:collab-context)",
       "Skill(wrightward:collab-done)",
       "Skill(wrightward:collab-release)",
-      "mcp__wrightward-bus__*"
+      "mcp__plugin_wrightward_wrightward-bus__*"
     ]
   }
 }
 ```
 
-The `mcp__wrightward-bus__*` entry auto-allows every wrightward MCP tool — important so wake-up pings don't stall on a permission prompt.
+The `mcp__plugin_wrightward_wrightward-bus__*` entry auto-allows every wrightward MCP tool — important so wake-up pings don't stall on a permission prompt.
 
 ## File coordination
 
@@ -104,31 +104,13 @@ Nine urgent (auto-inject on next tool call, capped by `BUS_URGENT_INJECTION_CAP`
 
 ## Channel push (v3.1, research preview)
 
-Adds a `notifications/claude/channel` wake-up ping so idle sessions notice new events between turns. Requires **Claude Code ≥ 2.1.80**. Gated behind Anthropic's allowlist — until wrightward is approved, use the `server:` workaround.
+Adds a `notifications/claude/channel` wake-up ping so idle sessions notice new events between turns. Requires **Claude Code ≥ 2.1.80**. Gated behind Anthropic's allowlist — until wrightward is approved, launch with the dev flag:
 
-### Enable
+```text
+claude --dangerously-load-development-channels plugin:wrightward@toolwright-joysdawn
+```
 
-1. Add the server to your user-level `~/.mcp.json`:
-
-    ```json
-    {
-      "mcpServers": {
-        "wrightward-bus": {
-          "type": "stdio",
-          "command": "node",
-          "args": ["/absolute/path/to/.claude/plugins/cache/<marketplace>/wrightward/<version>/mcp/server.mjs"]
-        }
-      }
-    }
-    ```
-
-2. Launch Claude Code with the dev flag:
-
-    ```text
-    claude --dangerously-load-development-channels server:wrightward-bus
-    ```
-
-Expected banner: *"Listening for channel messages from: server:wrightward-bus"*.
+Once wrightward is on the channel allowlist, you can drop the `--dangerously-load-development-channels` flag.
 
 ### Wait ~10 seconds between concurrent agent launches
 

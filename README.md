@@ -64,7 +64,7 @@ Sessions exchange urgent events (handoffs, blockers, findings, decisions, inter-
 
 **Optional add-ons** (see the [wrightward docs](https://joys-dawn.github.io/toolwright/wrightward/) for setup):
 
-- **Channel push** (research preview, Claude Code ≥ 2.1.80) — wakes idle sessions between turns when they receive an urgent bus event, so handoffs don't wait for the user to type. Activated by launching Claude Code with `--dangerously-load-development-channels server:wrightward-bus` until wrightward is approved in the official channel allowlist. **CLI only — the VS Code and Cursor extensions don't deliver the wake-up ping.**
+- **Channel push** (research preview, Claude Code ≥ 2.1.80) — wakes idle sessions between turns when they receive an urgent bus event, so handoffs don't wait for the user to type. Activated by launching Claude Code with `--dangerously-load-development-channels plugin:wrightward@toolwright-joysdawn` until wrightward is approved in the official channel allowlist. **CLI only — the VS Code and Cursor extensions don't deliver the wake-up ping.**
 - **Discord bridge** — disabled by default (`discord.ENABLED: false`); flip it on in `.claude/wrightward.json`. Mirrors bus events to a Discord forum channel (thread per agent) and relays replies (thread replies, `@agent-<id>` mentions, `@agent-all` broadcasts) back into the bus. REST-only, coexists with the stock Discord plugin on the same bot token. Full setup walkthrough (bot creation, Message Content Intent, OAuth2 invite, channel IDs) in the docs.
 
 See [wrightward/README.md](wrightward/) or the [docs page](https://joys-dawn.github.io/toolwright/wrightward/) for the full reference.
