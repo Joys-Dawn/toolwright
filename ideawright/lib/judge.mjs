@@ -40,7 +40,7 @@ export async function callJudge({
   user,
   model = DEFAULT_MODEL,
   cwd,
-  timeoutMs = 60_000,
+  timeoutMs = 180_000,
 } = {}) {
   if (!system || !user) throw new Error('callJudge: system and user are required');
   const spawnCwd = cwd ?? getJudgeCwd();
