@@ -10,12 +10,12 @@ const DEFAULTS = {
   llm: {
     // Model used for all LLM judge calls (pain validator + capability validator).
     // Override per-source under sources.<name>.llm.model.
-    model: 'claude-opus-4-6',
+    model: 'claude-haiku-4-5-20251001',
   },
   sources: {
     // Pipeline 1 — demand-driven (pain signals)
-    reddit: { enabled: true, subreddits: ['SomebodyMakeThis', 'AppIdeas', 'lightbulb', 'shutupandtakemymoney'] },
-    hn: { enabled: true },
+    reddit: { enabled: true, max_pages: 10 },
+    hn: { enabled: true, lookback_days: 60 },
     stackoverflow: { enabled: false },
     github: { enabled: true },
     // Pipeline 2 — supply-driven (new capabilities)

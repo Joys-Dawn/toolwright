@@ -32,13 +32,14 @@ async function searchComments(query, sinceTs) {
   return data.hits ?? [];
 }
 
-export async function mine({ cursors = {}, lookbackDays = 14, logger = console } = {}) {
+export async function mine({ cursors = {}, lookbackDays, logger = console, config = {} } = {}) {
   const observations = [];
   const updatedCursors = { ...cursors };
   const now = Math.floor(Date.now() / 1000);
+  const effectiveLookback = lookbackDays ?? config.lookback_days ?? 60;
   const sinceTs = Math.max(
     cursors['hn:last_ts'] ?? 0,
-    now - lookbackDays * 86400,
+    now - effectiveLookback * 86400,
   );
 
   let newestTs = sinceTs;

@@ -28,15 +28,32 @@ const TARGET_SUBS = [
 
 const USER_AGENT = 'ideawright/0.1 (signal-miner; contact via https://github.com/Joys-Dawn/toolwright)';
 
-async function fetchSub(sub, beforeCursor) {
-  // `before=<fullname>` returns posts NEWER than the cursor in /new listings.
-  // `after=<fullname>` would walk OLDER — wrong direction for catching new posts.
-  const url = `https://www.reddit.com/r/${sub}/new.json?limit=100${beforeCursor ? `&before=${beforeCursor}` : ''}`;
-  const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
-  if (!res.ok) throw new Error(`reddit ${sub}: HTTP ${res.status}`);
-  const data = await res.json();
-  if (!data?.data?.children) throw new Error(`reddit ${sub}: unexpected shape`);
-  return data.data.children.map((c) => c.data);
+async function fetchSub(sub, beforeCursor, maxPages = 1) {
+  // Incremental mode (cursor present): one page of posts NEWER than cursor.
+  if (beforeCursor) {
+    const url = `https://www.reddit.com/r/${sub}/new.json?limit=100&before=${beforeCursor}`;
+    const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+    if (!res.ok) throw new Error(`reddit ${sub}: HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data?.data?.children) throw new Error(`reddit ${sub}: unexpected shape`);
+    return data.data.children.map((c) => c.data);
+  }
+  // Initial mode: paginate BACKWARD with `after=<fullname>` to walk older posts.
+  const all = [];
+  let after = null;
+  for (let page = 0; page < maxPages; page++) {
+    const url = `https://www.reddit.com/r/${sub}/new.json?limit=100${after ? `&after=${after}` : ''}`;
+    const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+    if (!res.ok) throw new Error(`reddit ${sub}: HTTP ${res.status}`);
+    const data = await res.json();
+    const children = data?.data?.children ?? [];
+    if (children.length === 0) break;
+    all.push(...children.map((c) => c.data));
+    after = data.data.after;
+    if (!after) break;
+    if (page < maxPages - 1) await sleep(1100);
+  }
+  return all;
 }
 
 function sleep(ms) {
@@ -45,7 +62,7 @@ function sleep(ms) {
 
 export async function mine({
   cursors = {},
-  maxPostsPerSub = 50,
+  maxPostsPerSub,
   logger = console,
   config = {},
 } = {}) {
@@ -54,13 +71,15 @@ export async function mine({
   const subs = Array.isArray(config.subreddits) && config.subreddits.length > 0
     ? config.subreddits
     : TARGET_SUBS;
+  const maxPages = config.max_pages ?? 10;
+  const perSubCap = maxPostsPerSub ?? config.max_posts_per_sub ?? maxPages * 100;
 
   for (const sub of subs) {
     const cursorKey = `reddit:${sub}`;
     try {
-      const posts = await fetchSub(sub, cursors[cursorKey]);
+      const posts = await fetchSub(sub, cursors[cursorKey], maxPages);
       let newestId = null;
-      for (const post of posts.slice(0, maxPostsPerSub)) {
+      for (const post of posts.slice(0, perSubCap)) {
         if (!newestId) newestId = post.name;
         const text = [post.title || '', post.selftext || ''].join('\n');
         if (!hasPainPhrase(text)) continue;
