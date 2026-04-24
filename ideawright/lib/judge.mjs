@@ -83,7 +83,11 @@ export async function callJudge({
 function extractJson(text) {
   if (typeof text !== 'string') return text;
   try { return JSON.parse(text); } catch {}
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error('no JSON object in response');
-  return JSON.parse(m[0]);
+  const stripped = text.replace(/```(?:json)?\s*/gi, '').replace(/```\s*/g, '').trim();
+  try { return JSON.parse(stripped); } catch {}
+  const obj = stripped.match(/\{[\s\S]*\}/);
+  if (obj) return JSON.parse(obj[0]);
+  const arr = stripped.match(/\[[\s\S]*\]/);
+  if (arr) return JSON.parse(arr[0]);
+  throw new Error('no JSON object or array in response');
 }
