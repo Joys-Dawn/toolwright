@@ -3,10 +3,10 @@
 
 const { runHook, parsePayload } = require('../lib/hook-runner');
 
-const HOOK_NAME = 'on-stop';
+const HOOK_NAME = 'on-user-prompt-submit';
 
 function main(opts = {}) {
-  return runHook(HOOK_NAME, { ...opts, requireWtfIsLastUser: true });
+  return runHook(HOOK_NAME, { ...opts, requireWtfIsLastUser: false });
 }
 
 if (require.main === module) {

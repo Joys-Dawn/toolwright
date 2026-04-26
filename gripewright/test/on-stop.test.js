@@ -137,10 +137,15 @@ describe('on-stop hook', () => {
   });
 
   it('multiple wtfs each get their response', async () => {
-    const transcriptFile = writeTranscript(tmpDir, 'sess5', [
+    // Real Claude Code transcripts grow append-only — by the time /wtf #2's
+    // Stop fires, the transcript still contains /wtf #1 and its response.
+    // Pairing pending record N with the N-th /wtf event (not "most recent")
+    // is what keeps chained gripes correct.
+    const events1 = [
       slashCommandEvent('gripewright:wtf', '', 't1'),
       assistantEvent([{ type: 'text', text: 'first response' }], 't2'),
-    ]);
+    ];
+    const transcriptFile = writeTranscript(tmpDir, 'sess5', events1);
     store.appendRecord({ session_id: 'sess5', n: 1 }, { logFile });
 
     await onStop.main({
@@ -148,10 +153,12 @@ describe('on-stop hook', () => {
       logFile,
     });
 
-    const transcriptFile2 = writeTranscript(tmpDir, 'sess5b', [
+    const events2 = [
+      ...events1,
       slashCommandEvent('gripewright:wtf', '', 't3'),
       assistantEvent([{ type: 'text', text: 'second response' }], 't4'),
-    ]);
+    ];
+    const transcriptFile2 = writeTranscript(tmpDir, 'sess5', events2);
     store.appendRecord({ session_id: 'sess5', n: 2 }, { logFile });
 
     await onStop.main({

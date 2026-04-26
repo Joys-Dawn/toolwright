@@ -7,6 +7,10 @@ const path = require('path');
 const RENAME_ATTEMPTS = 3;
 const RENAME_BACKOFF_MS = 50;
 
+const LOCK_STALE_MS = 5000;
+const LOCK_MAX_ATTEMPTS = 20;
+const LOCK_RETRY_MS = 50;
+
 const SLEEP_BUF = new Int32Array(new SharedArrayBuffer(4));
 
 function defaultLogFile() {
@@ -15,6 +19,48 @@ function defaultLogFile() {
 
 function sleepMs(ms) {
   Atomics.wait(SLEEP_BUF, 0, 0, ms);
+}
+
+function lockPathFor(logFile) {
+  return logFile + '.lock';
+}
+
+// Serializes read-modify-write on logFile across concurrent backfills.
+// Uses O_CREAT|O_EXCL — atomic on local POSIX and Windows. Stale locks
+// older than LOCK_STALE_MS get cleared so a crashed holder can't wedge
+// every other writer for the rest of the day.
+function withLogLock(logFile, fn) {
+  const lock = lockPathFor(logFile);
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+
+  for (let attempt = 0; attempt < LOCK_MAX_ATTEMPTS; attempt++) {
+    let fd;
+    try {
+      fd = fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      try {
+        const stat = fs.statSync(lock);
+        if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+          try { fs.unlinkSync(lock); } catch {}
+          continue;
+        }
+      } catch {}
+      if (attempt < LOCK_MAX_ATTEMPTS - 1) {
+        sleepMs(LOCK_RETRY_MS + Math.floor(Math.random() * LOCK_RETRY_MS));
+        continue;
+      }
+      throw new Error(`gripewright: failed to acquire log lock at ${lock} after ${LOCK_MAX_ATTEMPTS} attempts`);
+    }
+
+    try {
+      try { fs.writeSync(fd, String(process.pid)); } catch {}
+      try { fs.closeSync(fd); } catch {}
+      return fn();
+    } finally {
+      try { fs.unlinkSync(lock); } catch {}
+    }
+  }
 }
 
 function atomicWriteText(filePath, content) {
@@ -44,7 +90,11 @@ function atomicWriteText(filePath, content) {
 function appendRecord(record, opts = {}) {
   const file = opts.logFile ?? defaultLogFile();
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, JSON.stringify(record) + '\n', 'utf8');
+  // Lock so concurrent runBackfill rewrites can't truncate this append
+  // (it reads-modifies-writes the whole file).
+  withLogLock(file, () => {
+    fs.appendFileSync(file, JSON.stringify(record) + '\n', 'utf8');
+  });
 }
 
 function readAllRecords(opts = {}) {
@@ -75,4 +125,5 @@ module.exports = {
   appendRecord,
   readAllRecords,
   rewriteAllRecords,
+  withLogLock,
 };

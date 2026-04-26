@@ -97,6 +97,72 @@ describe('log-store', () => {
     });
   });
 
+  describe('withLogLock', () => {
+    it('holds the lock file for the duration of fn', () => {
+      const lockFile = logFile + '.lock';
+      let lockedDuringFn = false;
+      store.withLogLock(logFile, () => {
+        lockedDuringFn = fs.existsSync(lockFile);
+      });
+      assert.equal(lockedDuringFn, true, 'lock file should exist while fn runs');
+      assert.equal(fs.existsSync(lockFile), false, 'lock should be released after fn returns');
+    });
+
+    it('clears stale lock files older than the stale threshold', () => {
+      const lockFile = logFile + '.lock';
+      // Simulate a crashed holder by creating an old lock file.
+      fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+      fs.writeFileSync(lockFile, '99999');
+      const past = new Date(Date.now() - 10_000);
+      fs.utimesSync(lockFile, past, past);
+
+      let ran = false;
+      store.withLogLock(logFile, () => { ran = true; });
+
+      assert.equal(ran, true);
+      assert.equal(fs.existsSync(lockFile), false);
+    });
+
+    it('cleans up the lock file even when fn throws', () => {
+      const lockFile = logFile + '.lock';
+      assert.throws(() => {
+        store.withLogLock(logFile, () => { throw new Error('boom'); });
+      }, /boom/);
+      assert.equal(fs.existsSync(lockFile), false);
+    });
+
+    it('returns the value returned by fn', () => {
+      const result = store.withLogLock(logFile, () => 'hello');
+      assert.equal(result, 'hello');
+    });
+
+    it('cross-process exclusion: blocks until a child holding the lock releases', async () => {
+      // Spawn a child that grabs the lock, holds it ~200ms, then releases.
+      // The parent's acquire attempt should block until the child releases,
+      // giving an elapsed time >= the child's hold window.
+      const { spawn } = require('child_process');
+      const childScript = `
+        const store = require(${JSON.stringify(path.resolve(__dirname, '..', 'lib', 'log-store.js'))});
+        store.withLogLock(${JSON.stringify(logFile)}, () => {
+          const start = Date.now();
+          while (Date.now() - start < 200) {}
+        });
+      `;
+      const child = spawn(process.execPath, ['-e', childScript], { stdio: 'ignore' });
+
+      // Wait briefly so the child wins the lock first.
+      await new Promise(r => setTimeout(r, 50));
+
+      const t0 = Date.now();
+      store.withLogLock(logFile, () => {});
+      const elapsed = Date.now() - t0;
+
+      await new Promise((r) => child.on('exit', r));
+
+      assert.ok(elapsed >= 100, `parent acquired immediately (elapsed=${elapsed}ms); lock not enforced cross-process`);
+    });
+  });
+
   describe('atomicWriteText EPERM retry', () => {
     it('retries on EPERM and succeeds when next rename works', (t) => {
       const target = path.join(tmpDir, 'retry-target.txt');

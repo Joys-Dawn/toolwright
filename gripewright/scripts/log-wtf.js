@@ -100,7 +100,6 @@ function main(args, opts = {}) {
     lookback_effective: effectiveLookback,
     prior_user_prompt: { text: priorText, timestamp: priorTs },
     turn_events: turnEvents,
-    label: 'negative_shortcut_or_dismissal',
   };
 
   store.appendRecord(record, opts);
