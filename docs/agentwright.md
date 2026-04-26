@@ -2,7 +2,7 @@
 
 > Chained audit pipelines with a spawned auditor and in-session verification. Run `/audit-run` — a headless `claude -p` subprocess audits a frozen snapshot, the current session independently verifies each finding and applies fixes to the live repo.
 
-**Version**: 1.8.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/agentwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/README.md)
+**Version**: 1.9.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/agentwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/README.md)
 
 ## Install
 
@@ -38,7 +38,7 @@ Requires Node.js ≥ 18 and `claude` on `PATH` (the auditor subprocess calls it)
 6. After all stages, the [verifier agent](#agents-5) validates applied fixes.
 7. A per-finding summary table prints.
 
-**Pipeline rules**: string entries run sequentially. Nested arrays (`["a", "b"]`) run as a parallel group on the same snapshot. Each new group gets a fresh snapshot of the fixed repo. Duplicate stage names auto-suffix (`correctness` → `correctness-2`).
+**Pipeline rules**: string entries run sequentially. Nested arrays (`["a", "b"]`) run as a parallel group on the same snapshot — N stages = N auditor agents. A custom stage with `skillIds: [...]` runs N audit skills in **one** agent on one snapshot ("fused stage" — useful for small diffs where the per-stage agent boot cost outweighs parallelism). Each new group gets a fresh snapshot of the fixed repo. Duplicate stage names auto-suffix (`correctness` → `correctness-2`).
 
 ## Commands
 
@@ -54,7 +54,7 @@ All seven live under the plugin's `/` namespace (they're in `commands/`, not ski
 | `/audit-reset` | `[run-id]` | Guided deletion of a run directory. |
 | `/audit-clean` | `[--logs-only]` | Prune retained artifacts per the retention policy. |
 
-## Skills (22)
+## Skills (23)
 
 Auto-discovered from `agentwright/skills/` and invokable as `/agentwright:<name>` or via the `Skill` tool.
 
@@ -98,13 +98,14 @@ Auto-discovered from `agentwright/skills/` and invokable as `/agentwright:<name>
 
 Thin wrappers that invoke the built-in agents — use `/agentwright:<name>` instead of typing `@agent-agentwright:<agent>`.
 
-| Skill | Agent | Pattern |
-|---|---|---|
-| `/agentwright:research <topic>` | deep-research | Forked — self-contained topic |
-| `/agentwright:update-docs [scope]` | update-docs | Forked — infers from git diff |
-| `/agentwright:critique [focus]` | party-pooper | Forked — reads session transcript |
-| `/agentwright:verify [focus]` | verifier | Forked — reads session transcript + git diff |
-| `/agentwright:challenge [claim]` | detective (×2) | Inline — dispatches two detectives with opposing hypotheses |
+| Skill | Agent |
+|---|---|
+| `/agentwright:research <topic>` | deep-research |
+| `/agentwright:update-docs [scope]` | update-docs |
+| `/agentwright:critique [focus]` | party-pooper |
+| `/agentwright:verify [focus]` | verifier |
+| `/agentwright:verify-plan [--plan-path <path>] [--against <ref>]` | plan-verifier |
+| `/agentwright:challenge [claim]` | detective (×2) |
 
 ### Utilities
 
@@ -112,7 +113,7 @@ Thin wrappers that invoke the built-in agents — use `/agentwright:<name>` inst
 |---|---|
 | `/agentwright:config-init` | Write `.claude/agentwright.json` with every default populated. Pass `--force` to overwrite. |
 
-## Agents (5)
+## Agents (6)
 
 Invokable as `@agent-agentwright:<name>` or via the shortcut skills above.
 
@@ -120,6 +121,7 @@ Invokable as `@agent-agentwright:<name>` or via the shortcut skills above.
 |---|---|---|
 | **detective** | Investigates a hypothesis — traces logic, reads files, runs tests, reports evidence. Backs `/agentwright:challenge`. | Read-only + research MCPs + Bash for tests |
 | **verifier** | Validates applied fixes — implementations exist, tests pass, no unstated changes. Auto-dispatched after audit fixes. | Read-only + Bash for tests |
+| **plan-verifier** | Validates that an approved plan was implemented faithfully. Anchors on three independent sources — plan, implementer's transcript (assistant turns + user directives + tool-use trace, pre-extracted from the session JSONL), and `git diff` — and emits a six-bucket report (`unreported_skips`, `unreported_additions`, `unreported_out_of_scope`, `unreported_missing_tests`, `fabricated_claims`, `acknowledged_deviations`) with a PASS/PARTIAL/FAIL verdict. Backs `/agentwright:verify-plan`. | Read-only |
 | **deep-research** | Web search and literature review. Uses Exa, Context7, AlphaXiv, Scholar Gateway, Hugging Face, PubMed, bioRxiv in parallel. | Read-only |
 | **party-pooper** | Adversarial critique. Parallel counter-evidence searches across academic, web, and docs sources. | Read-only + research MCPs |
 | **update-docs** | Keeps `.md` files in sync with code. Scoped by [`hooks/md-only-edit.js`](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/hooks/md-only-edit.js) to `.md` files only. | `.md` files only |
@@ -136,11 +138,13 @@ Run `/agentwright:config-init` to drop the full default config into your repo �
 {
   "pipelines": {
     "default": ["correctness", "security", "best-practices"],
-    "full": ["correctness", "security", ["best-practices", "perf"], ["my-checks", "ui"], "test-coverage"]
+    "full": ["correctness", "security", ["best-practices", "perf"], ["my-checks", "ui"], "test-coverage"],
+    "quick": ["audit-bundle"]
   },
   "customStages": {
     "perf": { "type": "skill", "skillId": "performance-investigation" },
-    "my-checks": { "type": "skill", "skillPath": "skills/my-custom-audit/SKILL.md" }
+    "my-checks": { "type": "skill", "skillPath": "skills/my-custom-audit/SKILL.md" },
+    "audit-bundle": { "type": "skill", "skillIds": ["correctness-audit", "security-audit", "best-practices-audit"] }
   },
   "retention": {
     "keepCompletedRuns": 2,
@@ -151,13 +155,14 @@ Run `/agentwright:config-init` to drop the full default config into your repo �
 }
 ```
 
-Custom stages are referenced by their key inside `pipelines` (e.g., `"perf"` in `full` above), or run directly with `/audit-step perf`.
+Custom stages are referenced by their key inside `pipelines` (e.g., `"perf"` in `full` above), or run directly with `/audit-step perf`. A custom stage with `skillIds` is a **fused stage**: one auditor agent loads all listed skills against one snapshot, instead of spawning N agents. Each finding the fused agent emits is tagged with an `auditType` field naming which skill it came from; the tag flows through into `summary.json`'s `rejectedFindings` and `pendingApprovals` entries. Best for 2–3 fusions on small diffs.
 
 | Key | Default | Description |
 |---|---|---|
 | `pipelines.default` | `["correctness", "security", "best-practices"]` | Pipeline for `/audit-run` with no argument. |
 | `pipelines.<name>` | — | Named pipeline. Array of stage names or nested arrays for parallel groups. |
-| `customStages.<key>.skillId` | — | Reference a builtin skill by ID. |
+| `customStages.<key>.skillId` | — | Reference a single builtin skill by ID. |
+| `customStages.<key>.skillIds` | — | Array of builtin skill IDs to fuse into one agent (mutually exclusive with `skillId` / `skillPath`). |
 | `customStages.<key>.skillPath` | — | Reference a project-relative `SKILL.md`. |
 | `retention.keepCompletedRuns` | 2 | Completed runs to retain. |
 | `retention.deleteCompletedLogs` | true | Delete stage log folders for completed runs. |
