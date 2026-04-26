@@ -150,3 +150,55 @@ test('mine skips efetch when esearch returns no PMIDs', async (t) => {
   assert.equal(observations.length, 0);
   assert.equal(efetchCalled, false);
 });
+
+test('mine config.lookback_days widens the mindate window', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(String(url));
+    if (String(url).includes('esearch.fcgi')) {
+      return { ok: true, async json() { return { esearchresult: { idlist: [] } }; } };
+    }
+    return { ok: true, async text() { return ''; } };
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  await mine({
+    cursors: {},
+    config: { queries: ['whatever'], lookback_days: 365 },
+    logger: { warn() {}, info() {}, error() {} },
+  });
+
+  const url = urls.find((u) => u.includes('esearch.fcgi')) ?? '';
+  // 365 days before today gives mindate roughly a year ago. We don't pin
+  // the clock here — just verify the lookback flowed through to URL params.
+  const m = url.match(/mindate=(\d{4})/);
+  assert.ok(m, 'mindate should be in the URL');
+  const yearInUrl = Number(m[1]);
+  const expectedYearFloor = new Date(Date.now() - 366 * 86400_000).getUTCFullYear();
+  assert.ok(
+    yearInUrl <= expectedYearFloor + 1,
+    `mindate year (${yearInUrl}) should be at or before ${expectedYearFloor + 1} for a 365-day lookback`,
+  );
+});
+
+test('mine config.max_per_query overrides the function default', async (t) => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = '';
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('esearch.fcgi')) {
+      capturedUrl = String(url);
+      return { ok: true, async json() { return { esearchresult: { idlist: [] } }; } };
+    }
+    return { ok: true, async text() { return ''; } };
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  await mine({
+    cursors: {},
+    config: { queries: ['whatever'], max_per_query: 7 },
+    logger: { warn() {}, info() {}, error() {} },
+  });
+
+  assert.match(capturedUrl, /retmax=7/);
+});

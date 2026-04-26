@@ -1,6 +1,6 @@
 // Pain-phrase detection. Word-boundary, case-insensitive patterns
-// calibrated to Reddit/HN/StackOverflow posts that precede successful
-// indie product launches. First-pass filter before LLM validation.
+// calibrated to Reddit/HN posts that precede successful indie product
+// launches. First-pass filter before LLM validation.
 
 const PAIN_PATTERNS = [
   // Explicit desire for a tool that doesn't exist

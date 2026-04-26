@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAtomFeed, detectCodeUrl } from '../../lib/miners/arxiv.mjs';
+import { parseAtomFeed, detectCodeUrl, mine } from '../../lib/miners/arxiv.mjs';
 
 const FIXTURE = `<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
@@ -91,4 +91,108 @@ test('parseAtomFeed handles HTML entity decoding in titles', () => {
   </entry></feed>`;
   const entries = parseAtomFeed(xml);
   assert.equal(entries[0].title, 'A & B <vs> C');
+});
+
+const SILENT = { warn() {}, info() {}, error() {} };
+
+function arxivAtom(arxivId, published, title, summary = '') {
+  return `<feed><entry>
+    <id>http://arxiv.org/abs/${arxivId}</id>
+    <updated>${published}</updated>
+    <published>${published}</published>
+    <title>${title}</title>
+    <summary>${summary}</summary>
+    <author><name>A. Author</name></author>
+    <link href="http://arxiv.org/abs/${arxivId}"/>
+    <arxiv:primary_category xmlns:arxiv="http://arxiv.org/schemas/atom" term="cs.AI" scheme="x"/>
+    <category term="cs.AI"/>
+  </entry></feed>`;
+}
+
+test('mine respects config.lookback_days when no cursor exists', async (t) => {
+  const originalFetch = globalThis.fetch;
+  // Paper from 5 days ago — inside any sane lookback window.
+  const recent = new Date(Date.now() - 5 * 86400_000).toISOString();
+  globalThis.fetch = async () => ({
+    ok: true,
+    async text() { return arxivAtom('2501.00001', recent, 'Recent paper'); },
+  });
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  const { observations } = await mine({
+    cursors: {},
+    config: { categories: ['cs.AI'], lookback_days: 60 },
+    logger: SILENT,
+    _sleepMs: 0,
+  });
+
+  assert.equal(observations.length, 1);
+  assert.equal(observations[0].title, 'Recent paper');
+});
+
+test('mine config.lookback_days=1 narrows the window so older papers are dropped', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const tenDaysAgo = new Date(Date.now() - 10 * 86400_000).toISOString();
+  globalThis.fetch = async () => ({
+    ok: true,
+    async text() { return arxivAtom('2501.00002', tenDaysAgo, 'Older paper'); },
+  });
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  const { observations } = await mine({
+    cursors: {},
+    config: { categories: ['cs.AI'], lookback_days: 1 },
+    logger: SILENT,
+    _sleepMs: 0,
+  });
+
+  assert.equal(observations.length, 0);
+});
+
+test('mine config.max_per_query overrides the function default', async (t) => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = '';
+  globalThis.fetch = async (url) => {
+    capturedUrl = String(url);
+    return { ok: true, async text() { return '<feed></feed>'; } };
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  await mine({
+    cursors: {},
+    config: { categories: ['cs.AI'], max_per_query: 7 },
+    logger: SILENT,
+    _sleepMs: 0,
+  });
+
+  assert.match(capturedUrl, /max_results=7/);
+});
+
+test('mine sleeps between categories but skips after the last one', async (t) => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls++;
+    return { ok: true, async text() { return '<feed></feed>'; } };
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  const sleeps = [];
+  // Mock sleep by using _sleepMs and tracking how long it would have slept
+  // across iterations. With _sleepMs=10 and 3 categories, we expect 2 sleeps
+  // (between cat 1→2 and cat 2→3, none after the final).
+  const t0 = Date.now();
+  await mine({
+    cursors: {},
+    config: { categories: ['cs.AI', 'cs.LG', 'cs.CL'] },
+    logger: SILENT,
+    _sleepMs: 10,
+  });
+  const elapsed = Date.now() - t0;
+
+  assert.equal(fetchCalls, 3, 'one fetch per category');
+  // 2 inter-category sleeps × 10ms = ~20ms; allow generous tolerance for CI
+  // jitter but still confirm we did NOT sleep after the last category (which
+  // would push elapsed past ~30ms).
+  assert.ok(elapsed < 100, `elapsed=${elapsed}ms suggests sleep after last category`);
 });

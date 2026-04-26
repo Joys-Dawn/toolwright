@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto';
 export { validateCapability as validator, validateCapabilityBatch as batchValidator } from './capability-validator.mjs';
 
 const BASE = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils';
-const USER_AGENT = 'ideawright/0.1 (capability-miner)';
+const USER_AGENT = 'ideawright (capability-miner)';
 
 const DEFAULT_QUERIES = [
   '(algorithm[Title] OR software[Title] OR tool[Title] OR framework[Title]) AND hasabstract[Filter]',
@@ -130,14 +130,16 @@ export async function mine({
   cursors = {},
   logger = console,
   config = {},
-  lookbackDays = 14,
-  maxPerQuery = 100,
+  lookbackDays,
+  maxPerQuery,
 } = {}) {
   const queries = Array.isArray(config.queries) && config.queries.length > 0
     ? config.queries
     : DEFAULT_QUERIES;
+  const effectiveLookbackDays = lookbackDays ?? (Number(config.lookback_days) > 0 ? Number(config.lookback_days) : 14);
+  const effectiveMaxPerQuery = maxPerQuery ?? config.max_per_query ?? 100;
   const now = new Date();
-  const fromDate = ymdSlash(new Date(now.getTime() - lookbackDays * 86400000));
+  const fromDate = ymdSlash(new Date(now.getTime() - effectiveLookbackDays * 86400000));
   const toDate = ymdSlash(now);
 
   const observations = [];
@@ -151,7 +153,7 @@ export async function mine({
 
     let pmids;
     try {
-      pmids = await esearch(term, fromDate, toDate, maxPerQuery);
+      pmids = await esearch(term, fromDate, toDate, effectiveMaxPerQuery);
     } catch (err) {
       logger.warn(`[pubmed] esearch failed (${term.slice(0, 40)}…): ${err.message}`);
       continue;

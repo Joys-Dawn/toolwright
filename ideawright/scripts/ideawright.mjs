@@ -14,23 +14,61 @@ const DEFAULTS = {
   },
   sources: {
     // Pipeline 1 — demand-driven (pain signals)
-    reddit: { enabled: true, max_pages: 10 },
-    hn: { enabled: true, lookback_days: 60 },
-    stackoverflow: { enabled: false },
-    github: { enabled: true },
+    reddit: {
+      enabled: true,
+      // Pages per sub on first scan (each page = ~100 posts).
+      max_pages: 10,
+      // Hard cap of posts per sub regardless of pages. null = no cap.
+      max_posts_per_sub: null,
+      // Override the built-in 16 idea/pain subreddits with your own list.
+      // Leave null to use the defaults.
+      subreddits: null,
+    },
+    hn: {
+      enabled: true,
+      // First-scan lookback window (days). After that, the cursor takes over.
+      lookback_days: 60,
+      // Max comments per pain query (Algolia hard cap is 1000).
+      max_per_query: 100,
+      // Override the built-in 8 pain phrases with your own list. null = defaults.
+      queries: null,
+    },
+    github: {
+      enabled: true,
+      // First-scan lookback window (days).
+      lookback_days: 14,
+      // Issues per query (GitHub search hard cap is 100/page).
+      max_per_query: 50,
+      // Override the built-in 3 issue queries with your own list. null = defaults.
+      queries: null,
+    },
     // Pipeline 2 — supply-driven (new capabilities)
     arxiv: {
       enabled: true,
       categories: ['cs.AI', 'cs.LG', 'cs.CL', 'cs.CV', 'cs.IR', 'cs.DB', 'cs.SE', 'cs.HC', 'stat.ML', 'q-bio.QM'],
       require_code_url: false,
+      // First-scan lookback window (days).
+      lookback_days: 14,
+      // Max papers fetched per category.
+      max_per_query: 50,
     },
     biorxiv: {
       enabled: true,
       server: 'biorxiv',
       categories: ['bioinformatics', 'systems biology', 'synthetic biology', 'genomics', 'genetics', 'neuroscience'],
+      // First-scan lookback window (days).
+      lookback_days: 14,
+      // Max papers fetched per scan across all pages of the bioRxiv API.
+      max_per_run: 300,
     },
     pubmed: {
       enabled: true,
+      // First-scan lookback window (days).
+      lookback_days: 14,
+      // PMIDs fetched per query (NCBI esearch retmax).
+      max_per_query: 100,
+      // Override the built-in 3 PubMed queries with your own list. null = defaults.
+      queries: null,
     },
   },
   novelty: {
@@ -60,7 +98,6 @@ const DEFAULTS = {
   },
   weights: { pain: 0.3, novelty: 0.4, feasibility: 0.3 },
   digest: { top_n: 10 },
-  schedule: { daily_cron: '0 9 * * *' },
 };
 
 function loadConfig() {

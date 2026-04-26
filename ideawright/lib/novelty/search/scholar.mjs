@@ -11,7 +11,7 @@ export async function searchScholar(query, { limit = 10, signal } = {}) {
     limit: String(limit),
     fields: FIELDS,
   });
-  const headers = { "User-Agent": "ideawright-novelty/0.1" };
+  const headers = { "User-Agent": "ideawright-novelty" };
   const key = process.env.SEMANTIC_SCHOLAR_API_KEY;
   if (key) headers["x-api-key"] = key;
   const res = await fetch(`${API}?${params}`, { headers, signal });

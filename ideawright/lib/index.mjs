@@ -3,7 +3,6 @@ export {
   insertIdea,
   updateNovelty,
   updateFeasibility,
-  archive,
   listByStatus,
   listTopRanked,
   statusCounts,

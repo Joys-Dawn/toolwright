@@ -2,7 +2,7 @@
 
 > Daily ranked list of novel, code-only product ideas backed by quoted public evidence. Mines pain-point posts (Reddit / HN / GitHub issues) and newly-published capabilities (arXiv / bioRxiv / PubMed), runs a six-source novelty check, gates on three feasibility constraints, and writes a top-N Markdown digest with build sketches and quoted evidence.
 
-**Version**: 0.7.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/ideawright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/ideawright/README.md)
+**Version**: 0.8.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/ideawright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/ideawright/README.md)
 
 ## Install
 
@@ -23,7 +23,7 @@ ideawright burns a lot of LLM tokens. A single `/ideawright:daily` on a fresh da
 
 Order-of-magnitude for a first big run: **a few hundred to a few thousand** invocations, in the **single-digit dollars** range on Haiku and proportionally more on bigger models. Subsequent scans only see new posts/papers thanks to per-source cursors.
 
-**To cap spend**: shrink `sources.reddit.subreddits`, lower `sources.reddit.max_pages`, tighten `sources.arxiv.categories`, set `sources.arxiv.require_code_url=true`, disable sources you don't need, stick with the default Haiku model, and run `/ideawright:scan` and `/ideawright:vet` separately on small slices before committing to `/ideawright:daily` end-to-end. There is no built-in budget cap.
+**To cap spend**: shrink `sources.reddit.subreddits`, lower `sources.reddit.max_pages`, tighten `sources.arxiv.categories`, set `sources.arxiv.require_code_url=true`, lower `sources.<name>.lookback_days` and `sources.<name>.max_per_query` (or `max_per_run`/`max_posts_per_sub`), disable sources you don't need, stick with the default Haiku model, and run `/ideawright:scan` and `/ideawright:vet` separately on small slices before committing to `/ideawright:daily` end-to-end. There is no built-in budget cap.
 
 ## Using it
 
@@ -191,14 +191,36 @@ Run `/ideawright:config-init` to drop the full default config into your repo —
 
 ### Source toggles
 
+Every source has the same shape: an `enabled` flag, plus per-source knobs. Run `/ideawright:config-init` to drop a fully-defaulted file with every key populated and inline comments.
+
 | Key | Default | Notes |
 |---|---|---|
-| `sources.reddit.enabled` / `subreddits` / `max_pages` | on / 16 default subs / 10 | Pages per sub on first run; cursor-paginates afterward. |
-| `sources.hn.enabled` / `lookback_days` | on / 60 | First-run window; cursor takes over after. |
-| `sources.github.enabled` | on | `GITHUB_TOKEN` env raises rate limit. |
-| `sources.arxiv.enabled` / `categories` / `require_code_url` | on / 10 cs+stat+qbio cats / `false` | Set `require_code_url=true` to drop papers without a detected code link. |
-| `sources.biorxiv.enabled` / `server` / `categories` | on / `biorxiv` / 6 default cats | `server: medrxiv` for medical preprints. |
-| `sources.pubmed.enabled` | on | `NCBI_API_KEY` env raises rate limit. |
+| `sources.reddit.enabled` | `true` | Master switch. |
+| `sources.reddit.subreddits` | `null` | Array of sub names without `/r/`; `null` falls back to 16 built-ins. |
+| `sources.reddit.max_pages` | `10` | Pages per sub on first run; cursor-paginates afterward. |
+| `sources.reddit.max_posts_per_sub` | `null` | Cap on observations per sub per run; `null` = no cap (uses `max_pages * 100`). |
+| `sources.hn.enabled` | `true` | Master switch. |
+| `sources.hn.lookback_days` | `60` | First-run window in days; cursor takes over after. |
+| `sources.hn.max_per_query` | `100` | Algolia `hitsPerPage` per query (max 1000). |
+| `sources.hn.queries` | `null` | Array of Algolia query strings; `null` falls back to 8 built-in pain phrases (`"i wish there was"`, `"someone should build"`, …). |
+| `sources.github.enabled` | `true` | `GITHUB_TOKEN` env raises rate limit. |
+| `sources.github.lookback_days` | `14` | First-run window for `updated:>=…` filter. |
+| `sources.github.max_per_query` | `50` | GitHub `per_page` (max 100). |
+| `sources.github.queries` | `null` | Array of GitHub Search query strings; `null` falls back to 3 built-ins (`is:closed reason:"not planned" comments:>5`, `label:"help wanted" no:assignee comments:>3`, `label:wontfix reactions:>10`). |
+| `sources.arxiv.enabled` | `true` | Master switch. |
+| `sources.arxiv.categories` | `["cs.AI", …]` | Array of arXiv categories; defaults to 10 cs+stat+qbio cats. |
+| `sources.arxiv.require_code_url` | `false` | Set `true` to drop papers without a detected code link. |
+| `sources.arxiv.lookback_days` | `14` | First-run window in days; cursor takes over after. |
+| `sources.arxiv.max_per_query` | `50` | arXiv `max_results` per category. |
+| `sources.biorxiv.enabled` | `true` | Master switch. |
+| `sources.biorxiv.server` | `"biorxiv"` | `"biorxiv"` or `"medrxiv"` for medical preprints. |
+| `sources.biorxiv.categories` | `["bioinformatics", …]` | Array of subject categories; defaults to 6 cats. |
+| `sources.biorxiv.lookback_days` | `14` | First-run window in days. |
+| `sources.biorxiv.max_per_run` | `300` | Hard cap on papers fetched per run (paginates 100 at a time). |
+| `sources.pubmed.enabled` | `true` | `NCBI_API_KEY` env raises rate limit. |
+| `sources.pubmed.lookback_days` | `14` | First-run window in days; cursor takes over after. |
+| `sources.pubmed.max_per_query` | `100` | E-utilities `retmax` per query. |
+| `sources.pubmed.queries` | `null` | Array of PubMed query strings; `null` falls back to 6 built-in software/algorithm/ML queries. |
 
 ### Novelty + ranking + digest
 
@@ -212,7 +234,6 @@ Run `/ideawright:config-init` to drop the full default config into your repo —
 | `feasibility.require_code_only` / `require_no_capital` / `require_no_private_data` | all `true` | Hard gates. Set `false` to keep ideas that fail them. |
 | `weights.pain` / `novelty` / `feasibility` | `0.3 / 0.4 / 0.3` | Composite rank weights. |
 | `digest.top_n` | `10` | Ideas in each daily digest file. |
-| `schedule.daily_cron` | `0 9 * * *` | Reference cron for external schedulers — ideawright doesn't run a cron itself. |
 
 ### Optional env vars
 
@@ -237,5 +258,5 @@ Run `/ideawright:config-init` to drop the full default config into your repo —
 ## Notes
 
 - On Node 22.5–23 you'll see `ExperimentalWarning: SQLite is an experimental feature` on first DB touch. Suppress with `NODE_NO_WARNINGS=1` or upgrade to Node 24+.
-- The runner doesn't schedule itself. Wire `/ideawright:daily` into a cron, GitHub Actions, or the Claude Code background agents feature using `schedule.daily_cron` as your reference expression.
+- The runner doesn't schedule itself. Wire `/ideawright:daily` into a cron, GitHub Actions, or the Claude Code background agents feature.
 - Each judge call spawns a fresh `claude -p` subprocess. Expect the LLM bill to dominate runtime — minimize by tightening source filters, lowering `novelty.batch_size`, or routing capability validation to Haiku via `sources.<name>.llm.model`.

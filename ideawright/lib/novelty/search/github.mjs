@@ -3,7 +3,7 @@ const API = "https://api.github.com";
 function headers() {
   const h = {
     "Accept": "application/vnd.github+json",
-    "User-Agent": "ideawright-novelty/0.1",
+    "User-Agent": "ideawright-novelty",
     "X-GitHub-Api-Version": "2022-11-28"
   };
   const tok = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;

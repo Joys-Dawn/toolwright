@@ -26,7 +26,7 @@ const TARGET_SUBS = [
   'datascience',
 ];
 
-const USER_AGENT = 'ideawright/0.1 (signal-miner; contact via https://github.com/Joys-Dawn/toolwright)';
+const USER_AGENT = 'ideawright (signal-miner; contact via https://github.com/Joys-Dawn/toolwright)';
 
 async function fetchSub(sub, beforeCursor, maxPages = 1) {
   // Incremental mode (cursor present): one page of posts NEWER than cursor.

@@ -7,7 +7,7 @@ export async function searchHN(query, { limit = 10, signal } = {}) {
     hitsPerPage: String(limit)
   });
   const res = await fetch(`${API}?${params}`, {
-    headers: { "User-Agent": "ideawright-novelty/0.1" },
+    headers: { "User-Agent": "ideawright-novelty" },
     signal
   });
   if (!res.ok) throw new Error(`hn status=${res.status}`);

@@ -19,11 +19,11 @@ const PAIN_QUERIES = [
   '"every tool i tried"',
 ];
 
-async function searchComments(query, sinceTs) {
+async function searchComments(query, sinceTs, hitsPerPage = 100) {
   const params = new URLSearchParams({
     query,
     tags: 'comment',
-    hitsPerPage: '100',
+    hitsPerPage: String(hitsPerPage),
     numericFilters: `created_at_i>${sinceTs}`,
   });
   const res = await fetch(`${BASE}/search_by_date?${params}`);
@@ -32,11 +32,15 @@ async function searchComments(query, sinceTs) {
   return data.hits ?? [];
 }
 
-export async function mine({ cursors = {}, lookbackDays, logger = console, config = {} } = {}) {
+export async function mine({ cursors = {}, lookbackDays, logger = console, config = {}, maxPerQuery } = {}) {
   const observations = [];
   const updatedCursors = { ...cursors };
   const now = Math.floor(Date.now() / 1000);
   const effectiveLookback = lookbackDays ?? config.lookback_days ?? 60;
+  const effectiveMaxPerQuery = maxPerQuery ?? config.max_per_query ?? 100;
+  const queries = Array.isArray(config.queries) && config.queries.length > 0
+    ? config.queries
+    : PAIN_QUERIES;
   const sinceTs = Math.max(
     cursors['hn:last_ts'] ?? 0,
     now - effectiveLookback * 86400,
@@ -45,9 +49,9 @@ export async function mine({ cursors = {}, lookbackDays, logger = console, confi
   let newestTs = sinceTs;
   const seen = new Set();
 
-  for (const q of PAIN_QUERIES) {
+  for (const q of queries) {
     try {
-      const hits = await searchComments(q, sinceTs);
+      const hits = await searchComments(q, sinceTs, effectiveMaxPerQuery);
       for (const hit of hits) {
         const id = hit.objectID;
         if (seen.has(id)) continue;

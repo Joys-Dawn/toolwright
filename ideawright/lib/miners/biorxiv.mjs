@@ -9,7 +9,7 @@
 export { validateCapability as validator, validateCapabilityBatch as batchValidator } from './capability-validator.mjs';
 
 const BASE = 'https://api.biorxiv.org';
-const USER_AGENT = 'ideawright/0.1 (capability-miner)';
+const USER_AGENT = 'ideawright (capability-miner)';
 
 // Subjects where a paper tends to describe a method/algorithm/dataset that a
 // solo dev could build a product around. Excludes wet-lab-only categories.
@@ -51,18 +51,20 @@ export async function mine({
   cursors = {},
   logger = console,
   config = {},
-  lookbackDays = 14,
-  maxPerRun = 300,
+  lookbackDays,
+  maxPerRun,
   now = () => new Date(),
 } = {}) {
   const server = config.server === 'medrxiv' ? 'medrxiv' : 'biorxiv';
   const wantedCategories = Array.isArray(config.categories) && config.categories.length > 0
     ? config.categories
     : DEFAULT_CATEGORIES;
+  const effectiveLookbackDays = lookbackDays ?? (Number(config.lookback_days) > 0 ? Number(config.lookback_days) : 14);
+  const effectiveMaxPerRun = maxPerRun ?? config.max_per_run ?? 300;
 
   const cursorKey = `${server}:last_doi_date`;
   const today = now();
-  const lookback = lookbackDays * 86400000;
+  const lookback = effectiveLookbackDays * 86400000;
   const fromDate = ymd(new Date(today.getTime() - lookback));
   const toDate = ymd(today);
   const sinceDate = cursors[cursorKey] ?? fromDate;
@@ -74,7 +76,7 @@ export async function mine({
   let fetched = 0;
   const seenDois = new Set();
 
-  while (fetched < maxPerRun) {
+  while (fetched < effectiveMaxPerRun) {
     let data;
     try {
       data = await fetchPage(server, fromDate, toDate, pageCursor);

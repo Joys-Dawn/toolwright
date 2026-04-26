@@ -28,10 +28,10 @@ function headers() {
   return h;
 }
 
-async function searchIssues(query, page = 1) {
+async function searchIssues(query, page = 1, perPage = 50) {
   const params = new URLSearchParams({
     q: query,
-    per_page: '50',
+    per_page: String(perPage),
     page: String(page),
   });
   const res = await fetch(`${BASE}/search/issues?${params}`, { headers: headers() });
@@ -42,17 +42,27 @@ async function searchIssues(query, page = 1) {
   return res.json();
 }
 
-export async function mine({ cursors = {}, maxPerQuery = 50, logger = console } = {}) {
+export async function mine({
+  cursors = {},
+  logger = console,
+  config = {},
+  maxPerQuery,
+} = {}) {
   const observations = [];
   const updatedCursors = { ...cursors };
+  const queries = Array.isArray(config.queries) && config.queries.length > 0
+    ? config.queries
+    : ISSUE_QUERIES;
+  const lookbackDays = Number(config.lookback_days) > 0 ? Number(config.lookback_days) : 14;
+  const effectiveMaxPerQuery = maxPerQuery ?? config.max_per_query ?? 50;
   const seenIds = new Set();
-  const sinceIso = cursors['github:last_ts'] ?? new Date(Date.now() - 14 * 86400000).toISOString();
+  const sinceIso = cursors['github:last_ts'] ?? new Date(Date.now() - lookbackDays * 86400000).toISOString();
   let newestIso = sinceIso;
 
-  for (const q of ISSUE_QUERIES) {
+  for (const q of queries) {
     try {
-      const data = await searchIssues(q);
-      for (const item of (data.items ?? []).slice(0, maxPerQuery)) {
+      const data = await searchIssues(q, 1, Math.min(effectiveMaxPerQuery, 100));
+      for (const item of (data.items ?? []).slice(0, effectiveMaxPerQuery)) {
         if (seenIds.has(item.id)) continue;
         seenIds.add(item.id);
         if (item.updated_at > newestIso) newestIso = item.updated_at;

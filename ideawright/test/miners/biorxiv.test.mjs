@@ -82,6 +82,71 @@ test('mine respects the since-date cursor', async (t) => {
   assert.equal(observations[0].title, 'After cursor');
 });
 
+test('mine config.lookback_days widens the from→to window', async (t) => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = '';
+  globalThis.fetch = async (url) => {
+    capturedUrl = String(url);
+    return {
+      ok: true,
+      async json() {
+        return { messages: [{ status: 'ok', count: 0, total: 0, cursor: 0 }], collection: [] };
+      },
+    };
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  await mine({
+    cursors: {},
+    config: { categories: ['bioinformatics'], lookback_days: 90 },
+    logger: { warn() {}, info() {}, error() {} },
+    now: () => new Date('2026-04-12T00:00:00Z'),
+  });
+
+  // 90 days before 2026-04-12 → 2026-01-12. Should appear in URL path.
+  assert.match(capturedUrl, /\/2026-01-12\/2026-04-12\//);
+});
+
+test('mine config.max_per_run caps how many papers get fetched', async (t) => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return {
+      ok: true,
+      async json() {
+        // Each page returns 5 papers and reports total=999 so the loop would
+        // otherwise keep paginating forever.
+        const papers = Array.from({ length: 5 }, (_, i) => ({
+          doi: `10.1/p${calls}-${i}`,
+          title: `t${calls}-${i}`,
+          abstract: 'x',
+          authors: 'A',
+          date: '2026-04-11',
+          category: 'bioinformatics',
+          version: '1',
+        }));
+        return {
+          messages: [{ status: 'ok', count: 5, total: 999, cursor: 0 }],
+          collection: papers,
+        };
+      },
+    };
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  await mine({
+    cursors: {},
+    config: { categories: ['bioinformatics'], max_per_run: 7 },
+    logger: { warn() {}, info() {}, error() {} },
+    now: FIXED_NOW,
+  });
+
+  // After page 1 (5 fetched), second iteration starts (5 < 7), fetches 5 more
+  // (total 10 fetched), loop terminates because 10 >= 7. So exactly 2 fetches.
+  assert.equal(calls, 2);
+});
+
 test('mine paginates until pageCursor >= window total', async (t) => {
   const originalFetch = globalThis.fetch;
   const calls = [];

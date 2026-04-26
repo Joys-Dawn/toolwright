@@ -15,7 +15,7 @@ const DEFAULT_CATEGORIES = [
 ];
 
 const BASE = 'http://export.arxiv.org/api/query';
-const USER_AGENT = 'ideawright/0.1 (capability-miner; contact via https://github.com/Joys-Dawn/toolwright)';
+const USER_AGENT = 'ideawright (capability-miner; contact via https://github.com/Joys-Dawn/toolwright)';
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -109,7 +109,8 @@ export async function mine({
   cursors = {},
   logger = console,
   config = {},
-  maxPerQuery = 50,
+  maxPerQuery,
+  _sleepMs,
 } = {}) {
   const observations = [];
   const updatedCursors = { ...cursors };
@@ -117,14 +118,18 @@ export async function mine({
     ? config.categories
     : DEFAULT_CATEGORIES;
   const requireCode = config.require_code_url === true;
+  const lookbackDays = Number(config.lookback_days) > 0 ? Number(config.lookback_days) : 14;
+  const effectiveMaxPerQuery = maxPerQuery ?? config.max_per_query ?? 50;
+  const interCategorySleepMs = _sleepMs ?? 8000;
 
-  for (const cat of cats) {
+  for (let i = 0; i < cats.length; i++) {
+    const cat = cats[i];
     const cursorKey = `arxiv:${cat}`;
-    const sinceIso = cursors[cursorKey] ?? new Date(Date.now() - 14 * 86400000).toISOString();
+    const sinceIso = cursors[cursorKey] ?? new Date(Date.now() - lookbackDays * 86400000).toISOString();
     let newestIso = sinceIso;
 
     try {
-      const entries = await queryCategory(cat, maxPerQuery);
+      const entries = await queryCategory(cat, effectiveMaxPerQuery);
       for (const e of entries) {
         if (e.published && e.published > newestIso) newestIso = e.published;
         if (e.published && e.published <= sinceIso) continue;
@@ -154,9 +159,10 @@ export async function mine({
       updatedCursors[cursorKey] = newestIso;
     } catch (err) {
       logger.warn(`[arxiv] ${cat} failed: ${err.message}`);
-    } finally {
-      await sleep(8000);
     }
+    // Politeness gap between categories per arXiv's 1 req / 3s API policy.
+    // Skip after the last category — no point sleeping before returning.
+    if (i < cats.length - 1) await sleep(interCategorySleepMs);
   }
 
   return { observations, cursors: updatedCursors };

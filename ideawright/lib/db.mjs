@@ -80,12 +80,6 @@ export function updateFeasibility(db, id, feasibility, composite_rank, newStatus
   logTransition(db, id, current?.status ?? null, newStatus, 'orchestrator', note);
 }
 
-export function archive(db, id, reason, actor = 'orchestrator') {
-  const current = db.prepare('SELECT status FROM ideas WHERE id = ?').get(id);
-  db.prepare(`UPDATE ideas SET status = 'archived', updated_at = datetime('now') WHERE id = ?`).run(id);
-  logTransition(db, id, current?.status ?? null, 'archived', actor, reason);
-}
-
 export function getIdea(db, id) {
   const row = db.prepare('SELECT * FROM ideas WHERE id = ?').get(id);
   return row ? rowToIdea(row) : null;

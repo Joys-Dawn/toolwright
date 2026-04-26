@@ -1,0 +1,102 @@
+{
+  "llm": {
+    "model": "claude-haiku-4-5-20251001"
+  },
+  "sources": {
+    "reddit": {
+      "enabled": true,
+      "max_pages": 10,
+      "max_posts_per_sub": null,
+      "subreddits": null
+    },
+    "hn": {
+      "enabled": true,
+      "lookback_days": 60,
+      "max_per_query": 100,
+      "queries": null
+    },
+    "github": {
+      "enabled": true,
+      "lookback_days": 14,
+      "max_per_query": 50,
+      "queries": null
+    },
+    "arxiv": {
+      "enabled": true,
+      "categories": [
+        "cs.AI",
+        "cs.LG",
+        "cs.CL",
+        "cs.CV",
+        "cs.IR",
+        "cs.DB",
+        "cs.SE",
+        "cs.HC",
+        "stat.ML",
+        "q-bio.QM"
+      ],
+      "require_code_url": false,
+      "lookback_days": 14,
+      "max_per_query": 50
+    },
+    "biorxiv": {
+      "enabled": true,
+      "server": "biorxiv",
+      "categories": [
+        "bioinformatics",
+        "systems biology",
+        "synthetic biology",
+        "genomics",
+        "genetics",
+        "neuroscience"
+      ],
+      "lookback_days": 14,
+      "max_per_run": 300
+    },
+    "pubmed": {
+      "enabled": true,
+      "lookback_days": 14,
+      "max_per_query": 100,
+      "queries": null
+    }
+  },
+  "novelty": {
+    "novel_max": 2,
+    "niche_max": 5,
+    "competitor_overlap": 0.6,
+    "batch_size": 10,
+    "llm": {
+      "model": "claude-haiku-4-5-20251001"
+    },
+    "sources": {
+      "exa": {
+        "enabled": true
+      },
+      "github": {
+        "enabled": true
+      },
+      "hn": {
+        "enabled": true
+      },
+      "npm": {
+        "enabled": true
+      },
+      "scholar": {
+        "enabled": true
+      }
+    }
+  },
+  "feasibility": {
+    "require_code_only": true,
+    "require_no_capital": true,
+    "require_no_private_data": true
+  },
+  "weights": {
+    "pain": 0.3,
+    "novelty": 0.4,
+    "feasibility": 0.3
+  },
+  "digest": {
+    "top_n": 10
+  }
+}

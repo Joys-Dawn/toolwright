@@ -22,7 +22,7 @@ export async function searchNpm(query, { limit = 10, signal } = {}) {
   if (!text) return [];
   const params = new URLSearchParams({ text, size: String(limit) });
   const res = await fetch(`${API}?${params}`, {
-    headers: { "User-Agent": "ideawright-novelty/0.1" },
+    headers: { "User-Agent": "ideawright-novelty" },
     signal
   });
   if (!res.ok) throw new Error(`npm status=${res.status}`);

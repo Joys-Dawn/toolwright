@@ -4,7 +4,7 @@ Claude Code plugin that gives you a daily ranked list of **novel**, **code-only*
 
 - **Demand mining** — pain-point posts on Reddit, Hacker News, and GitHub issues ("I wish there was…", "frustrated with…", closed-not-planned issues with traction).
 - **Supply mining** — newly-published capabilities on arXiv, bioRxiv, and PubMed (techniques, tools, datasets that just became available).
-- **Novelty verification** — every candidate is checked against a six-source web search (DuckDuckGo, Exa, GitHub repos+code, Hacker News, npm, Semantic Scholar) and labeled `novel` / `niche` / `crowded`.
+- **Novelty verification** — every candidate is checked against a five-source web search (Exa, GitHub repos+code, Hacker News, npm, Semantic Scholar) and labeled `novel` / `niche` / `crowded`.
 - **Feasibility gates** — three hard gates (`code_only`, `no_capital`, `no_private_data`) drop ideas a solo developer can't realistically ship.
 - **Composite ranking** — pain × novelty × feasibility weights produce a daily Top-N digest with a one-paragraph build sketch and a quoted piece of evidence per idea.
 - **Per-source cursors** — first scan is the expensive one; subsequent runs only pull what's new.
@@ -25,6 +25,7 @@ Order-of-magnitude for a first big run: **a few hundred to a few thousand `claud
 
 - Drop `sources.reddit.subreddits` to a smaller list and lower `sources.reddit.max_pages` (default 10).
 - Tighten `sources.arxiv.categories` and set `sources.arxiv.require_code_url=true` to skip papers without code.
+- Lower `sources.<name>.lookback_days` and `sources.<name>.max_per_query` (or `max_per_run` / `max_posts_per_sub`) to bound how much each miner pulls per run.
 - Disable sources you don't need: `sources.<name>.enabled=false` for miners, `novelty.sources.<name>.enabled=false` for the novelty battery.
 - Stick with the default Haiku model. Each per-source `llm.model` override applies to that miner's validator only — Opus on `arxiv` will multiply that miner's cost by ~10×.
 - Run `/ideawright:scan` and `/ideawright:vet` separately on small slices before committing to `/ideawright:daily` end-to-end.
@@ -96,16 +97,31 @@ Run `/ideawright:config-init` to drop the full default config into your repo —
 
 ### Sources
 
+Every source has the same shape: an `enabled` flag plus per-source knobs. Run `/ideawright:config-init` to drop a fully-defaulted file with every key visible.
+
 | Key | Default | Notes |
 |---|---|---|
-| `sources.reddit.subreddits` | 16 idea/pain subs | Override with your own list. |
-| `sources.reddit.max_pages` | 10 | Pages per sub on first run. |
-| `sources.hn.lookback_days` | 60 | First-run window. |
-| `sources.arxiv.categories` | `cs.AI/LG/CL/CV/IR/DB/SE/HC, stat.ML, q-bio.QM` | arXiv categories to query. |
-| `sources.arxiv.require_code_url` | `false` | When `true`, drops papers with no detected GitHub/HF/GitLab link. |
-| `sources.biorxiv.server` | `biorxiv` | Use `medrxiv` for medical preprints. |
-| `sources.biorxiv.categories` | bioinformatics, systems biology, synthetic biology, genomics, genetics, neuroscience | Wet-lab-only categories are excluded by default. |
 | `sources.<name>.enabled` | `true` (per source) | Toggle any source off. |
+| `sources.reddit.subreddits` | `null` (16 built-ins) | Array of sub names without `/r/`. |
+| `sources.reddit.max_pages` | `10` | Pages per sub on first run; cursor-paginates afterward. |
+| `sources.reddit.max_posts_per_sub` | `null` | Cap observations per sub per run; `null` = no cap. |
+| `sources.hn.lookback_days` | `60` | First-run window. |
+| `sources.hn.max_per_query` | `100` | Algolia `hitsPerPage`. |
+| `sources.hn.queries` | `null` (8 built-ins) | Array of pain-phrase queries. |
+| `sources.github.lookback_days` | `14` | First-run window. |
+| `sources.github.max_per_query` | `50` | GitHub `per_page` (max 100). |
+| `sources.github.queries` | `null` (3 built-ins) | Array of GitHub Search queries. |
+| `sources.arxiv.categories` | 10 cs+stat+qbio cats | arXiv categories to query. |
+| `sources.arxiv.require_code_url` | `false` | When `true`, drops papers with no detected GitHub/HF/GitLab link. |
+| `sources.arxiv.lookback_days` | `14` | First-run window. |
+| `sources.arxiv.max_per_query` | `50` | arXiv `max_results` per category. |
+| `sources.biorxiv.server` | `"biorxiv"` | Use `"medrxiv"` for medical preprints. |
+| `sources.biorxiv.categories` | 6 default cats | Wet-lab-only categories are excluded by default. |
+| `sources.biorxiv.lookback_days` | `14` | First-run window. |
+| `sources.biorxiv.max_per_run` | `300` | Hard cap on papers fetched per run. |
+| `sources.pubmed.lookback_days` | `14` | First-run window. |
+| `sources.pubmed.max_per_query` | `100` | E-utilities `retmax` per query. |
+| `sources.pubmed.queries` | `null` (6 built-ins) | Array of PubMed query strings. |
 
 ### Novelty + feasibility + ranking
 
