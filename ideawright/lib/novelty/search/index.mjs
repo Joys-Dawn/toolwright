@@ -65,7 +65,11 @@ export async function runSearchBattery(variants, options = {}) {
     hostCaps = DEFAULT_HOST_CAPS,
     sources = {},
   } = options;
+  const ddgEnabled = sources.ddg?.enabled !== false;
   const exaEnabled = sources.exa?.enabled !== false;
+  const githubEnabled = sources.github?.enabled !== false;
+  const hnEnabled = sources.hn?.enabled !== false;
+  const npmEnabled = sources.npm?.enabled !== false;
   const scholarEnabled = sources.scholar?.enabled !== false;
 
   const limiters = {
@@ -87,16 +91,24 @@ export async function runSearchBattery(variants, options = {}) {
     if (seenQueries.has(q)) continue;
     seenQueries.add(q);
 
-    enqueue("ddg", `ddg[${v.strategy}]`, s => searchDDG(q, { limit: limitPerSource, signal: s }));
+    if (ddgEnabled) {
+      enqueue("ddg", `ddg[${v.strategy}]`, s => searchDDG(q, { limit: limitPerSource, signal: s }));
+    }
     if (exaEnabled) {
       enqueue("exa", `exa[${v.strategy}]`, s => searchExa(q, { limit: limitPerSource, signal: s }));
     }
 
     if (!v.strategy.startsWith("site:")) {
-      enqueue("github", `gh-repo[${v.strategy}]`, s => searchGitHubRepos(q, { limit: limitPerSource, signal: s }));
-      enqueue("github", `gh-code[${v.strategy}]`, s => searchGitHubCode(q, { limit: 4, signal: s }));
-      enqueue("hn", `hn[${v.strategy}]`, s => searchHN(q, { limit: limitPerSource, signal: s }));
-      enqueue("npm", `npm[${v.strategy}]`, s => searchNpm(q, { limit: limitPerSource, signal: s }));
+      if (githubEnabled) {
+        enqueue("github", `gh-repo[${v.strategy}]`, s => searchGitHubRepos(q, { limit: limitPerSource, signal: s }));
+        enqueue("github", `gh-code[${v.strategy}]`, s => searchGitHubCode(q, { limit: 4, signal: s }));
+      }
+      if (hnEnabled) {
+        enqueue("hn", `hn[${v.strategy}]`, s => searchHN(q, { limit: limitPerSource, signal: s }));
+      }
+      if (npmEnabled) {
+        enqueue("npm", `npm[${v.strategy}]`, s => searchNpm(q, { limit: limitPerSource, signal: s }));
+      }
       if (scholarEnabled) {
         enqueue("scholar", `scholar[${v.strategy}]`, s => searchScholar(q, { limit: limitPerSource, signal: s }));
       }

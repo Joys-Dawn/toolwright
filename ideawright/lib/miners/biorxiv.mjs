@@ -53,6 +53,7 @@ export async function mine({
   config = {},
   lookbackDays = 14,
   maxPerRun = 300,
+  now = () => new Date(),
 } = {}) {
   const server = config.server === 'medrxiv' ? 'medrxiv' : 'biorxiv';
   const wantedCategories = Array.isArray(config.categories) && config.categories.length > 0
@@ -60,10 +61,10 @@ export async function mine({
     : DEFAULT_CATEGORIES;
 
   const cursorKey = `${server}:last_doi_date`;
-  const now = new Date();
+  const today = now();
   const lookback = lookbackDays * 86400000;
-  const fromDate = ymd(new Date(now.getTime() - lookback));
-  const toDate = ymd(now);
+  const fromDate = ymd(new Date(today.getTime() - lookback));
+  const toDate = ymd(today);
   const sinceDate = cursors[cursorKey] ?? fromDate;
 
   const observations = [];
@@ -119,10 +120,12 @@ export async function mine({
       });
     }
 
-    const next = Number(data?.messages?.[0]?.cursor ?? NaN);
-    const totalCount = Number(data?.messages?.[0]?.count ?? NaN);
-    if (!Number.isFinite(next) || fetched >= totalCount) break;
-    pageCursor = next;
+    // biorxiv API: messages[0].count = papers in THIS page; messages[0].total = papers in window.
+    // The cursor URL segment is a 0-based offset, and the API echoes the requested cursor back —
+    // we must advance it ourselves, not read it from the response.
+    const windowTotal = Number(data?.messages?.[0]?.total ?? NaN);
+    pageCursor += papers.length;
+    if (Number.isFinite(windowTotal) && pageCursor >= windowTotal) break;
     await sleep(500);
   }
 

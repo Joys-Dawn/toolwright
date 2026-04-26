@@ -9,11 +9,12 @@ export async function runOrchestration({ db, repoRoot }) {
   const feas = await gateFeasibility({ db, config });
   const ranked = rankAll({ db, weights: config.weights });
   const topN = config.digest?.top_n ?? 10;
-  const digest = buildDigest({ db, topN });
+  const today = todayDate();
+  const digest = buildDigest({ db, topN, sinceDate: today });
 
   const digestDir = join(repoRoot, '.claude', 'ideawright', 'digests');
   mkdirSync(digestDir, { recursive: true });
-  const digestPath = join(digestDir, `${todayDate()}.md`);
+  const digestPath = join(digestDir, `${today}.md`);
   writeFileSync(digestPath, digest.markdown);
 
   const summary = {

@@ -125,6 +125,39 @@ test("runSearchBattery respects per-host concurrency cap", async () => {
   } finally { globalThis.fetch = orig; }
 });
 
+test("runSearchBattery honors sources.<name>.enabled=false for every source", async () => {
+  const calls = { ddg: 0, github: 0, hn: 0, npm: 0, scholar: 0, exa: 0 };
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (/duckduckgo\.com/.test(u)) calls.ddg++;
+    else if (/api\.github\.com/.test(u)) calls.github++;
+    else if (/hn\.algolia\.com/.test(u)) calls.hn++;
+    else if (/registry\.npmjs\.org/.test(u)) calls.npm++;
+    else if (/serpapi|scholar\.google/.test(u)) calls.scholar++;
+    else if (/api\.exa\.ai/.test(u)) calls.exa++;
+    return { ok: true, status: 200, headers: { get: () => null }, async json(){return{items:[],hits:[],objects:[]};}, async text(){return"";} };
+  };
+  try {
+    await runSearchBattery([{ query: "q", strategy: "exact" }], {
+      sources: {
+        ddg: { enabled: false },
+        github: { enabled: false },
+        hn: { enabled: false },
+        npm: { enabled: false },
+        scholar: { enabled: false },
+        exa: { enabled: false },
+      }
+    });
+    assert.equal(calls.ddg, 0, "ddg disabled but fetched");
+    assert.equal(calls.github, 0, "github disabled but fetched");
+    assert.equal(calls.hn, 0, "hn disabled but fetched");
+    assert.equal(calls.npm, 0, "npm disabled but fetched");
+    assert.equal(calls.scholar, 0, "scholar disabled but fetched");
+    assert.equal(calls.exa, 0, "exa disabled but fetched");
+  } finally { globalThis.fetch = orig; }
+});
+
 test("runSearchBattery records queries_run labels", async () => {
   const orig = globalThis.fetch;
   globalThis.fetch = async () => ({

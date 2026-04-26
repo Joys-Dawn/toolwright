@@ -13,9 +13,10 @@ import { join } from 'node:path';
 //   });
 
 // Default model is sourced from $IDEAWRIGHT_LLM_MODEL when set; otherwise
-// Opus 4.6. Call sites may override via the `model` option (typically fed
-// from `config.llm.model` by the runner).
-const DEFAULT_MODEL = process.env.IDEAWRIGHT_LLM_MODEL || 'claude-opus-4-6';
+// Haiku 4.5 (matches the shipped config and keeps fallback cheap). Call sites
+// may override via the `model` option (typically fed from `config.llm.model`
+// by the runner).
+const DEFAULT_MODEL = process.env.IDEAWRIGHT_LLM_MODEL || 'claude-haiku-4-5-20251001';
 
 // Sandbox cwd for spawned `claude -p` processes. The wrightward SessionStart
 // hook reads `<cwd>/.claude/wrightward.json` and exits early when ENABLED=false —

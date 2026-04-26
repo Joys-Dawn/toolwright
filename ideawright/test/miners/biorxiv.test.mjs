@@ -18,13 +18,17 @@ test('categoryMatches rejects non-matching categories', () => {
   assert.ok(!categoryMatches('', ['bioinformatics']));
 });
 
+// Pin the clock so date-based filters use a fixed `today` regardless of when the suite runs.
+// Fixture paper dates (2026-04-10/11) must fall within `today − lookbackDays`.
+const FIXED_NOW = () => new Date('2026-04-12T00:00:00Z');
+
 test('mine filters out non-matching categories and paper versions > 1', async (t) => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => ({
     ok: true,
     async json() {
       return {
-        messages: [{ status: 'ok', count: '4', cursor: '100' }],
+        messages: [{ status: 'ok', count: 4, total: 4, cursor: 0 }],
         collection: [
           { doi: '10.1/aaa', title: 'Keep me', abstract: 'Good', authors: 'Alice Smith', date: '2026-04-10', category: 'bioinformatics', version: '1', type: 'new' },
           { doi: '10.1/bbb', title: 'Wrong category', abstract: 'x', authors: 'x', date: '2026-04-10', category: 'microbiology', version: '1', type: 'new' },
@@ -40,6 +44,7 @@ test('mine filters out non-matching categories and paper versions > 1', async (t
     cursors: {},
     config: { categories: ['bioinformatics', 'synthetic biology'] },
     logger: { warn() {}, info() {}, error() {} },
+    now: FIXED_NOW,
   });
 
   const titles = observations.map((o) => o.title).sort();
@@ -57,7 +62,7 @@ test('mine respects the since-date cursor', async (t) => {
     ok: true,
     async json() {
       return {
-        messages: [{ status: 'ok', count: '2', cursor: '100' }],
+        messages: [{ status: 'ok', count: 2, total: 2, cursor: 0 }],
         collection: [
           { doi: '10.1/new', title: 'After cursor', abstract: 'x', authors: 'A', date: '2026-04-11', category: 'bioinformatics', version: '1' },
           { doi: '10.1/old', title: 'Before cursor', abstract: 'x', authors: 'A', date: '2026-04-01', category: 'bioinformatics', version: '1' },
@@ -71,7 +76,46 @@ test('mine respects the since-date cursor', async (t) => {
     cursors: { 'biorxiv:last_doi_date': '2026-04-10' },
     config: { categories: ['bioinformatics'] },
     logger: { warn() {}, info() {}, error() {} },
+    now: FIXED_NOW,
   });
   assert.equal(observations.length, 1);
   assert.equal(observations[0].title, 'After cursor');
+});
+
+test('mine paginates until pageCursor >= window total', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    const m = String(url).match(/\/(\d+)$/);
+    const cursor = m ? Number(m[1]) : 0;
+    calls.push(cursor);
+    const pages = {
+      0: [
+        { doi: '10.1/p0a', title: 'p0a', abstract: '', authors: 'A', date: '2026-04-11', category: 'bioinformatics', version: '1' },
+        { doi: '10.1/p0b', title: 'p0b', abstract: '', authors: 'A', date: '2026-04-11', category: 'bioinformatics', version: '1' },
+      ],
+      2: [
+        { doi: '10.1/p2a', title: 'p2a', abstract: '', authors: 'A', date: '2026-04-11', category: 'bioinformatics', version: '1' },
+      ],
+    };
+    return {
+      ok: true,
+      async json() {
+        return {
+          messages: [{ status: 'ok', count: pages[cursor]?.length ?? 0, total: 3, cursor }],
+          collection: pages[cursor] ?? [],
+        };
+      },
+    };
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  const { observations } = await mine({
+    cursors: {},
+    config: { categories: ['bioinformatics'] },
+    logger: { warn() {}, info() {}, error() {} },
+    now: FIXED_NOW,
+  });
+  assert.deepEqual(calls, [0, 2], 'cursor advances by page length, not echoed value');
+  assert.equal(observations.length, 3, 'all three papers across both pages are kept');
 });

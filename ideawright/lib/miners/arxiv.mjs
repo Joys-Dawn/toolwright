@@ -155,7 +155,7 @@ export async function mine({
     } catch (err) {
       logger.warn(`[arxiv] ${cat} failed: ${err.message}`);
     } finally {
-      await sleep(3100);
+      await sleep(8000);
     }
   }
 

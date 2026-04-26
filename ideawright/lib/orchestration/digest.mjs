@@ -1,6 +1,20 @@
 import { rowToIdea } from '../db.mjs';
 
-export function selectTopN(db, topN = 10) {
+// Returns top-N gated/promoted ideas. When `sinceDate` is provided (YYYY-MM-DD,
+// UTC), restricts to ideas whose latest state transition (`updated_at`) is on
+// or after that date — used by the daily digest so a file named YYYY-MM-DD.md
+// reflects that day's promotions, not all-time leaderboard.
+export function selectTopN(db, topN = 10, { sinceDate } = {}) {
+  if (sinceDate) {
+    return db.prepare(`
+      SELECT * FROM ideas
+       WHERE status IN ('gated','promoted')
+         AND composite_rank IS NOT NULL
+         AND date(updated_at) >= ?
+       ORDER BY composite_rank DESC
+       LIMIT ?
+    `).all(sinceDate, topN);
+  }
   return db.prepare(`
     SELECT * FROM ideas
      WHERE status IN ('gated','promoted') AND composite_rank IS NOT NULL
@@ -23,8 +37,8 @@ export function promoteIdeas(db, rows) {
   return promoted;
 }
 
-export function buildDigest({ db, topN = 10 }) {
-  const rows = selectTopN(db, topN);
+export function buildDigest({ db, topN = 10, sinceDate }) {
+  const rows = selectTopN(db, topN, { sinceDate });
   const promoted = promoteIdeas(db, rows);
   return {
     count: rows.length,
