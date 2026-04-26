@@ -46,7 +46,6 @@ const DEFAULTS = {
     // Exa requires EXA_API_KEY env var; Scholar uses SEMANTIC_SCHOLAR_API_KEY
     // (optional — works without it at lower rate limit).
     sources: {
-      ddg: { enabled: false },
       exa: { enabled: true },
       github: { enabled: true },
       hn: { enabled: true },

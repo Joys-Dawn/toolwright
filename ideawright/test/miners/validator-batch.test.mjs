@@ -1,14 +1,6 @@
-import { test, mock, beforeEach, afterEach } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
-
-// We need to mock callJudge before importing validator, so we intercept at
-// the module level via a shared mock holder.  The validator imports
-// callJudge from '../judge.mjs' — we replace it through node:test's mock.
-// Since ESM makes that hard, we test the normalizeVerdict pass-through and
-// the batch shaping logic by importing validateSignalBatch and stubbing
-// callJudge on the module object.
-
-import { normalizeVerdict } from '../../lib/miners/normalize-verdict.mjs';
+import { validateSignalBatch } from '../../lib/miners/validator.mjs';
 
 // -- Fixtures ----------------------------------------------------------------
 
@@ -49,80 +41,112 @@ const FAILING_VERDICT = {
   idea: null,
 };
 
-// -- validateSignalBatch (unit, mocked callJudge) ----------------------------
+function fakeJudge(returns) {
+  const calls = [];
+  const fn = async (opts) => {
+    calls.push(opts);
+    return typeof returns === 'function' ? returns(opts) : returns;
+  };
+  fn.calls = calls;
+  return fn;
+}
 
-// Since callJudge is imported via ESM static binding, we test the batch
-// shaping logic by exercising normalizeVerdict on batch-shaped outputs
-// directly — this is what validateSignalBatch does after callJudge returns.
+// -- Tests -------------------------------------------------------------------
 
-test('normalizeVerdict applied to each element of a batch array', () => {
-  const batchOutput = [PASSING_VERDICT, FAILING_VERDICT, PASSING_VERDICT];
-  const normalized = batchOutput.map((r) => normalizeVerdict(r));
+test('validateSignalBatch issues one judge call and normalizes each result', async () => {
+  const judge = fakeJudge([PASSING_VERDICT, FAILING_VERDICT, PASSING_VERDICT]);
 
-  assert.equal(normalized.length, 3);
-  assert.ok(normalized[0].idea, 'first should pass');
-  assert.equal(normalized[1].idea, null, 'second should be gated out');
-  assert.ok(normalized[2].idea, 'third should pass');
-});
-
-test('batch normalize handles non-array wrapped as single-element array', () => {
-  // validateSignalBatch does: Array.isArray(results) ? results : [results]
-  const singleResult = PASSING_VERDICT;
-  const arr = Array.isArray(singleResult) ? [singleResult] : [singleResult];
-  const normalized = arr.map((r) => normalizeVerdict(r));
-
-  assert.equal(normalized.length, 1);
-  assert.ok(normalized[0].idea);
-});
-
-test('batch normalize handles empty array', () => {
-  const normalized = [].map((r) => normalizeVerdict(r));
-  assert.equal(normalized.length, 0);
-});
-
-test('batch normalize handles mixed valid and garbage elements', () => {
-  const batchOutput = [PASSING_VERDICT, null, 'garbage', FAILING_VERDICT, undefined];
-  const normalized = batchOutput.map((r) => normalizeVerdict(r));
-
-  assert.equal(normalized.length, 5);
-  assert.ok(normalized[0].idea, 'valid verdict passes');
-  assert.equal(normalized[1].idea, null, 'null becomes gated');
-  assert.equal(normalized[2].idea, null, 'string becomes gated');
-  assert.equal(normalized[3].idea, null, 'failing verdict gated');
-  assert.equal(normalized[4].idea, null, 'undefined becomes gated');
-});
-
-test('batch input serializes only the expected observation fields', () => {
-  const obs = makeObs(1, { extra_field: 'should be stripped', internal_id: 999 });
-  const serialized = JSON.parse(
-    JSON.stringify([
-      {
-        source: obs.source,
-        source_url: obs.source_url,
-        title: obs.title,
-        quote: obs.quote,
-        author: obs.author,
-        engagement: obs.engagement,
-      },
-    ]),
+  const results = await validateSignalBatch(
+    [makeObs(1), makeObs(2), makeObs(3)],
+    { _callJudge: judge },
   );
 
-  assert.equal(serialized.length, 1);
-  assert.ok(!('extra_field' in serialized[0]), 'extra fields stripped');
-  assert.ok(!('internal_id' in serialized[0]), 'internal fields stripped');
-  assert.equal(serialized[0].source, 'test-source-1');
-  assert.equal(serialized[0].quote, 'I wish there was a tool for problem 1');
+  assert.equal(judge.calls.length, 1, 'exactly one judge call for the whole batch');
+  assert.equal(results.length, 3);
+  assert.ok(results[0].idea, 'passing verdict keeps idea');
+  assert.equal(results[1].idea, null, 'failing verdict gates out idea');
+  assert.ok(results[2].idea);
 });
 
-test('batch preserves order when verdicts have index field', () => {
-  const batchOutput = [
-    { ...PASSING_VERDICT, index: 0, idea: { ...PASSING_VERDICT.idea, title: 'Idea Zero' } },
-    { ...FAILING_VERDICT, index: 1 },
-    { ...PASSING_VERDICT, index: 2, idea: { ...PASSING_VERDICT.idea, title: 'Idea Two' } },
-  ];
-  const normalized = batchOutput.map((r) => normalizeVerdict(r));
+test('validateSignalBatch returns empty array without calling judge for empty input', async () => {
+  const judge = fakeJudge([]);
 
-  assert.equal(normalized[0].idea.title, 'Idea Zero');
-  assert.equal(normalized[1].idea, null);
-  assert.equal(normalized[2].idea.title, 'Idea Two');
+  const results = await validateSignalBatch([], { _callJudge: judge });
+
+  assert.deepEqual(results, []);
+  assert.equal(judge.calls.length, 0, 'must not call judge with no observations');
+});
+
+test('validateSignalBatch wraps non-array judge response into a single-element result', async () => {
+  const judge = fakeJudge(PASSING_VERDICT);
+
+  const results = await validateSignalBatch([makeObs(1)], { _callJudge: judge });
+
+  assert.equal(results.length, 1);
+  assert.ok(results[0].idea);
+});
+
+test('validateSignalBatch normalizes garbage entries (null/string/undefined) without throwing', async () => {
+  const judge = fakeJudge([PASSING_VERDICT, null, 'garbage', FAILING_VERDICT, undefined]);
+
+  const results = await validateSignalBatch(
+    [makeObs(1), makeObs(2), makeObs(3), makeObs(4), makeObs(5)],
+    { _callJudge: judge },
+  );
+
+  assert.equal(results.length, 5);
+  assert.ok(results[0].idea);
+  assert.equal(results[1].idea, null, 'null normalized to gated');
+  assert.equal(results[2].idea, null, 'string normalized to gated');
+  assert.equal(results[3].idea, null);
+  assert.equal(results[4].idea, null, 'undefined normalized to gated');
+});
+
+test('validateSignalBatch sends only the documented observation fields to the judge', async () => {
+  const judge = fakeJudge([PASSING_VERDICT]);
+  const obs = makeObs(1, { extra_field: 'should be stripped', internal_id: 999 });
+
+  await validateSignalBatch([obs], { _callJudge: judge });
+
+  const sent = JSON.parse(judge.calls[0].user);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(Object.keys(sent[0]).sort(), [
+    'author', 'engagement', 'quote', 'source', 'source_url', 'title',
+  ]);
+  assert.ok(!('extra_field' in sent[0]));
+  assert.ok(!('internal_id' in sent[0]));
+});
+
+test('validateSignalBatch passes model option through to the judge', async () => {
+  const judge = fakeJudge([PASSING_VERDICT]);
+
+  await validateSignalBatch([makeObs(1)], { _callJudge: judge, model: 'claude-opus-4-7' });
+
+  assert.equal(judge.calls[0].model, 'claude-opus-4-7');
+});
+
+test('validateSignalBatch propagates judge errors', async () => {
+  const judge = async () => { throw new Error('judge timed out'); };
+
+  await assert.rejects(
+    validateSignalBatch([makeObs(1)], { _callJudge: judge }),
+    /judge timed out/,
+  );
+});
+
+test('validateSignalBatch preserves judge response order across the result array', async () => {
+  const judge = fakeJudge([
+    { ...PASSING_VERDICT, idea: { ...PASSING_VERDICT.idea, title: 'Idea Zero' } },
+    FAILING_VERDICT,
+    { ...PASSING_VERDICT, idea: { ...PASSING_VERDICT.idea, title: 'Idea Two' } },
+  ]);
+
+  const results = await validateSignalBatch(
+    [makeObs(0), makeObs(1), makeObs(2)],
+    { _callJudge: judge },
+  );
+
+  assert.equal(results[0].idea.title, 'Idea Zero');
+  assert.equal(results[1].idea, null);
+  assert.equal(results[2].idea.title, 'Idea Two');
 });

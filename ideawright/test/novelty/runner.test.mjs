@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { openDb, insertIdea, rowToIdea } from "../../lib/db.mjs";
+import { openDb, insertIdea, getIdea, updateNovelty } from "../../lib/db.mjs";
 import { runNoveltyPass } from "../../lib/novelty/runner.mjs";
 
 function setupDb() {
@@ -9,11 +9,6 @@ function setupDb() {
 
 function seedIdea(db, { id, title, target_user, summary = "", category = null }) {
   return insertIdea(db, { title, target_user, summary, category, source_module: "test" });
-}
-
-function fetchRow(db, id) {
-  const row = db.prepare("SELECT * FROM ideas WHERE id = ?").get(id);
-  return row ? rowToIdea(row) : null;
 }
 
 function mockPipelineFor(verdictByTitle) {
@@ -51,9 +46,9 @@ test("runNoveltyPass advances novel/niche to verified, archives crowded", async 
     assert.equal(summary.crowded, 1);
     assert.equal(summary.errors, 0);
 
-    assert.equal(fetchRow(db, idA).status, "verified");
-    assert.equal(fetchRow(db, idB).status, "verified");
-    assert.equal(fetchRow(db, idC).status, "archived");
+    assert.equal(getIdea(db, idA).status, "verified");
+    assert.equal(getIdea(db, idB).status, "verified");
+    assert.equal(getIdea(db, idC).status, "archived");
   } finally { db.close(); }
 });
 
@@ -63,7 +58,7 @@ test("runNoveltyPass preserves novelty JSON even on archived ideas", async () =>
     const { id } = seedIdea(db, { title: "crowded one", target_user: "u" });
     const pipeline = mockPipelineFor({ "crowded one": "crowded" });
     await runNoveltyPass({ db, pipeline });
-    const row = fetchRow(db, id);
+    const row = getIdea(db, id);
     assert.equal(row.status, "archived");
     assert.ok(row.novelty, "novelty JSON should persist");
     assert.equal(row.novelty.verdict, "crowded");
@@ -75,11 +70,11 @@ test("runNoveltyPass only touches status=new rows", async () => {
   const db = setupDb();
   try {
     const { id } = seedIdea(db, { title: "ignored", target_user: "u" });
-    db.prepare("UPDATE ideas SET status = 'verified' WHERE id = ?").run(id);
+    updateNovelty(db, id, { score_0_100: 80, verdict: "novel", competitors: [] }, "verified");
     const pipeline = async () => { throw new Error("should not be called"); };
     const summary = await runNoveltyPass({ db, pipeline });
     assert.equal(summary.processed, 0);
-    assert.equal(fetchRow(db, id).status, "verified");
+    assert.equal(getIdea(db, id).status, "verified");
   } finally { db.close(); }
 });
 
@@ -111,8 +106,8 @@ test("runNoveltyPass records error and continues on pipeline throw", async () =>
     assert.equal(summary.errors, 1);
     assert.equal(summary.novel, 1);
     assert.equal(summary.processed, 1);
-    assert.equal(fetchRow(db, idA).status, "new", "errored row unchanged");
-    assert.equal(fetchRow(db, idB).status, "verified");
+    assert.equal(getIdea(db, idA).status, "new", "errored row unchanged");
+    assert.equal(getIdea(db, idB).status, "verified");
   } finally { db.close(); }
 });
 

@@ -1,4 +1,4 @@
-// Exa web search (replaces DDG). Requires EXA_API_KEY env var.
+// Exa web search. Requires EXA_API_KEY env var.
 // Docs: https://docs.exa.ai/reference/search
 
 const API = "https://api.exa.ai/search";

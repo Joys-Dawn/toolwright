@@ -14,8 +14,7 @@ test("runSearchBattery dedups identical URLs across sources", async () => {
       json: { items: [{ full_name: "ex/item", html_url: "https://example.com/item", description: "d", stargazers_count: 10, language: "JS" }] }
     },
     { match: /api\.github\.com\/search\/code/, json: { items: [] } },
-    { match: /registry\.npmjs\.org/, json: { objects: [] } },
-    { match: /duckduckgo\.com/, body: "" }
+    { match: /registry\.npmjs\.org/, json: { objects: [] } }
   ]);
   try {
     const variants = [{ query: "test", strategy: "exact" }];
@@ -36,8 +35,7 @@ test("runSearchBattery strips tracking params during dedup", async () => {
       ] }
     },
     { match: /api\.github\.com/, json: { items: [] } },
-    { match: /registry\.npmjs\.org/, json: { objects: [] } },
-    { match: /duckduckgo\.com/, body: "" }
+    { match: /registry\.npmjs\.org/, json: { objects: [] } }
   ]);
   try {
     const { results } = await runSearchBattery([{ query: "q", strategy: "exact" }]);
@@ -45,38 +43,32 @@ test("runSearchBattery strips tracking params during dedup", async () => {
   } finally { restore(); }
 });
 
-test("runSearchBattery with site: variant only hits DDG", async () => {
-  let hnCalled = false, githubCalled = false, ddgCalled = false;
-  const restore = routeMock([
-    { match: /hn\.algolia\.com/, json: (hnCalled = true, { hits: [] }) },
-    { match: /api\.github\.com/, json: (githubCalled = true, { items: [] }) },
-    { match: /registry\.npmjs\.org/, json: { objects: [] } },
-    { match: /pypi\.org/, body: "" },
-    { match: /duckduckgo\.com/, body: (ddgCalled = true, "") }
-  ]);
-  hnCalled = false; githubCalled = false; ddgCalled = false;
+test("runSearchBattery skips repo/code/HN/npm/scholar sources for site: variants", async () => {
+  let hnCalled = false, githubCalled = false, npmCalled = false, scholarCalled = false;
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (/hn\.algolia\.com/.test(u)) hnCalled = true;
+    if (/api\.github\.com/.test(u)) githubCalled = true;
+    if (/registry\.npmjs\.org/.test(u)) npmCalled = true;
+    if (/serpapi|scholar\.google|api\.semanticscholar\.org/.test(u)) scholarCalled = true;
+    return { ok: true, status: 200, headers: { get: () => null }, async json(){return{items:[],hits:[],objects:[]};}, async text(){return"";} };
+  };
   try {
-    globalThis.fetch = async (url) => {
-      const u = String(url);
-      if (/hn\.algolia\.com/.test(u)) { hnCalled = true; return { ok: true, status: 200, headers: { get: () => null }, async json(){return{hits:[]};}, async text(){return"";} }; }
-      if (/api\.github\.com/.test(u)) { githubCalled = true; return { ok: true, status: 200, headers: { get: () => null }, async json(){return{items:[]};}, async text(){return"";} }; }
-      if (/registry\.npmjs\.org/.test(u)) { return { ok: true, status: 200, headers: { get: () => null }, async json(){return{objects:[]};}, async text(){return"";} }; }
-      if (/duckduckgo\.com/.test(u)) { ddgCalled = true; return { ok: true, status: 200, headers: { get: () => null }, async json(){return{};}, async text(){return"";} }; }
-      return { ok: true, status: 200, headers: { get: () => null }, async json(){return{};}, async text(){return"";} };
-    };
     const variants = [{ query: "q site:github.com", strategy: "site:github.com" }];
     await runSearchBattery(variants);
-    assert.equal(ddgCalled, true);
     assert.equal(hnCalled, false, "site: variant must not hit HN");
     assert.equal(githubCalled, false, "site: variant must not hit GitHub API");
-  } finally { restore(); }
+    assert.equal(npmCalled, false, "site: variant must not hit npm");
+    assert.equal(scholarCalled, false, "site: variant must not hit Scholar");
+  } finally { globalThis.fetch = orig; }
 });
 
 test("runSearchBattery dedups identical queries across variants", async () => {
-  let ddgCalls = 0;
+  let hnCalls = 0;
   const orig = globalThis.fetch;
   globalThis.fetch = async (url) => {
-    if (/duckduckgo\.com/.test(String(url))) ddgCalls++;
+    if (/hn\.algolia\.com/.test(String(url))) hnCalls++;
     return { ok: true, status: 200, headers: { get: () => null }, async json(){return{items:[],hits:[],objects:[]};}, async text(){return"";} };
   };
   try {
@@ -86,7 +78,7 @@ test("runSearchBattery dedups identical queries across variants", async () => {
       { query: "same", strategy: "feature" }
     ];
     await runSearchBattery(variants);
-    assert.equal(ddgCalls, 1, "duplicate queries should only call DDG once");
+    assert.equal(hnCalls, 1, "duplicate queries should only call HN once");
   } finally { globalThis.fetch = orig; }
 });
 
@@ -106,32 +98,31 @@ test("runSearchBattery captures per-source errors without crashing", async () =>
 });
 
 test("runSearchBattery respects per-host concurrency cap", async () => {
-  let activeDDG = 0, peakDDG = 0;
+  let activeHN = 0, peakHN = 0;
   const orig = globalThis.fetch;
   globalThis.fetch = async (url) => {
     const u = String(url);
-    if (/duckduckgo\.com/.test(u)) {
-      activeDDG++;
-      peakDDG = Math.max(peakDDG, activeDDG);
+    if (/hn\.algolia\.com/.test(u)) {
+      activeHN++;
+      peakHN = Math.max(peakHN, activeHN);
       await new Promise(r => setTimeout(r, 5));
-      activeDDG--;
+      activeHN--;
     }
     return { ok: true, status: 200, headers: { get: () => null }, async json(){return{items:[],hits:[],objects:[]};}, async text(){return"";} };
   };
   try {
     const variants = Array.from({ length: 10 }, (_, i) => ({ query: `q${i}`, strategy: "exact" }));
-    await runSearchBattery(variants, { hostCaps: { ddg: 2, exa: 10, github: 10, hn: 10, npm: 10, scholar: 10 }, sources: { exa: { enabled: false }, scholar: { enabled: false } } });
-    assert.ok(peakDDG <= 2, `DDG concurrency cap=2 violated, peak=${peakDDG}`);
+    await runSearchBattery(variants, { hostCaps: { hn: 2, exa: 10, github: 10, npm: 10, scholar: 10 }, sources: { exa: { enabled: false }, scholar: { enabled: false } } });
+    assert.ok(peakHN <= 2, `HN concurrency cap=2 violated, peak=${peakHN}`);
   } finally { globalThis.fetch = orig; }
 });
 
 test("runSearchBattery honors sources.<name>.enabled=false for every source", async () => {
-  const calls = { ddg: 0, github: 0, hn: 0, npm: 0, scholar: 0, exa: 0 };
+  const calls = { github: 0, hn: 0, npm: 0, scholar: 0, exa: 0 };
   const orig = globalThis.fetch;
   globalThis.fetch = async (url) => {
     const u = String(url);
-    if (/duckduckgo\.com/.test(u)) calls.ddg++;
-    else if (/api\.github\.com/.test(u)) calls.github++;
+    if (/api\.github\.com/.test(u)) calls.github++;
     else if (/hn\.algolia\.com/.test(u)) calls.hn++;
     else if (/registry\.npmjs\.org/.test(u)) calls.npm++;
     else if (/serpapi|scholar\.google/.test(u)) calls.scholar++;
@@ -141,7 +132,6 @@ test("runSearchBattery honors sources.<name>.enabled=false for every source", as
   try {
     await runSearchBattery([{ query: "q", strategy: "exact" }], {
       sources: {
-        ddg: { enabled: false },
         github: { enabled: false },
         hn: { enabled: false },
         npm: { enabled: false },
@@ -149,7 +139,6 @@ test("runSearchBattery honors sources.<name>.enabled=false for every source", as
         exa: { enabled: false },
       }
     });
-    assert.equal(calls.ddg, 0, "ddg disabled but fetched");
     assert.equal(calls.github, 0, "github disabled but fetched");
     assert.equal(calls.hn, 0, "hn disabled but fetched");
     assert.equal(calls.npm, 0, "npm disabled but fetched");
@@ -169,9 +158,9 @@ test("runSearchBattery records queries_run labels", async () => {
       { query: "q1", strategy: "exact" },
       { query: "q2 site:github.com", strategy: "site:github.com" }
     ]);
-    assert.ok(queries_run.some(s => s.includes("ddg[exact]")));
-    assert.ok(queries_run.some(s => s.includes("ddg[site:github.com]")));
     assert.ok(queries_run.some(s => s.includes("hn[exact]")));
-    assert.ok(!queries_run.some(s => s.includes("hn[site:")));
+    assert.ok(queries_run.some(s => s.includes("gh-repo[exact]")));
+    assert.ok(!queries_run.some(s => s.includes("hn[site:")), "site: variants must not enqueue HN");
+    assert.ok(!queries_run.some(s => s.includes("gh-repo[site:")), "site: variants must not enqueue GitHub");
   } finally { globalThis.fetch = orig; }
 });

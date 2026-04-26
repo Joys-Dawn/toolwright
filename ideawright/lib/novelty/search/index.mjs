@@ -1,4 +1,3 @@
-import { searchDDG } from "./ddg.mjs";
 import { searchExa } from "./exa.mjs";
 import { searchGitHubRepos, searchGitHubCode } from "./github.mjs";
 import { searchHN } from "./hn.mjs";
@@ -9,7 +8,6 @@ import { makeLimiter } from "../limiter.mjs";
 const DEFAULT_TIMEOUT_MS = 15000;
 
 const DEFAULT_HOST_CAPS = {
-  ddg: 2,
   exa: 2,
   github: 2,
   hn: 4,
@@ -65,7 +63,6 @@ export async function runSearchBattery(variants, options = {}) {
     hostCaps = DEFAULT_HOST_CAPS,
     sources = {},
   } = options;
-  const ddgEnabled = sources.ddg?.enabled !== false;
   const exaEnabled = sources.exa?.enabled !== false;
   const githubEnabled = sources.github?.enabled !== false;
   const hnEnabled = sources.hn?.enabled !== false;
@@ -73,7 +70,6 @@ export async function runSearchBattery(variants, options = {}) {
   const scholarEnabled = sources.scholar?.enabled !== false;
 
   const limiters = {
-    ddg: makeLimiter(hostCaps.ddg ?? DEFAULT_HOST_CAPS.ddg),
     exa: makeLimiter(hostCaps.exa ?? DEFAULT_HOST_CAPS.exa),
     github: makeLimiter(hostCaps.github ?? DEFAULT_HOST_CAPS.github),
     hn: makeLimiter(hostCaps.hn ?? DEFAULT_HOST_CAPS.hn),
@@ -91,9 +87,6 @@ export async function runSearchBattery(variants, options = {}) {
     if (seenQueries.has(q)) continue;
     seenQueries.add(q);
 
-    if (ddgEnabled) {
-      enqueue("ddg", `ddg[${v.strategy}]`, s => searchDDG(q, { limit: limitPerSource, signal: s }));
-    }
     if (exaEnabled) {
       enqueue("exa", `exa[${v.strategy}]`, s => searchExa(q, { limit: limitPerSource, signal: s }));
     }

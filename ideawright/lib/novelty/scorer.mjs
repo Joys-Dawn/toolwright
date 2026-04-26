@@ -64,8 +64,6 @@ function buildBatchPrompt(idea, results) {
   return lines.join("\n");
 }
 
-export const _internal = { xmlEscape, buildPrompt, buildBatchPrompt };
-
 function applyVerdict(result, v) {
   return {
     ...result,

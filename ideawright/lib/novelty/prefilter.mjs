@@ -27,5 +27,3 @@ export function prefilterResults(idea, results, { keep = 25 } = {}) {
   scored.sort((a, b) => b.prefilter_score - a.prefilter_score);
   return scored.slice(0, keep);
 }
-
-export const _internal = { tokenize, jaccard };

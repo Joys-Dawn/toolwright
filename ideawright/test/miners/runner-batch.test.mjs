@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb, listByStatus } from '../../lib/db.mjs';
+import { runMiners, MINERS } from '../../lib/miners/runner.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 
 // -- Helpers -----------------------------------------------------------------
 
@@ -81,8 +82,6 @@ function fakeBatchReject(observations) {
 
 test('runMiners inserts validated ideas via batch path', async () => {
   const { db, dir } = freshDb();
-  const { runMiners, MINERS } = await import('../../lib/miners/runner.mjs');
-
   const fakeMiner = {
     mine: async () => ({
       observations: [makeObs(1), makeObs(2), makeObs(3)],
@@ -115,8 +114,6 @@ test('runMiners inserts validated ideas via batch path', async () => {
 
 test('runMiners falls back to per-item when batch validator throws', async () => {
   const { db, dir } = freshDb();
-  const { runMiners, MINERS } = await import('../../lib/miners/runner.mjs');
-
   const warnings = [];
   const warnLogger = { ...silentLogger, warn: (msg) => warnings.push(msg) };
 
@@ -151,8 +148,6 @@ test('runMiners falls back to per-item when batch validator throws', async () =>
 
 test('runMiners handles miner failure gracefully', async () => {
   const { db, dir } = freshDb();
-  const { runMiners, MINERS } = await import('../../lib/miners/runner.mjs');
-
   const crashMiner = {
     mine: async () => { throw new Error('network timeout'); },
   };
@@ -178,8 +173,6 @@ test('runMiners handles miner failure gracefully', async () => {
 
 test('runMiners skips unknown miner ids without crashing', async () => {
   const { db, dir } = freshDb();
-  const { runMiners } = await import('../../lib/miners/runner.mjs');
-
   const warnings = [];
   const warnLogger = { ...silentLogger, warn: (msg) => warnings.push(msg) };
 
@@ -198,9 +191,7 @@ test('runMiners skips unknown miner ids without crashing', async () => {
 
 test('runMiners deduplicates ideas with same title and target_user', async () => {
   const { db, dir } = freshDb();
-  const { runMiners, MINERS } = await import('../../lib/miners/runner.mjs');
-
-  // Both observations produce the same verdict (same title + target_user → same id)
+// Both observations produce the same verdict (same title + target_user → same id)
   const fakeMiner = {
     mine: async () => ({
       observations: [makeObs(1), makeObs(2)],
@@ -235,8 +226,6 @@ test('runMiners deduplicates ideas with same title and target_user', async () =>
 
 test('runMiners with empty observations produces zero inserts', async () => {
   const { db, dir } = freshDb();
-  const { runMiners, MINERS } = await import('../../lib/miners/runner.mjs');
-
   const emptyMiner = {
     mine: async () => ({ observations: [], cursors: {} }),
   };
@@ -263,8 +252,6 @@ test('runMiners with empty observations produces zero inserts', async () => {
 
 test('runMiners gates rejected ideas from insertion', async () => {
   const { db, dir } = freshDb();
-  const { runMiners, MINERS } = await import('../../lib/miners/runner.mjs');
-
   const fakeMiner = {
     mine: async () => ({
       observations: [makeObs(1), makeObs(2), makeObs(3)],
@@ -295,8 +282,6 @@ test('runMiners gates rejected ideas from insertion', async () => {
 
 test('runMiners respects batchSize chunking', async () => {
   const { db, dir } = freshDb();
-  const { runMiners, MINERS } = await import('../../lib/miners/runner.mjs');
-
   let batchCallCount = 0;
   const countingBatch = (obs) => {
     batchCallCount++;
@@ -316,7 +301,6 @@ test('runMiners respects batchSize chunking', async () => {
 
   try {
     // Config with batch_size=2
-    const { writeFileSync, mkdirSync } = await import('node:fs');
     mkdirSync(join(dir, '.claude'), { recursive: true });
     writeFileSync(
       join(dir, '.claude', 'ideawright.json'),

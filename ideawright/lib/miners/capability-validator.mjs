@@ -108,7 +108,7 @@ or if no concrete product is plausible.
 
 NEVER wrap the JSON in prose or markdown code fences. Return ONLY the array.`;
 
-export async function validateCapabilityBatch(observations, { model, timeoutMs } = {}) {
+export async function validateCapabilityBatch(observations, { model, timeoutMs, _callJudge } = {}) {
   if (!observations.length) return [];
   const user = JSON.stringify(
     observations.map((o) => ({
@@ -128,7 +128,8 @@ export async function validateCapabilityBatch(observations, { model, timeoutMs }
   const opts = { system: BATCH_SYSTEM, user };
   if (model) opts.model = model;
   if (timeoutMs) opts.timeoutMs = timeoutMs ?? 120_000;
-  const results = await callJudge(opts);
+  const judge = _callJudge ?? callJudge;
+  const results = await judge(opts);
   const arr = Array.isArray(results) ? results : [results];
   return arr.map((r) => normalizeVerdict(r));
 }

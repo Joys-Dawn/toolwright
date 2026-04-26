@@ -1,9 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeVerdict } from '../../lib/miners/normalize-verdict.mjs';
+import { validateCapabilityBatch } from '../../lib/miners/capability-validator.mjs';
 
-// validateCapabilityBatch calls callJudge (spawns claude -p), so we test
-// the normalize + array-shaping logic the same way as validator-batch tests.
+// -- Fixtures ----------------------------------------------------------------
+
+function makePaper(n, overrides = {}) {
+  return {
+    source: 'arxiv',
+    source_url: `https://arxiv.org/abs/2404.${1000 + n}`,
+    title: `A New Method ${n}`,
+    quote: `We propose a novel approach ${n}.`,
+    author: `Smith et al. ${n}`,
+    created_at: '2024-04-01',
+    code_url: `https://github.com/smith/method-${n}`,
+    categories: ['cs.AI', 'cs.LG'],
+    engagement: { citations: n },
+    ...overrides,
+  };
+}
 
 const PASSING = {
   is_real_need: true,
@@ -30,60 +44,100 @@ const FAILING = {
   idea: null,
 };
 
-test('capability batch normalize handles mixed results', () => {
-  const batch = [PASSING, FAILING, PASSING];
-  const normalized = batch.map((r) => normalizeVerdict(r));
-
-  assert.equal(normalized.length, 3);
-  assert.ok(normalized[0].idea);
-  assert.equal(normalized[1].idea, null, 'low pain score gates out');
-  assert.ok(normalized[2].idea);
-});
-
-test('capability batch normalize wraps non-array as single element', () => {
-  const result = PASSING;
-  const arr = Array.isArray(result) ? result : [result];
-  const normalized = arr.map((r) => normalizeVerdict(r));
-
-  assert.equal(normalized.length, 1);
-  assert.ok(normalized[0].idea);
-  assert.equal(normalized[0].idea.emerging_tech, 'arxiv:2404.12345');
-});
-
-test('capability batch input serializes expected fields for papers', () => {
-  const obs = {
-    source: 'arxiv',
-    source_url: 'https://arxiv.org/abs/2404.12345',
-    title: 'A New Method',
-    quote: 'We propose a novel approach...',
-    author: 'Smith et al.',
-    created_at: '2024-04-01',
-    code_url: 'https://github.com/smith/newmethod',
-    categories: ['cs.AI', 'cs.LG'],
-    engagement: { citations: 5 },
-    internal_field: 'should be stripped',
+function fakeJudge(returns) {
+  const calls = [];
+  const fn = async (opts) => {
+    calls.push(opts);
+    return typeof returns === 'function' ? returns(opts) : returns;
   };
+  fn.calls = calls;
+  return fn;
+}
 
-  const serialized = JSON.parse(JSON.stringify([{
-    source: obs.source,
-    source_url: obs.source_url,
-    title: obs.title,
-    abstract: obs.quote,
-    authors: obs.author,
-    published: obs.created_at,
-    code_url: obs.code_url,
-    categories: obs.categories,
-    engagement: obs.engagement,
-  }]));
+// -- Tests -------------------------------------------------------------------
 
-  assert.equal(serialized.length, 1);
-  assert.ok(!('internal_field' in serialized[0]));
-  assert.ok(!('quote' in serialized[0]), 'quote mapped to abstract');
-  assert.equal(serialized[0].abstract, 'We propose a novel approach...');
-  assert.equal(serialized[0].code_url, 'https://github.com/smith/newmethod');
+test('validateCapabilityBatch issues one judge call and normalizes each result', async () => {
+  const judge = fakeJudge([PASSING, FAILING, PASSING]);
+
+  const results = await validateCapabilityBatch(
+    [makePaper(1), makePaper(2), makePaper(3)],
+    { _callJudge: judge },
+  );
+
+  assert.equal(judge.calls.length, 1, 'exactly one judge call for the whole batch');
+  assert.equal(results.length, 3);
+  assert.ok(results[0].idea);
+  assert.equal(results[1].idea, null, 'low pain score gates out');
+  assert.ok(results[2].idea);
 });
 
-test('capability batch empty input returns empty array', () => {
-  const normalized = [].map((r) => normalizeVerdict(r));
-  assert.equal(normalized.length, 0);
+test('validateCapabilityBatch returns empty array without calling judge for empty input', async () => {
+  const judge = fakeJudge([]);
+
+  const results = await validateCapabilityBatch([], { _callJudge: judge });
+
+  assert.deepEqual(results, []);
+  assert.equal(judge.calls.length, 0);
+});
+
+test('validateCapabilityBatch wraps non-array judge response into a single-element result', async () => {
+  const judge = fakeJudge(PASSING);
+
+  const results = await validateCapabilityBatch([makePaper(1)], { _callJudge: judge });
+
+  assert.equal(results.length, 1);
+  assert.ok(results[0].idea);
+  assert.equal(results[0].idea.emerging_tech, 'arxiv:2404.12345');
+});
+
+test('validateCapabilityBatch maps observation fields to paper-shaped judge input', async () => {
+  const judge = fakeJudge([PASSING]);
+  const obs = makePaper(1, { internal_field: 'should be stripped' });
+
+  await validateCapabilityBatch([obs], { _callJudge: judge });
+
+  const sent = JSON.parse(judge.calls[0].user);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].abstract, obs.quote, 'quote field is renamed to abstract');
+  assert.equal(sent[0].authors, obs.author, 'author field is renamed to authors');
+  assert.equal(sent[0].published, obs.created_at, 'created_at is renamed to published');
+  assert.equal(sent[0].code_url, obs.code_url);
+  assert.deepEqual(sent[0].categories, ['cs.AI', 'cs.LG']);
+  assert.ok(!('quote' in sent[0]));
+  assert.ok(!('author' in sent[0]));
+  assert.ok(!('created_at' in sent[0]));
+  assert.ok(!('internal_field' in sent[0]));
+});
+
+test('validateCapabilityBatch defaults code_url and categories to null when missing', async () => {
+  const judge = fakeJudge([PASSING]);
+  const obs = makePaper(1);
+  delete obs.code_url;
+  delete obs.categories;
+
+  await validateCapabilityBatch([obs], { _callJudge: judge });
+
+  const sent = JSON.parse(judge.calls[0].user);
+  assert.equal(sent[0].code_url, null);
+  assert.equal(sent[0].categories, null);
+});
+
+test('validateCapabilityBatch passes model option through to the judge', async () => {
+  const judge = fakeJudge([PASSING]);
+
+  await validateCapabilityBatch(
+    [makePaper(1)],
+    { _callJudge: judge, model: 'claude-opus-4-7' },
+  );
+
+  assert.equal(judge.calls[0].model, 'claude-opus-4-7');
+});
+
+test('validateCapabilityBatch propagates judge errors', async () => {
+  const judge = async () => { throw new Error('judge timed out'); };
+
+  await assert.rejects(
+    validateCapabilityBatch([makePaper(1)], { _callJudge: judge }),
+    /judge timed out/,
+  );
 });

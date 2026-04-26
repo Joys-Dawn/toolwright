@@ -95,7 +95,7 @@ Set "idea": null if any of these are false:
 
 NEVER wrap the JSON in prose or markdown code fences. Return ONLY the array.`;
 
-export async function validateSignalBatch(observations, { timeoutMs, model } = {}) {
+export async function validateSignalBatch(observations, { timeoutMs, model, _callJudge } = {}) {
   if (!observations.length) return [];
   const user = JSON.stringify(
     observations.map((o) => ({
@@ -112,7 +112,8 @@ export async function validateSignalBatch(observations, { timeoutMs, model } = {
   const opts = { system: BATCH_SYSTEM, user };
   if (timeoutMs) opts.timeoutMs = timeoutMs ?? 120_000;
   if (model) opts.model = model;
-  const results = await callJudge(opts);
+  const judge = _callJudge ?? callJudge;
+  const results = await judge(opts);
   const arr = Array.isArray(results) ? results : [results];
   return arr.map((r) => normalizeVerdict(r));
 }

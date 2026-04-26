@@ -86,6 +86,11 @@ export function archive(db, id, reason, actor = 'orchestrator') {
   logTransition(db, id, current?.status ?? null, 'archived', actor, reason);
 }
 
+export function getIdea(db, id) {
+  const row = db.prepare('SELECT * FROM ideas WHERE id = ?').get(id);
+  return row ? rowToIdea(row) : null;
+}
+
 // Returns ideas matching `status`, capped at `limit` (default 1000).
 // Callers processing all ideas in a status should pass an explicit limit
 // or call in a loop with increasing offsets if >1000 rows are expected.

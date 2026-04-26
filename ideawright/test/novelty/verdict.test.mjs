@@ -4,7 +4,7 @@ import { aggregateVerdict } from "../../lib/novelty/verdict.mjs";
 
 function mkResult({ competitor = true, overlap = 0.8, title = "comp", url = "u", reason = "r" } = {}) {
   return {
-    source: "ddg",
+    source: "hn",
     title,
     snippet: "",
     url,

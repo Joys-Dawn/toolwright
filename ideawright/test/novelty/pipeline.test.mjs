@@ -23,8 +23,7 @@ test("runNoveltyPipeline returns novelty + debug with required fields", async ()
   const restore = routeMock([
     { match: /hn\.algolia\.com/, json: { hits: [] } },
     { match: /api\.github\.com/, json: { items: [] } },
-    { match: /registry\.npmjs\.org/, json: { objects: [] } },
-    { match: /duckduckgo\.com/, body: "<html></html>" }
+    { match: /registry\.npmjs\.org/, json: { objects: [] } }
   ]);
   try {
     const judge = async () => ({
@@ -60,8 +59,7 @@ test("runNoveltyPipeline marks crowded when judge flags many competitors", async
     { match: /hn\.algolia\.com/, json: { hits: hnHits } },
     { match: /api\.github\.com/, json: { items: [] } },
     { match: /registry\.npmjs\.org/, json: { objects: [] } },
-    { match: /pypi\.org/, body: "" },
-    { match: /duckduckgo\.com/, body: "" }
+    { match: /pypi\.org/, body: "" }
   ]);
   try {
     const judge = batchJudge({
@@ -85,8 +83,7 @@ test("runNoveltyPipeline propagates custom thresholds", async () => {
     { match: /hn\.algolia\.com/, json: { hits: hnHits } },
     { match: /api\.github\.com/, json: { items: [] } },
     { match: /registry\.npmjs\.org/, json: { objects: [] } },
-    { match: /pypi\.org/, body: "" },
-    { match: /duckduckgo\.com/, body: "" }
+    { match: /pypi\.org/, body: "" }
   ]);
   try {
     const judge = batchJudge({
@@ -108,8 +105,7 @@ test("runNoveltyPipeline debug surfaces search errors", async () => {
     { match: /hn\.algolia\.com/, status: 500, body: "server error" },
     { match: /api\.github\.com/, json: { items: [] } },
     { match: /registry\.npmjs\.org/, json: { objects: [] } },
-    { match: /pypi\.org/, body: "" },
-    { match: /duckduckgo\.com/, body: "" }
+    { match: /pypi\.org/, body: "" }
   ]);
   try {
     const judge = async () => ({ is_competitor: false, overlap_score: 0, reason: "", serves_same_user: false, solves_same_pain: false });
