@@ -46,6 +46,16 @@
       },
       "category": "developer-tools",
       "tags": ["ideation", "product-discovery", "automation", "research"]
+    },
+    {
+      "name": "gripewright",
+      "source": "./gripewright",
+      "description": "Capture user gripes about agent behavior into a labeled training corpus",
+      "author": {
+        "name": "Joy's Dawn Solutions LLC"
+      },
+      "category": "developer-tools",
+      "tags": ["labeling", "agent-evaluation", "training-data", "feedback"]
     }
   ]
 }
