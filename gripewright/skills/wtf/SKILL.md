@@ -5,6 +5,10 @@ allowed-tools: Bash(node *)
 argument-hint: [N turns back] [optional reason]
 ---
 
-!`node ${CLAUDE_PLUGIN_ROOT}/scripts/log-wtf.js ${CLAUDE_SESSION_ID} $ARGUMENTS`
+```!
+node ${CLAUDE_PLUGIN_ROOT}/scripts/log-wtf.js ${CLAUDE_SESSION_ID} <<'__GRIPEWRIGHT_WTF_HEREDOC_END__'
+$ARGUMENTS
+__GRIPEWRIGHT_WTF_HEREDOC_END__
+```
 
 Confirm in one short sentence that the gripe was logged (events captured, log path). Then engage with the user's reason — address their critique directly if they gave one, or briefly reflect on what likely went wrong in the prior turn if they didn't. If the script reported an error, surface it verbatim.

@@ -2,7 +2,7 @@
 
 > Capture user complaints about agent behavior into a labeled NDJSON corpus. Type `/gripewright:wtf` when the agent goes wrong; the prior turn (and the agent's response to your gripe) is appended to `~/.claude/gripewright/log.ndjson` as a negative training example.
 
-**Version**: 0.3.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/gripewright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/gripewright/README.md)
+**Version**: 0.3.1 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/gripewright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/gripewright/README.md)
 
 ## Install
 

@@ -129,6 +129,16 @@ describe('isGripewrightWtfInvocation', () => {
   it('returns false when message not dict', () => {
     assert.equal(t.isGripewrightWtfInvocation({ type: 'user', message: 'not-a-dict' }), false);
   });
+
+  it('does not match assistant messages that mention the marker as text (regression)', () => {
+    // An assistant explanation that quotes the marker literally must not be
+    // treated as a /wtf invocation — that false-positive paired log records
+    // with the wrong transcript event and produced empty wtf_response arrays.
+    const ev = assistantEvent([
+      { type: 'text', text: 'matches only <command-name>/gripewright:wtf</command-name> exactly' },
+    ]);
+    assert.equal(t.isGripewrightWtfInvocation(ev), false);
+  });
 });
 
 describe('extractAssistantBlocks', () => {

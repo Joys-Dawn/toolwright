@@ -1,6 +1,6 @@
 {
   "name": "gripewright",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Capture user gripes about agent behavior into a labeled training corpus.",
   "author": {
     "name": "Joy's Dawn Solutions LLC"

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
+const fs = require('fs');
 const transcript = require('../lib/transcript');
 const store = require('../lib/log-store');
 
@@ -23,8 +24,47 @@ function parseArgs(args) {
   return { sessionId, lookback, reason };
 }
 
+function readStdinSync() {
+  if (process.stdin.isTTY) return '';
+  try {
+    return fs.readFileSync(0, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+// Parse stdin into { lookback, reason } without tokenizing the reason.
+// Strip an optional leading positive integer (followed by whitespace) as the
+// lookback; everything after that whitespace is the reason verbatim — internal
+// newlines, tabs, and repeated spaces are preserved as the user typed them.
+function parseStdinInput(stdin) {
+  if (!stdin) return { lookback: 1, reason: null };
+  const text = stdin.trim();
+  if (!text) return { lookback: 1, reason: null };
+
+  const withReason = text.match(/^(\d+)\s+([\s\S]+)$/);
+  if (withReason) {
+    const n = parseInt(withReason[1], 10);
+    if (n < 1) return { lookback: null, reason: null };
+    return { lookback: n, reason: withReason[2] || null };
+  }
+  const onlyNumber = text.match(/^(\d+)$/);
+  if (onlyNumber) {
+    const n = parseInt(onlyNumber[1], 10);
+    if (n < 1) return { lookback: null, reason: null };
+    return { lookback: n, reason: null };
+  }
+  return { lookback: 1, reason: text };
+}
+
 function main(args, opts = {}) {
-  const { sessionId, lookback, reason } = parseArgs(args);
+  let sessionId, lookback, reason;
+  if (opts.stdin !== undefined) {
+    sessionId = (args[0] || '').trim();
+    ({ lookback, reason } = parseStdinInput(opts.stdin));
+  } else {
+    ({ sessionId, lookback, reason } = parseArgs(args));
+  }
   if (!sessionId) {
     process.stderr.write('ERROR: session id required as first argument\n');
     return 1;
@@ -42,21 +82,20 @@ function main(args, opts = {}) {
 
   const events = transcript.readTranscript(jsonlPath);
 
+  // The /wtf invocation has not yet been written to the JSONL when this script
+  // runs as `!`-preprocessing. Every entry in `realUserIndices` is therefore a
+  // valid prior prompt — never slice off the tail.
   const realUserIndices = [];
   for (let i = 0; i < events.length; i++) {
     if (transcript.isRealUserMessage(events[i])) realUserIndices.push(i);
   }
-  // Drop only the current invocation (the most recent real user message, which
-  // is the /wtf that triggered this script). Prior /wtfs are valid anchors —
-  // a model's response to one /wtf often deserves another /wtf.
-  const pruned = realUserIndices.slice(0, -1);
-  if (pruned.length === 0) {
+  if (realUserIndices.length === 0) {
     process.stderr.write('ERROR: no real user message found before the wtf invocation\n');
     return 1;
   }
 
-  const effectiveLookback = Math.min(lookback, pruned.length);
-  const priorIdx = pruned[pruned.length - effectiveLookback];
+  const effectiveLookback = Math.min(lookback, realUserIndices.length);
+  const priorIdx = realUserIndices[realUserIndices.length - effectiveLookback];
   const priorEvent = events[priorIdx];
   const priorText = transcript.extractUserText(priorEvent);
   const priorTs = priorEvent.timestamp || '';
@@ -116,7 +155,7 @@ function main(args, opts = {}) {
 }
 
 if (require.main === module) {
-  process.exit(main(process.argv.slice(2)));
+  process.exit(main(process.argv.slice(2), { stdin: readStdinSync() }));
 }
 
-module.exports = { parseArgs, main };
+module.exports = { parseArgs, main, parseStdinInput };

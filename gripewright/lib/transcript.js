@@ -49,6 +49,7 @@ function isRealUserMessage(event) {
 }
 
 function isGripewrightWtfInvocation(event) {
+  if (event?.type !== 'user') return false;
   const msg = event?.message;
   if (!isPlainObject(msg)) return false;
   const head = contentToText(msg.content ?? '').slice(0, 500);
