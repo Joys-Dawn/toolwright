@@ -1,0 +1,11 @@
+{
+  "name": "gripewright",
+  "version": "0.2.0",
+  "description": "Capture user gripes about agent behavior into a labeled training corpus.",
+  "author": {
+    "name": "Joy's Dawn Solutions LLC"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["claude-code", "plugin", "labeling", "agent-evaluation", "training-data"],
+  "skills": "./skills/"
+}

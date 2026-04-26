@@ -1,0 +1,13 @@
+{
+  "name": "gripewright",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Capture user gripes about agent behavior into a labeled training corpus.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\""
+  }
+}
