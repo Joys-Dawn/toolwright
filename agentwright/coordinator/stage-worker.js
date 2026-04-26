@@ -21,76 +21,140 @@ const { parseFlags } = require('./cli-utils');
 
 const SKILL_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/i;
 
-function resolveSkillPath({ pluginRoot, cwd, stageName, stageDef }) {
-  // Custom stages can specify a project-relative skillPath
+function resolveBuiltinSkill({ pluginRoot, stageName, skillId }) {
+  if (typeof skillId !== 'string' || !SKILL_ID_PATTERN.test(skillId)) {
+    throw new Error(`Invalid skill ID for stage ${stageName}: ${skillId}`);
+  }
+  const skillPath = path.join(pluginRoot, 'skills', skillId, 'SKILL.md');
+  if (!fs.existsSync(skillPath)) {
+    throw new Error(`Vendored skill not found for stage ${stageName}: ${skillId}`);
+  }
+  return { id: skillId, path: skillPath };
+}
+
+function resolveSkillPaths({ pluginRoot, cwd, stageName, stageDef }) {
   if (stageDef.skillPath) {
     const resolved = path.resolve(cwd, stageDef.skillPath);
     if (!fs.existsSync(resolved)) {
       throw new Error(`Custom skill file not found for stage ${stageName}: ${resolved}`);
     }
-    return resolved;
+    const id = path.basename(path.dirname(resolved)) || stageName;
+    return [{ id, path: resolved }];
   }
-  // Builtin stages use skillId to look up in the plugin's skills/ directory
-  if (typeof stageDef.skillId !== 'string' || !SKILL_ID_PATTERN.test(stageDef.skillId)) {
-    throw new Error(`Invalid skill ID for stage ${stageName}: ${stageDef.skillId}`);
+  if (Array.isArray(stageDef.skillIds)) {
+    return stageDef.skillIds.map(skillId => resolveBuiltinSkill({ pluginRoot, stageName, skillId }));
   }
-  const skillPath = path.join(pluginRoot, 'skills', stageDef.skillId, 'SKILL.md');
-  if (!fs.existsSync(skillPath)) {
-    throw new Error(`Vendored skill not found for stage ${stageName}: ${stageDef.skillId}`);
-  }
-  return skillPath;
+  return [resolveBuiltinSkill({ pluginRoot, stageName, skillId: stageDef.skillId })];
 }
 
-function buildAuditorPrompt({ pluginRoot, cwd, stageName, stageDef, scope, scopeMode }) {
-  const skillPath = resolveSkillPath({ pluginRoot, cwd, stageName, stageDef });
-  const skillContent = fs.readFileSync(skillPath, 'utf8');
+function buildScopeInstruction(scope, scopeMode) {
   const sanitizedScope = String(scope || '')
     .replace(/[\r\n]+/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/[<>]/g, ' ')
     .trim()
     .slice(0, 500);
-
-  let scopeInstruction;
   if (scopeMode === 'diff') {
-    scopeInstruction = [
+    return [
       'SCOPE MODE: diff',
       'This snapshot contains uncommitted changes overlaid on a git worktree.',
       'Run `git diff` to see line-level changes to existing files, and `git ls-files --others --exclude-standard` to find newly created files.',
       'Audit the changed lines and their immediate context. Do not report low or medium severity findings in unchanged code.',
       'You may report critical or high severity findings in unchanged code if discovered while reading context, but the primary focus must be the diff.'
     ].join('\n');
-  } else if (scopeMode === 'full') {
-    scopeInstruction = [
+  }
+  if (scopeMode === 'full') {
+    return [
       'SCOPE MODE: full repository',
       'Audit the entire codebase. There is no diff to narrow the scope.'
     ].join('\n');
-  } else {
-    scopeInstruction = [
-      'SCOPE MODE: targeted',
-      `Audit only the following files or directories: ${sanitizedScope}`,
-      'Do NOT report findings in files outside this scope.'
-    ].join('\n');
   }
+  return [
+    'SCOPE MODE: targeted',
+    `Audit only the following files or directories: ${sanitizedScope}`,
+    'Do NOT report findings in files outside this scope.'
+  ].join('\n');
+}
 
+const SHARED_OUTPUT_INTRO = 'You are auditing a frozen stage snapshot. Output newline-delimited JSON only.';
+const SHARED_EMIT_RULE = 'Emit one compact JSON object per line as soon as a finding is ready. Do not wait until you have reviewed all files — emit each finding immediately after identifying it so the verifier can work in parallel.';
+const SHARED_FORMAT_RULE = 'Do not emit markdown, prose paragraphs, bullet lists, or code fences.';
+const SHARED_GROUNDING_RULE = 'Every finding must be grounded enough that the verifier can re-check only the cited file and local context in the live repo.';
+
+function buildSingleSkillPrompt({ stageName, scopeInstruction, skill }) {
+  const skillContent = fs.readFileSync(skill.path, 'utf8');
   return [
     `Audit stage: ${stageName}`,
     '',
     scopeInstruction,
     '',
-    'You are auditing a frozen stage snapshot. Output newline-delimited JSON only.',
-    'Emit one compact JSON object per line as soon as a finding is ready. Do not wait until you have reviewed all files — emit each finding immediately after identifying it so the verifier can work in parallel.',
+    SHARED_OUTPUT_INTRO,
+    SHARED_EMIT_RULE,
     'Finding line format:',
     `{"type":"finding","finding":{"id":"${stageName}-1","severity":"low|medium|high|critical","title":"...","file":"relative/path","lines":"optional","problem":"...","fix":"...","evidence":"...","snippet":"optional"}}`,
     'When the audit is complete, emit exactly one final line:',
     `{"type":"done","auditType":"${stageName}","summary":"...","emittedCount":0}`,
-    'Do not emit markdown, prose paragraphs, bullet lists, or code fences.',
-    'Every finding must be grounded enough that the verifier can re-check only the cited file and local context in the live repo.',
+    SHARED_FORMAT_RULE,
+    SHARED_GROUNDING_RULE,
     '',
     'Follow the bundled skill below exactly when deciding what to audit.',
     '',
     skillContent
   ].join('\n');
+}
+
+function buildFusedSkillPrompt({ stageName, scopeInstruction, skills }) {
+  const skillIdList = skills.map(s => s.id);
+  const auditTypeChoices = skillIdList.join('|');
+  const allowedAuditTypes = skillIdList.map(id => `"${id}"`).join(', ');
+  const concatenatedSkills = skills
+    .map(skill => `===== Skill: ${skill.id} =====\n${fs.readFileSync(skill.path, 'utf8')}`)
+    .join('\n\n');
+
+  return [
+    `Audit stage: ${stageName} (fused: ${skillIdList.join(', ')})`,
+    '',
+    scopeInstruction,
+    '',
+    SHARED_OUTPUT_INTRO,
+    `This is a FUSED stage running ${skills.length} audit types in one pass. Apply every bundled skill below as a separate lens — do not skip any. Tag each finding with an "auditType" field whose value is exactly one of: ${allowedAuditTypes}.`,
+    SHARED_EMIT_RULE,
+    'Finding line format:',
+    `{"type":"finding","finding":{"id":"${stageName}-1","auditType":"${auditTypeChoices}","severity":"low|medium|high|critical","title":"...","file":"relative/path","lines":"optional","problem":"...","fix":"...","evidence":"...","snippet":"optional"}}`,
+    'When all audits are complete, emit exactly one final line:',
+    `{"type":"done","auditType":"${stageName}","summary":"...","emittedCount":0}`,
+    SHARED_FORMAT_RULE,
+    SHARED_GROUNDING_RULE,
+    '',
+    'Follow EACH bundled skill below exactly. The separator "===== Skill: <id> =====" delimits one skill from the next; apply all of them.',
+    '',
+    concatenatedSkills
+  ].join('\n');
+}
+
+function buildAuditorPrompt({ pluginRoot, cwd, stageName, stageDef, scope, scopeMode }) {
+  const skills = resolveSkillPaths({ pluginRoot, cwd, stageName, stageDef });
+  const scopeInstruction = buildScopeInstruction(scope, scopeMode);
+  if (skills.length === 1) {
+    return buildSingleSkillPrompt({ stageName, scopeInstruction, skill: skills[0] });
+  }
+  return buildFusedSkillPrompt({ stageName, scopeInstruction, skills });
+}
+
+// Each auditor subprocess creates a project entry in ~/.claude/projects/
+// named after its cwd — these are single-use and pile up.
+// NOTE: The folder naming convention (drive letter + dashes) is reverse-engineered
+// from Claude CLI behavior as of v2.1.91. If the CLI changes this convention,
+// cleanup silently fails (swallowed by try-catch) and folders accumulate.
+function cleanupClaudeProjectFolder(absPath) {
+  try {
+    const homedir = require('os').homedir();
+    const folderName = path.resolve(absPath)
+      .replace(/^([a-zA-Z]):/, (_, d) => d.toUpperCase() + '-')
+      .replace(/[\\/]/g, '-');
+    const projectDir = path.join(homedir, '.claude', 'projects', folderName);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  } catch (_) {}
 }
 
 function updateRunAuditor(cwd, runId, stageName, value) {
@@ -263,19 +327,7 @@ async function main() {
 
   const { exitCode, resultEvent, doneEvent } = await worker.wait();
 
-  // Clean up the CLI project folder created for the snapshot directory.
-  // Each auditor subprocess creates a project entry in ~/.claude/projects/
-  // named after the snapshot path — these are single-use and pile up.
-  // NOTE: The folder naming convention (drive letter + dashes) is reverse-engineered
-  // from Claude CLI behavior as of v2.1.91. If the CLI changes this convention,
-  // cleanup silently fails (swallowed by try-catch) and folders accumulate.
-  try {
-    const homedir = require('os').homedir();
-    const snapshotAbs = path.resolve(snapshot.path);
-    const folderName = snapshotAbs.replace(/^([a-zA-Z]):/, (_, d) => d.toUpperCase() + '-').replace(/[\\/]/g, '-');
-    const projectDir = path.join(homedir, '.claude', 'projects', folderName);
-    fs.rmSync(projectDir, { recursive: true, force: true });
-  } catch (_) {}
+  cleanupClaudeProjectFolder(snapshot.path);
 
   if (!doneMarker) {
     doneMarker = doneEvent || {
@@ -307,7 +359,17 @@ async function main() {
   });
 }
 
-main().catch(error => {
+if (require.main === module) {
+  main().catch(handleMainError);
+}
+
+module.exports = {
+  buildAuditorPrompt,
+  resolveSkillPaths,
+  cleanupClaudeProjectFolder
+};
+
+function handleMainError(error) {
   const { flags } = parseFlags(process.argv.slice(2));
   if (flags.run && flags.stage) {
     try {
@@ -332,4 +394,4 @@ main().catch(error => {
     }
   }
   process.exit(1);
-});
+}

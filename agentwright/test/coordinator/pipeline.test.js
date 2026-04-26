@@ -114,7 +114,63 @@ describe('pipeline', () => {
       fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
         customStages: { ambig: { type: 'skill', skillId: 'foo', skillPath: 'bar/SKILL.md' } }
       }), 'utf8');
-      assert.throws(() => loadUserConfig(tmpDir), /not both/);
+      assert.throws(() => loadUserConfig(tmpDir), /not multiple/);
+    });
+
+    it('accepts custom stage with skillIds array (fused stage)', () => {
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
+        customStages: {
+          bundle: { type: 'skill', skillIds: ['correctness-audit', 'security-audit'] }
+        }
+      }), 'utf8');
+      const config = loadUserConfig(tmpDir);
+      assert.deepEqual(config.customStages.bundle.skillIds, ['correctness-audit', 'security-audit']);
+    });
+
+    it('rejects custom stage with both skillId and skillIds', () => {
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
+        customStages: {
+          ambig: { type: 'skill', skillId: 'foo', skillIds: ['bar', 'baz'] }
+        }
+      }), 'utf8');
+      assert.throws(() => loadUserConfig(tmpDir), /not multiple/);
+    });
+
+    it('rejects custom stage with both skillIds and skillPath', () => {
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
+        customStages: {
+          ambig: { type: 'skill', skillIds: ['bar', 'baz'], skillPath: 'p/SKILL.md' }
+        }
+      }), 'utf8');
+      assert.throws(() => loadUserConfig(tmpDir), /not multiple/);
+    });
+
+    it('rejects custom stage with empty skillIds array', () => {
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
+        customStages: { bad: { type: 'skill', skillIds: [] } }
+      }), 'utf8');
+      assert.throws(() => loadUserConfig(tmpDir), /at least 2/);
+    });
+
+    it('rejects custom stage with single-element skillIds (use skillId for one skill)', () => {
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
+        customStages: { bad: { type: 'skill', skillIds: ['correctness-audit'] } }
+      }), 'utf8');
+      assert.throws(() => loadUserConfig(tmpDir), /at least 2/);
+    });
+
+    it('rejects custom stage with non-string skillIds members', () => {
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
+        customStages: { bad: { type: 'skill', skillIds: ['ok', 42] } }
+      }), 'utf8');
+      assert.throws(() => loadUserConfig(tmpDir), /non-empty strings/);
+    });
+
+    it('rejects custom stage with empty-string skillIds member', () => {
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
+        customStages: { bad: { type: 'skill', skillIds: ['ok', ''] } }
+      }), 'utf8');
+      assert.throws(() => loadUserConfig(tmpDir), /non-empty strings/);
     });
 
     it('handles config with missing optional fields', () => {
@@ -151,6 +207,18 @@ describe('pipeline', () => {
       }), 'utf8');
       const def = resolveStageDefinition('correctness', tmpDir);
       assert.equal(def.skillId, 'correctness-audit');
+    });
+
+    it('resolves fused custom stage with skillIds intact', () => {
+      fs.writeFileSync(path.join(tmpDir, '.claude', 'agentwright.json'), JSON.stringify({
+        customStages: {
+          bundle: { type: 'skill', skillIds: ['correctness-audit', 'security-audit'] }
+        }
+      }), 'utf8');
+      const def = resolveStageDefinition('bundle', tmpDir);
+      assert.equal(def.type, 'skill');
+      assert.deepEqual(def.skillIds, ['correctness-audit', 'security-audit']);
+      assert.equal(def.skillId, undefined);
     });
   });
 

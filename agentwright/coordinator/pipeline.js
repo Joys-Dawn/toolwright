@@ -57,11 +57,23 @@ function validateUserConfig(parsed, configPath) {
       }
       const hasSkillId = typeof value.skillId === 'string';
       const hasSkillPath = typeof value.skillPath === 'string';
-      if (!hasSkillId && !hasSkillPath) {
-        throw new Error(`Invalid config ${configPath}: customStage "${name}" must have either "skillId" (builtin) or "skillPath" (project-relative path to a SKILL.md file).`);
+      const hasSkillIds = Array.isArray(value.skillIds);
+      const presentCount = [hasSkillId, hasSkillPath, hasSkillIds].filter(Boolean).length;
+      if (presentCount === 0) {
+        throw new Error(`Invalid config ${configPath}: customStage "${name}" must have one of "skillId" (single builtin), "skillIds" (fused builtin array), or "skillPath" (project-relative path to a SKILL.md file).`);
       }
-      if (hasSkillId && hasSkillPath) {
-        throw new Error(`Invalid config ${configPath}: customStage "${name}" must have either "skillId" or "skillPath", not both.`);
+      if (presentCount > 1) {
+        throw new Error(`Invalid config ${configPath}: customStage "${name}" must have exactly one of "skillId", "skillIds", or "skillPath" — not multiple.`);
+      }
+      if (hasSkillIds) {
+        if (value.skillIds.length < 2) {
+          throw new Error(`Invalid config ${configPath}: customStage "${name}" "skillIds" must list at least 2 skill IDs (use "skillId" for a single skill).`);
+        }
+        for (const id of value.skillIds) {
+          if (typeof id !== 'string' || id.length === 0) {
+            throw new Error(`Invalid config ${configPath}: customStage "${name}" "skillIds" must contain non-empty strings.`);
+          }
+        }
       }
     }
   }

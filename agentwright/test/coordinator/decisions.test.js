@@ -212,5 +212,41 @@ describe('decisions', () => {
       assert.equal(summary.rejectedFindings.length, 0);
       assert.equal(summary.pendingApprovals.length, 0);
     });
+
+    it('passes auditType through to rejectedFindings and pendingApprovals when present', () => {
+      const run = createRun(tmpDir, makeSpec());
+      const decisions = {
+        stage: 'audit-bundle',
+        decisions: [
+          { findingId: 'f1', decision: 'invalid', action: 'none', rationale: 'noise', auditType: 'security-audit' },
+          { findingId: 'f2', decision: 'valid_needs_approval', action: 'none', rationale: 'big', auditType: 'best-practices-audit' }
+        ]
+      };
+
+      updateSummary(tmpDir, run.runId, 'audit-bundle', decisions, 'accepted', '--diff');
+
+      const summary = readJson(summaryFile(tmpDir, run.runId));
+      assert.equal(summary.rejectedFindings.length, 1);
+      assert.equal(summary.rejectedFindings[0].auditType, 'security-audit');
+      assert.equal(summary.pendingApprovals.length, 1);
+      assert.equal(summary.pendingApprovals[0].auditType, 'best-practices-audit');
+    });
+
+    it('omits auditType from summary entries when absent on decisions (back-compat)', () => {
+      const run = createRun(tmpDir, makeSpec());
+      const decisions = {
+        stage: 'correctness',
+        decisions: [
+          { findingId: 'f1', decision: 'invalid', action: 'none', rationale: 'no' },
+          { findingId: 'f2', decision: 'valid_needs_approval', action: 'none', rationale: 'maybe' }
+        ]
+      };
+
+      updateSummary(tmpDir, run.runId, 'correctness', decisions, 'accepted', '--diff');
+
+      const summary = readJson(summaryFile(tmpDir, run.runId));
+      assert.equal(Object.prototype.hasOwnProperty.call(summary.rejectedFindings[0], 'auditType'), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(summary.pendingApprovals[0], 'auditType'), false);
+    });
   });
 });

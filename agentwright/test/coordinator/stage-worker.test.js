@@ -155,6 +155,85 @@ describe('stage-worker', () => {
     fs.rmSync(snapshotPath, { recursive: true, force: true });
   });
 
+  describe('buildAuditorPrompt — fused stages', () => {
+    const { buildAuditorPrompt, resolveSkillPaths } = require('../../coordinator/stage-worker');
+    const PLUGIN_ROOT = path.resolve(__dirname, '../..');
+
+    it('produces a single-skill prompt when stageDef has one skillId', () => {
+      const prompt = buildAuditorPrompt({
+        pluginRoot: PLUGIN_ROOT,
+        cwd: tmpDir,
+        stageName: 'correctness',
+        stageDef: { type: 'skill', skillId: 'correctness-audit' },
+        scope: '--diff',
+        scopeMode: 'diff'
+      });
+      assert.ok(prompt.includes('Audit stage: correctness'));
+      assert.ok(!prompt.includes('FUSED stage'));
+      assert.ok(!prompt.includes('===== Skill:'));
+      assert.ok(!prompt.includes('"auditType":"correctness-audit"'));
+    });
+
+    it('produces a fused prompt that lists every skill ID in the auditType instruction', () => {
+      const prompt = buildAuditorPrompt({
+        pluginRoot: PLUGIN_ROOT,
+        cwd: tmpDir,
+        stageName: 'audit-bundle',
+        stageDef: {
+          type: 'skill',
+          skillIds: ['correctness-audit', 'security-audit', 'best-practices-audit']
+        },
+        scope: '--diff',
+        scopeMode: 'diff'
+      });
+      assert.ok(prompt.includes('Audit stage: audit-bundle (fused: correctness-audit, security-audit, best-practices-audit)'));
+      assert.ok(prompt.includes('FUSED stage running 3 audit types'));
+      assert.ok(prompt.includes('"correctness-audit"'));
+      assert.ok(prompt.includes('"security-audit"'));
+      assert.ok(prompt.includes('"best-practices-audit"'));
+      assert.ok(prompt.includes('===== Skill: correctness-audit ====='));
+      assert.ok(prompt.includes('===== Skill: security-audit ====='));
+      assert.ok(prompt.includes('===== Skill: best-practices-audit ====='));
+      assert.ok(prompt.includes('"auditType":"correctness-audit|security-audit|best-practices-audit"'));
+      assert.ok(prompt.includes(`{"type":"done","auditType":"audit-bundle"`));
+    });
+
+    it('resolveSkillPaths returns one entry for single-skill stages', () => {
+      const skills = resolveSkillPaths({
+        pluginRoot: PLUGIN_ROOT,
+        cwd: tmpDir,
+        stageName: 'correctness',
+        stageDef: { type: 'skill', skillId: 'correctness-audit' }
+      });
+      assert.equal(skills.length, 1);
+      assert.equal(skills[0].id, 'correctness-audit');
+      assert.ok(skills[0].path.endsWith('SKILL.md'));
+    });
+
+    it('resolveSkillPaths returns N entries for fused stages, preserving order', () => {
+      const skills = resolveSkillPaths({
+        pluginRoot: PLUGIN_ROOT,
+        cwd: tmpDir,
+        stageName: 'audit-bundle',
+        stageDef: {
+          type: 'skill',
+          skillIds: ['security-audit', 'correctness-audit']
+        }
+      });
+      assert.equal(skills.length, 2);
+      assert.deepEqual(skills.map(s => s.id), ['security-audit', 'correctness-audit']);
+    });
+
+    it('resolveSkillPaths throws when a fused skillIds entry is unknown', () => {
+      assert.throws(() => resolveSkillPaths({
+        pluginRoot: PLUGIN_ROOT,
+        cwd: tmpDir,
+        stageName: 'audit-bundle',
+        stageDef: { type: 'skill', skillIds: ['correctness-audit', 'no-such-skill'] }
+      }), /Vendored skill not found/);
+    });
+  });
+
   describe('prompt building validation', () => {
     it('rejects invalid skill IDs via worker error path', () => {
       // Create a config with a stage that has an invalid skillId

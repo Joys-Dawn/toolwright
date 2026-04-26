@@ -47,23 +47,22 @@ function updateSummary(cwd, runId, stageName, decisions, completionResult, scope
       approval: decisions.decisions.filter(d => d.decision === 'valid_needs_approval').length
     }
   });
+  const buildEntry = (d) => {
+    const entry = {
+      stage: stageName,
+      findingId: d.findingId,
+      rationale: d.rationale || ''
+    };
+    if (typeof d.auditType === 'string' && d.auditType.length > 0) {
+      entry.auditType = d.auditType;
+    }
+    return entry;
+  };
   summary.rejectedFindings.push(
-    ...decisions.decisions
-      .filter(d => d.decision === 'invalid')
-      .map(d => ({
-        stage: stageName,
-        findingId: d.findingId,
-        rationale: d.rationale || ''
-      }))
+    ...decisions.decisions.filter(d => d.decision === 'invalid').map(buildEntry)
   );
   summary.pendingApprovals.push(
-    ...decisions.decisions
-      .filter(d => d.decision === 'valid_needs_approval')
-      .map(d => ({
-        stage: stageName,
-        findingId: d.findingId,
-        rationale: d.rationale || ''
-      }))
+    ...decisions.decisions.filter(d => d.decision === 'valid_needs_approval').map(buildEntry)
   );
   writeJson(summaryFile(cwd, runId), summary);
 }

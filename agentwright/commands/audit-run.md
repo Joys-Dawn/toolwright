@@ -68,6 +68,8 @@ Workflow:
 |---|-------|---------|---------|----------|--------|
 | 1 | correctness | Unchecked null return from getUser() | auth.js:42 | fixed | Added null guard |
 
+For findings emitted by a **fused stage** (a single agent running multiple audit skills — see the stage's `skillIds` config), include the audit category in the Stage column as `<stageName>:<auditType>` so reviewers can see which lens flagged each finding (e.g., `audit-bundle:security-audit`). The `auditType` is on each finding event in `findings.jsonl` and on each entry in `summary.json`'s `rejectedFindings`/`pendingApprovals`. If a finding lacks `auditType`, just show the bare stage name.
+
 Keep **Finding** and **Action** columns to one short phrase each. After the table, add a **Verifier** section with a one-line result.
 
 7. If `.claude/collab/` exists and other agents are registered, use `/wrightward:collab-done` to release file claims.

@@ -511,4 +511,64 @@ describe('process-manager', () => {
       assert.equal(doneEvent, null);
     });
   });
+
+  describe('mock-auditor-fused integration', () => {
+    const MOCK_FUSED = path.resolve(__dirname, 'fixtures/mock-auditor-fused.js');
+
+    function spawnMockFusedAuditor(args = []) {
+      return new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [MOCK_FUSED, ...args], {
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+        const findings = [];
+        let doneEvent = null;
+        let resultEvent = null;
+
+        const handleTextDelta = createTextDeltaLineReader(line => {
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed.type === 'finding') findings.push(parsed);
+            if (parsed.type === 'done') doneEvent = parsed;
+          } catch (_) {}
+        });
+
+        createJsonLineReader(child.stdout, line => {
+          try {
+            const event = JSON.parse(line);
+            if (event.type === 'result') resultEvent = event;
+            if (event.type === 'stream_event' && event.event?.delta?.type === 'text_delta') {
+              handleTextDelta(event.event.delta.text);
+            }
+          } catch (_) {}
+        });
+
+        child.on('close', code => {
+          handleTextDelta.flush();
+          resolve({ exitCode: code, findings, doneEvent, resultEvent });
+        });
+        child.on('error', reject);
+      });
+    }
+
+    it('preserves auditType on every finding from a fused auditor', async () => {
+      const { exitCode, findings, doneEvent } = await spawnMockFusedAuditor();
+      assert.equal(exitCode, 0);
+      assert.equal(findings.length, 3);
+      assert.equal(findings[0].finding.auditType, 'correctness-audit');
+      assert.equal(findings[1].finding.auditType, 'security-audit');
+      assert.equal(findings[2].finding.auditType, 'best-practices-audit');
+      assert.ok(doneEvent);
+      assert.equal(doneEvent.auditType, 'audit-bundle');
+      assert.equal(doneEvent.emittedCount, 3);
+    });
+
+    it('passes through findings that omit auditType (graceful degradation)', async () => {
+      const { exitCode, findings } = await spawnMockFusedAuditor(['--missing-type']);
+      assert.equal(exitCode, 0);
+      assert.equal(findings.length, 3);
+      assert.equal(findings[0].finding.auditType, 'correctness-audit');
+      assert.equal(findings[1].finding.auditType, undefined);
+      assert.equal(findings[2].finding.auditType, 'best-practices-audit');
+    });
+  });
 });

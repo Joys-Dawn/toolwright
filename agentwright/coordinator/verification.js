@@ -236,14 +236,22 @@ async function recordDecision(runId, stageName, findingId, opts) {
       throw new Error(`Duplicate decision: findingId ${findingId} already recorded.`);
     }
 
-    decisionsData.decisions.push({
+    const matchingFinding = getEmittedFindings(cwd, runId, stageName)
+      .find(event => event.finding.id === findingId);
+    const findingAuditType = matchingFinding?.finding?.auditType;
+
+    const decisionRecord = {
       findingId,
       decision: opts.decision,
       action: opts.action || 'none',
       rationale: opts.rationale || '',
       filesChanged: opts.filesChanged || [],
       verificationEvidence: opts.evidence || ''
-    });
+    };
+    if (typeof findingAuditType === 'string' && findingAuditType.length > 0) {
+      decisionRecord.auditType = findingAuditType;
+    }
+    decisionsData.decisions.push(decisionRecord);
     writeJson(decisionsPath, decisionsData);
 
     const verifier = readJson(verifierPath, {

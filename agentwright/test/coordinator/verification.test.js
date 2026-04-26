@@ -297,6 +297,48 @@ describe('recordDecision', () => {
     );
   });
 
+  it('passes auditType from finding into decision when finding has auditType', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'audit-bundle', 0);
+    const queuePath = stageFindingsQueueFile(tmpDir, runId, 'audit-bundle');
+    appendJsonLine(queuePath, {
+      type: 'finding',
+      finding: {
+        id: 'audit-bundle-1',
+        auditType: 'security-audit',
+        severity: 'high',
+        title: 'tagged finding',
+        file: 'src/x.js',
+        problem: 'p',
+        fix: 'f',
+        evidence: 'e'
+      }
+    });
+
+    await recordDecision(runId, 'audit-bundle', 'audit-bundle-1', {
+      decision: 'valid',
+      action: 'fixed',
+      rationale: 'r'
+    });
+
+    const decisions = readJson(stageDecisionsFile(tmpDir, runId, 'audit-bundle'));
+    assert.equal(decisions.decisions.length, 1);
+    assert.equal(decisions.decisions[0].auditType, 'security-audit');
+  });
+
+  it('omits auditType on decision when finding has no auditType (back-compat)', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1);
+
+    await recordDecision(runId, 'correctness', 'correctness-1', {
+      decision: 'invalid',
+      action: 'none',
+      rationale: 'not real'
+    });
+
+    const decisions = readJson(stageDecisionsFile(tmpDir, runId, 'correctness'));
+    assert.equal(decisions.decisions.length, 1);
+    assert.equal(Object.prototype.hasOwnProperty.call(decisions.decisions[0], 'auditType'), false);
+  });
+
   it('increments fixedCount for valid+fixed', async () => {
     const { runId } = setupRunWithFindings(tmpDir, 'correctness', 2);
     await recordDecision(runId, 'correctness', 'correctness-1', { decision: 'valid', action: 'fixed' });

@@ -22,6 +22,7 @@ const { writeJson, readJson, readJsonLines } = require('../../coordinator/io');
 
 const { createGroupSnapshot } = require('../../coordinator/snapshot-manager');
 const { spawnAuditor } = require('../../coordinator/process-manager');
+const { cleanupClaudeProjectFolder } = require('../../coordinator/stage-worker');
 const { initializeStageFilesForWorker } = require('./helpers');
 
 const COORDINATOR = path.resolve(__dirname, '../../coordinator/index.js');
@@ -43,6 +44,7 @@ describe('integration: real auditor', () => {
   });
 
   afterEach(() => {
+    cleanupClaudeProjectFolder(tmpDir);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

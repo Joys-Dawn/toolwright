@@ -53,7 +53,7 @@ Run `/agentwright:config-init` to drop a fully-defaulted `.claude/agentwright.js
 
 ## Skills
 
-21 vendored skills:
+22 vendored skills:
 
 ### Audit skills (used by the pipeline)
 
@@ -97,22 +97,24 @@ Write, review, and fix tests. Typically invoked by the main agent after `test-co
 
 Skill wrappers that invoke the built-in agents. Use `/agentwright:<name>` instead of typing the full `@agent-agentwright:<agent>` mention.
 
-| Skill | Agent | Pattern |
-|-------|-------|---------|
-| **research** `<topic>` | deep-research | Forked — self-contained topic |
-| **update-docs** `[scope]` | update-docs | Forked — infers from git diff |
-| **critique** `[focus]` | party-pooper | Forked — reads session transcript |
-| **verify** `[focus]` | verifier | Forked — reads session transcript + git diff |
-| **challenge** `[claim]` | detective (x2) | Inline — dispatches two detectives with opposing hypotheses |
+| Skill | Agent |
+|-------|-------|
+| **research** `<topic>` | deep-research |
+| **update-docs** `[scope]` | update-docs |
+| **critique** `[focus]` | party-pooper |
+| **verify** `[focus]` | verifier |
+| **verify-plan** `[--plan-path <path>] [--against <ref>]` | plan-verifier |
+| **challenge** `[claim]` | detective (×2) |
 
 ## Agents
 
-Five built-in agents available for dispatch:
+Six built-in agents available for dispatch:
 
 | Agent | What it does | Permissions |
 |-------|-------------|-------------|
 | **detective** | Investigates a hypothesis about code behavior — traces logic, reads files, runs tests, reports evidence. Used by `/challenge` to independently verify disputed claims. | Read-only |
 | **verifier** | Validates applied fixes: implementations exist, tests pass, no unstated changes. Dispatched automatically after audit fixes. | Read-only |
+| **plan-verifier** | Validates that an approved plan was implemented faithfully. Cross-checks the plan, the implementer's transcript, and the diff to surface silent skips, undeclared additions, scope violations, missing tests, and fabricated claims. Used by `/verify-plan`. | Read-only |
 | **deep-research** | Web search and literature review with synthesis | Read-only |
 | **party-pooper** | Adversarial critique of ideas, plans, and proposals | Read-only |
 | **update-docs** | Keeps project docs in sync with code changes | `.md` files only |
@@ -168,6 +170,29 @@ Create `.claude/agentwright.json` in your project to customize pipelines and ret
 ### Custom stages
 
 Reference a builtin skill by `skillId` or a project-relative SKILL.md by `skillPath`. Only needed if you define your own audit stages — the 6 vendored audit skills are available by name without any configuration.
+
+### Fused stages
+
+A custom stage may declare `skillIds: [...]` (an array of builtin skill IDs) to run all listed audits in **one auditor agent** against one snapshot, instead of spawning one agent per skill. Useful for small changes where the per-stage agent boot/snapshot-read overhead outweighs the benefit of separate processes.
+
+```json
+{
+  "customStages": {
+    "audit-bundle": {
+      "type": "skill",
+      "skillIds": ["correctness-audit", "security-audit", "best-practices-audit"]
+    }
+  },
+  "pipelines": {
+    "small-change": ["audit-bundle"]
+  }
+}
+```
+
+Rules:
+- Exactly one of `skillId`, `skillIds`, or `skillPath` per custom stage.
+- Each finding emitted by the fused agent is tagged with an `auditType` field naming which skill it came from. The tag flows through into `summary.json`'s `rejectedFindings` and `pendingApprovals` entries.
+- Best for 2–3 fusions on small diffs. Fusing more skills bloats the prompt and dilutes the agent's focus on each lens.
 
 ### Retention
 
