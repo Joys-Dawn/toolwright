@@ -2,7 +2,7 @@
 
 > Daily ranked list of novel, code-only product ideas backed by quoted public evidence. Mines pain-point posts (Reddit / HN / GitHub issues) and newly-published capabilities (arXiv / bioRxiv / PubMed), runs a six-source novelty check, gates on three feasibility constraints, and writes a top-N Markdown digest with build sketches and quoted evidence.
 
-**Version**: 0.8.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/ideawright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/ideawright/README.md)
+**Version**: 0.9.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/ideawright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/ideawright/README.md)
 
 ## Install
 
@@ -196,9 +196,10 @@ Every source has the same shape: an `enabled` flag, plus per-source knobs. Run `
 | Key | Default | Notes |
 |---|---|---|
 | `sources.reddit.enabled` | `true` | Master switch. |
-| `sources.reddit.subreddits` | `null` | Array of sub names without `/r/`; `null` falls back to 16 built-ins. |
-| `sources.reddit.max_pages` | `10` | Pages per sub on first run; cursor-paginates afterward. |
-| `sources.reddit.max_posts_per_sub` | `null` | Cap on observations per sub per run; `null` = no cap (uses `max_pages * 100`). |
+| `sources.reddit.subreddits` | `null` | Array of sub names without `/r/`; `null` falls back to 25 built-ins. |
+| `sources.reddit.max_pages` | `10` | Pages per sub on first run; cursor-paginates afterward. Reddit hard-caps pagination at ~1000 posts deep regardless, so `>10` is wasted. |
+| `sources.reddit.max_posts_per_sub` | `null` | Cap on **posts considered** per sub per run (observations emitted are typically fewer — only pain-matching posts pass). `null` = no cap (uses `max_pages * 100`). |
+| `sources.reddit.seed_listings` | `["new"]` | Listings to scan only on the **first scan** of each sub (when no cursor exists). Each entry is its own ~1000-post window. Combine for deeper history. After the first scan, only `/new` runs incrementally. Format: `"<endpoint>"` or `"<endpoint>:<time>"`. Endpoints: `new`, `hot`, `top`, `controversial`. Time filters (top/controversial only): `hour`, `day`, `week`, `month`, `year`, `all`. Example: `["new", "top:all", "controversial:all"]`. |
 | `sources.hn.enabled` | `true` | Master switch. |
 | `sources.hn.lookback_days` | `60` | First-run window in days; cursor takes over after. |
 | `sources.hn.max_per_query` | `100` | Algolia `hitsPerPage` per query (max 1000). |

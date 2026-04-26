@@ -16,13 +16,21 @@ const DEFAULTS = {
     // Pipeline 1 — demand-driven (pain signals)
     reddit: {
       enabled: true,
-      // Pages per sub on first scan (each page = ~100 posts).
+      // Pages per sub on first scan (each page = ~100 posts; Reddit caps
+      // pagination at ~1000 posts deep regardless, so >10 is wasted).
       max_pages: 10,
       // Hard cap of posts per sub regardless of pages. null = no cap.
       max_posts_per_sub: null,
-      // Override the built-in 16 idea/pain subreddits with your own list.
+      // Override the built-in idea/pain subreddits with your own list.
       // Leave null to use the defaults.
       subreddits: null,
+      // Listings to scan on the first scan (when no cursor exists). Each
+      // is its own ~1000-post window. Combine for deeper history on slow
+      // subs. After the first scan, only /new is used incrementally via
+      // the cursor — these settings are ignored. Format: "<endpoint>" or
+      // "<endpoint>:<time_filter>". Endpoints: new, hot, top, controversial.
+      // Time filters: hour, day, week, month, year, all (top/controversial only).
+      seed_listings: ['new'],
     },
     hn: {
       enabled: true,

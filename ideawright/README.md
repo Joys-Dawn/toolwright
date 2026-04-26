@@ -102,9 +102,10 @@ Every source has the same shape: an `enabled` flag plus per-source knobs. Run `/
 | Key | Default | Notes |
 |---|---|---|
 | `sources.<name>.enabled` | `true` (per source) | Toggle any source off. |
-| `sources.reddit.subreddits` | `null` (16 built-ins) | Array of sub names without `/r/`. |
-| `sources.reddit.max_pages` | `10` | Pages per sub on first run; cursor-paginates afterward. |
-| `sources.reddit.max_posts_per_sub` | `null` | Cap observations per sub per run; `null` = no cap. |
+| `sources.reddit.subreddits` | `null` (25 built-ins) | Array of sub names without `/r/`. |
+| `sources.reddit.max_pages` | `10` | Pages per sub on first run; Reddit hard-caps pagination at ~1000 posts deep (>10 is wasted). |
+| `sources.reddit.max_posts_per_sub` | `null` | Cap **posts considered** per sub per run (observations emitted are fewer — only pain-matching posts pass). `null` = no cap. |
+| `sources.reddit.seed_listings` | `["new"]` | Listings to hit only on the first scan per sub. Combine `new`/`hot`/`top:all`/`top:year`/`controversial:all` etc. for deeper history. After first scan, only `/new` runs. |
 | `sources.hn.lookback_days` | `60` | First-run window. |
 | `sources.hn.max_per_query` | `100` | Algolia `hitsPerPage`. |
 | `sources.hn.queries` | `null` (8 built-ins) | Array of pain-phrase queries. |
