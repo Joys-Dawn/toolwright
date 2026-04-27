@@ -7,13 +7,14 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash(node *), Bash(git *), Bash(np
 Run the audit pipeline and verify/fix findings as they arrive.
 
 Rules:
-- If `$ARGUMENTS` is empty, treat scope as `--diff`. Default pipeline: correctness, security, best-practices.
+- If `$ARGUMENTS` is empty, treat scope as `--diff`. Default pipeline: implementation, correctness, best-practices, behavior, test-coverage.
 - If the first token is a known pipeline name, use it. If it is a comma-separated stage list, run those stages sequentially. Otherwise treat the full argument string as scope.
 - Scope tokens: `--diff` (changed lines vs HEAD, the default), `--all` (entire repo), or one or more paths/files (targeted).
 - You are the verifier/fixer for the live repo. The auditor runs on a frozen snapshot.
 - Never blindly accept auditor claims. Re-read cited code yourself and **reason about whether the finding is actually a real problem**. Seeing that the code matches what the auditor described is not enough — you must independently judge whether the described behavior is actually wrong. Think about the logic, the context, edge cases, and whether the "fix" would truly improve correctness or safety.
 - **Fix immediately** when objectively correct (any competent reviewer would agree). This applies to all finding types: bugs, security flaws, naming, dead code, missing error handling, and best-practice refactors that are clearly valid improvements (e.g., replacing a brittle pattern with the idiomatic one, extracting duplicated logic, adding missing validation). Do not defer a refactor just because it is a refactor — defer it only if it involves a meaningful tradeoff or is large enough to risk regressions.
 - **Mark `valid_needs_approval`** when it's a genuine judgment call, a large-scale refactor that touches many files, or a meaningful tradeoff where reasonable reviewers could disagree. When in doubt, defer.
+- **Behavior-audit findings: defer only when the finding goes directly against something the user explicitly asked for.** For findings from the `behavior` stage (skill ID `behavior-audit`), before deciding fix vs. defer, ask: *would fixing this finding reverse something the user explicitly requested?* Read the conversation context and the original feature request. Only mark `valid_needs_approval` when the auditor is flagging the exact behavior the user explicitly asked for — only the user can revise their own request. Otherwise apply the normal fix-vs-defer rules above; loose or incidental relation to a feature the user requested is not enough to defer.
 - If wrightward blocks a write (file contention), skip that finding — do not record a decision for it. It will reappear on the next poll.
 - If a finding references a file **outside** the audit scope, do not ignore it. Mark it `valid_needs_approval` and present it to the user at the end with the other deferred findings.
 

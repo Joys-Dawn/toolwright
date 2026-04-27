@@ -188,6 +188,6 @@ Before finalizing your report, verify every finding:
 - **Be specific**: always cite file paths and line numbers.
 - **Be actionable**: every finding must include a concrete fix.
 - **Respect scope**: only audit what's in scope. In diff mode, only flag issues in changed lines (and their immediate context).
-- **Don't duplicate code-quality-review**: focus on named principles and standards, not generic bug-hunting. If using both skills, they complement each other.
+- **Don't duplicate correctness-audit**: focus on named principles and standards, not generic bug-hunting. If using both skills, they complement each other.
 - **Pragmatism over dogma**: a principle violation is only worth flagging if fixing it provides real value. Don't flag trivial or pedantic violations that would add noise.
 - **Context matters**: consider the project's scale, team size, and existing patterns. A startup prototype has different standards than a production system.

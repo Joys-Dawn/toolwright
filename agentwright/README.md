@@ -50,13 +50,13 @@ Run `/agentwright:config-init` to drop a fully-defaulted `.claude/agentwright.js
 /audit-step security src/auth/          # single stage on a directory
 ```
 
-**Default pipeline** (when no pipeline is specified): `correctness → security → best-practices`
+**Default pipeline** (when no pipeline is specified): `implementation → correctness → best-practices → behavior → test-coverage`
 
 **Default scope** (when no scope is specified): files changed in `git diff` (staged + unstaged). Pass `--all` to audit the entire repo, or one or more paths to audit only those files/directories.
 
 ## Skills
 
-22 vendored skills:
+23 vendored skills:
 
 ### Audit skills (used by the pipeline)
 
@@ -68,6 +68,7 @@ Run `/agentwright:config-init` to drop a fully-defaulted `.claude/agentwright.js
 | **migration-audit** | PL/pgSQL: NULL traps, race conditions, missing constraints, JSONB pitfalls |
 | **implementation-audit** | Roundabout solutions, unnecessary complexity, reinvented wheels, naive designs |
 | **ui-audit** | WCAG 2.2 accessibility, WAI-ARIA patterns, component anti-patterns (React/Tailwind) |
+| **behavior-audit** | User-perspective walkthrough — surprising behavior, hostile defaults, cross-feature breaks; reasons from first principles, not patterns |
 | **test-coverage-audit** | Maps source files against tests, produces risk-prioritized coverage gaps |
 
 ### Planning skills

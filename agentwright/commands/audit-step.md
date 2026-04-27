@@ -22,6 +22,7 @@ Note the `runId` from the JSON output.
 3. Apply the same fix vs. defer rules as `audit-run`:
    - **Fix immediately** when objectively correct
    - **Mark `valid_needs_approval`** for judgment calls or large refactors
+   - **Behavior-audit findings (stage `behavior`): defer only when fixing the finding would directly reverse something the user explicitly asked for.** Read the conversation context and the original request. Only mark `valid_needs_approval` when the auditor is flagging the exact behavior the user explicitly requested — only the user can revise their own request. Otherwise apply the normal fix-vs-defer rules; loose or incidental relation to a feature the user requested is not enough to defer.
    - Skip file-contention-blocked findings (they reappear on next poll)
 
 4. After completion, if any fixes were applied, dispatch the `agentwright:verifier` subagent. Do not blindly accept verifier claims.

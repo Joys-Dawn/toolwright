@@ -10,22 +10,20 @@ const BUILTIN_STAGES = {
   implementation: { type: 'skill', skillId: 'implementation-audit' },
   migration: { type: 'skill', skillId: 'migration-audit' },
   ui: { type: 'skill', skillId: 'ui-audit' },
+  behavior: { type: 'skill', skillId: 'behavior-audit' },
   'test-coverage': { type: 'skill', skillId: 'test-coverage-audit' },
-  'tests-migration': { type: 'skill', skillId: 'write-tests-pgtap' },
-  'tests-edge': { type: 'skill', skillId: 'write-tests-deno' },
-  'tests-frontend': { type: 'skill', skillId: 'write-tests-frontend' }
 };
 
 const DEFAULT_PIPELINES = {
-  default: ['correctness', 'security', 'best-practices'],
+  default: ['implementation', 'correctness', 'best-practices', 'behavior', 'test-coverage'],
   full: [
+    'implementation',
     'correctness',
-    ['migration', 'ui'],
     'security',
     'best-practices',
-    'tests-migration',
-    'tests-edge',
-    'tests-frontend'
+    ['migration', 'ui'],
+    'behavior',
+    'test-coverage'
   ]
 };
 

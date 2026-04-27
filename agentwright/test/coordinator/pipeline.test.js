@@ -35,8 +35,7 @@ describe('pipeline', () => {
     it('has all expected stages', () => {
       const expected = [
         'correctness', 'security', 'best-practices',
-        'migration', 'ui', 'test-coverage',
-        'tests-migration', 'tests-edge', 'tests-frontend'
+        'implementation', 'migration', 'ui', 'behavior', 'test-coverage'
       ];
       for (const name of expected) {
         assert.ok(BUILTIN_STAGES[name], `Missing builtin stage: ${name}`);
@@ -52,9 +51,11 @@ describe('pipeline', () => {
       assert.ok(Array.isArray(DEFAULT_PIPELINES.full));
     });
 
-    it('default pipeline has 3 stages', () => {
-      assert.equal(DEFAULT_PIPELINES.default.length, 3);
-      assert.deepEqual(DEFAULT_PIPELINES.default, ['correctness', 'security', 'best-practices']);
+    it('default pipeline matches expected stages', () => {
+      assert.deepEqual(
+        DEFAULT_PIPELINES.default,
+        ['implementation', 'correctness', 'best-practices', 'behavior', 'test-coverage']
+      );
     });
 
     it('full pipeline includes parallel groups', () => {
@@ -311,7 +312,10 @@ describe('pipeline', () => {
       const result = resolveCommandArgs('', tmpDir);
       assert.equal(result.pipelineName, 'default');
       assert.equal(result.scope, '--diff');
-      assert.deepEqual(result.stages, ['correctness', 'security', 'best-practices']);
+      assert.deepEqual(
+        result.stages,
+        ['implementation', 'correctness', 'best-practices', 'behavior', 'test-coverage']
+      );
     });
 
     it('resolves named pipeline', () => {
@@ -357,7 +361,10 @@ describe('pipeline', () => {
       const result = resolveCommandArgs('src/auth.ts', tmpDir);
       assert.equal(result.pipelineName, 'default');
       assert.equal(result.scope, 'src/auth.ts');
-      assert.deepEqual(result.stages, ['correctness', 'security', 'best-practices']);
+      assert.deepEqual(
+        result.stages,
+        ['implementation', 'correctness', 'best-practices', 'behavior', 'test-coverage']
+      );
     });
 
     it('treats multi-token unrecognized input as scope', () => {

@@ -152,12 +152,12 @@ A plan section is "done" when it meets these criteria. Self-check before calling
 
 **Good** (specific, tests interleaved with implementation):
 > 1. **[Migration]** Add `notifications` table and RLS policy. Non-destructive; safe to ship independently.
-> 2. **[Test — `test-pgtap`]** RLS enforcement: verify user A cannot read user B's notifications. Blocked by step 1.
+> 2. **[Test — `write-tests-pgtap`]** RLS enforcement: verify user A cannot read user B's notifications. Blocked by step 1.
 > 3. **[Edge Function]** `POST /notifications/mark-read` — Zod-validated body, updates `read_at`, returns 204. Blocked by step 1.
-> 4. **[Test — `test-deno`]** Integration test: mark-read returns 204, missing auth returns 401, invalid body returns 400. Blocked by step 3.
+> 4. **[Test — `write-tests-deno`]** Integration test: mark-read returns 204, missing auth returns 401, invalid body returns 400. Blocked by step 3.
 > 5. **[React hook]** `useNotifications()` — Realtime subscription scoped to `auth.uid()`. Can be built in parallel with steps 3-4.
 > 6. **[UI]** `<NotificationBell>` — badge count, dropdown list, "mark all read" action. Blocked by step 5.
-> 7. **[Test — `test-frontend`]** NotificationBell renders badge, clicking "mark all read" clears unread state. Blocked by step 6.
+> 7. **[Test — `write-tests-frontend`]** NotificationBell renders badge, clicking "mark all read" clears unread state. Blocked by step 6.
 
 ---
 

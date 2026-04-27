@@ -42,7 +42,7 @@ Self-check before exiting plan mode:
 - [ ] A regression test is described that reproduces the original bug (fails before fix, passes after).
 - [ ] Untested code paths exposed by the change impact analysis have new tests planned.
 - [ ] Existing tests that assert buggy behavior are identified and marked for update.
-- [ ] The correct test skill is identified (test-frontend, test-deno, test-pgtap, or test-writing).
+- [ ] The correct test skill is identified (write-tests-frontend, write-tests-deno, write-tests-pgtap, or write-tests).
 
 ### Change Impact
 - [ ] Every file to be modified is listed and verified to exist (Glob).
@@ -79,7 +79,7 @@ Fixing the bug without adding a test that reproduces it, or without testing the 
 
 **Signal**: Implementation steps end with the code change and don't include test steps.
 
-**Remedy**: At minimum, a regression test that reproduces the original bug. Beyond that, test any affected code paths that lacked coverage. Delegate to the appropriate test skill (test-frontend, test-deno, test-pgtap, or test-writing).
+**Remedy**: At minimum, a regression test that reproduces the original bug. Beyond that, test any affected code paths that lacked coverage. Delegate to the appropriate test skill (write-tests-frontend, write-tests-deno, write-tests-pgtap, or write-tests).
 
 ### Compatibility Blindness
 Fixing the bug without considering that callers may have adapted to the broken behavior. The fix is correct but breaks downstream code.
