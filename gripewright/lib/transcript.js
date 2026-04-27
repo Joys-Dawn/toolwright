@@ -44,7 +44,7 @@ function isRealUserMessage(event) {
   const text = contentToText(content);
   if (!text.trim()) return false;
   if (isSyntheticUserMarker(text)) return false;
-  if (text.trim() === '[Request interrupted by user]') return false;
+  if (text.trim().startsWith('[Request interrupted by user')) return false;
   return true;
 }
 

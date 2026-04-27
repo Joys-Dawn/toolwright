@@ -90,6 +90,10 @@ describe('isRealUserMessage', () => {
     assert.equal(t.isRealUserMessage(userEvent('[Request interrupted by user]')), false);
   });
 
+  it('interrupt-during-tool-use marker filtered (regression)', () => {
+    assert.equal(t.isRealUserMessage(userEvent('[Request interrupted by user for tool use]')), false);
+  });
+
   it('real slash command invocation is real user', () => {
     const ev = slashCommandEvent('agentwright:critique', 'this design');
     assert.equal(t.isRealUserMessage(ev), true);
