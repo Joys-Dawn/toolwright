@@ -41,15 +41,18 @@ Run `/agentwright:config-init` to drop a fully-defaulted `.claude/agentwright.js
 
 ```
 /audit-run                              # default pipeline on git diff
+/audit-run --all                        # default pipeline on the entire repo
 /audit-run src/api/                     # default pipeline on a directory
 /audit-run full --diff                  # named pipeline on git diff
+/audit-run full --all                   # named pipeline on the entire repo
 /audit-run correctness,security src/    # specific stages only
+/audit-step security --all              # single stage on the entire repo
 /audit-step security src/auth/          # single stage on a directory
 ```
 
 **Default pipeline** (when no pipeline is specified): `correctness → security → best-practices`
 
-**Default scope** (when no scope is specified): files changed in `git diff` (staged + unstaged)
+**Default scope** (when no scope is specified): files changed in `git diff` (staged + unstaged). Pass `--all` to audit the entire repo, or one or more paths to audit only those files/directories.
 
 ## Skills
 

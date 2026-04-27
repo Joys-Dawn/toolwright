@@ -15,7 +15,8 @@ const {
   flattenGroups,
   resolveStageDefinition,
   resolveNamedPipeline,
-  resolveCommandArgs
+  resolveCommandArgs,
+  validateScope
 } = require('../../coordinator/pipeline');
 
 describe('pipeline', () => {
@@ -396,5 +397,71 @@ describe('pipeline', () => {
       assert.equal(result.pipelineName, null);
       assert.deepEqual(result.stages, ['correctness', 'security']);
     });
+
+    it('preserves --all as scope on the default pipeline', () => {
+      const result = resolveCommandArgs('--all', tmpDir);
+      assert.equal(result.pipelineName, 'default');
+      assert.equal(result.scope, '--all');
+    });
+
+    it('preserves --all as scope after a named pipeline', () => {
+      const result = resolveCommandArgs('default --all', tmpDir);
+      assert.equal(result.pipelineName, 'default');
+      assert.equal(result.scope, '--all');
+    });
+
+    it('preserves --all as scope after a single stage', () => {
+      const result = resolveCommandArgs('correctness --all', tmpDir);
+      assert.equal(result.pipelineName, null);
+      assert.deepEqual(result.stages, ['correctness']);
+      assert.equal(result.scope, '--all');
+    });
+
+    it('preserves explicit --diff as scope', () => {
+      const result = resolveCommandArgs('correctness --diff', tmpDir);
+      assert.equal(result.pipelineName, null);
+      assert.equal(result.scope, '--diff');
+    });
+
+    const invalidScopes = [
+      ['scope mixes --all with a path', '--all src/api/'],
+      ['--all-foo typo', '--all-foo'],
+      ['--diff-staged typo', '--diff-staged'],
+      ['stage is followed by --all and a path', 'correctness --all src/'],
+      ['scope mixes --all and --diff', '--all --diff']
+    ];
+    for (const [scenario, input] of invalidScopes) {
+      it(`throws when ${scenario}`, () => {
+        assert.throws(() => resolveCommandArgs(input, tmpDir), /Invalid scope/);
+      });
+    }
+  });
+
+  describe('validateScope', () => {
+    const accepted = [
+      ['--all alone', '--all'],
+      ['--diff alone', '--diff'],
+      ['a single path', 'src/api/'],
+      ['multiple paths', 'src/api/ src/lib/'],
+      ['an empty scope', '']
+    ];
+    for (const [scenario, input] of accepted) {
+      it(`accepts ${scenario}`, () => {
+        validateScope(input);
+      });
+    }
+
+    const rejected = [
+      ['--all with a path', '--all src/api/'],
+      ['path with --all in trailing position', 'src/api/ --all'],
+      ['--all-foo (hyphen-suffix typo)', '--all-foo'],
+      ['an unrecognized --flag token', '--bogus'],
+      ['multiple keywords together', '--all --diff']
+    ];
+    for (const [scenario, input] of rejected) {
+      it(`rejects ${scenario}`, () => {
+        assert.throws(() => validateScope(input), /Invalid scope/);
+      });
+    }
   });
 });

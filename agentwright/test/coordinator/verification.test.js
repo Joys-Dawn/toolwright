@@ -265,11 +265,15 @@ describe('nextFinding', () => {
 
   it('with wait=true returns immediately when finding is available', async () => {
     const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1);
+    const pollIntervalMs = 10;
     const t0 = performance.now();
-    const result = await nextFinding(runId, { wait: true, pollIntervalMs: 10 });
+    const result = await nextFinding(runId, { wait: true, pollIntervalMs });
     const elapsed = performance.now() - t0;
     assert.equal(result.status, 'finding');
-    assert.ok(elapsed < 500, `expected fast return, took ${elapsed}ms`);
+    // The invariant is: no extra pollIntervalMs sleep after finding appeared.
+    // Cold-cache file reads on Windows can spike well past the poll interval,
+    // so assert against a multiple rather than the interval itself.
+    assert.ok(elapsed < pollIntervalMs * 20, `wait branch should not sleep when finding is ready; took ${elapsed}ms`);
   });
 
   it('with wait timeout returns waiting after maxWaitMs when no findings appear', async () => {
@@ -282,7 +286,7 @@ describe('nextFinding', () => {
     const elapsed = performance.now() - t0;
     assert.equal(result.status, 'waiting');
     assert.ok(elapsed >= 100, `expected wait of at least 100ms, took ${elapsed}ms`);
-    assert.ok(elapsed < 1000, `expected wait to terminate near deadline, took ${elapsed}ms`);
+    assert.ok(elapsed < 500, `expected wait to terminate near deadline, took ${elapsed}ms`);
   });
 
   it('returns within wait deadline when pollInterval exceeds remaining budget', async () => {
@@ -294,7 +298,7 @@ describe('nextFinding', () => {
     const result = await nextFinding(runId, { wait: 50, pollIntervalMs: 1000 });
     const elapsed = performance.now() - t0;
     assert.equal(result.status, 'waiting');
-    assert.ok(elapsed < 300, `expected return within wait budget; took ${elapsed}ms`);
+    assert.ok(elapsed < 350, `expected return within wait budget; took ${elapsed}ms`);
   });
 
   it('with wait=true unblocks when a finding appears mid-wait', async () => {

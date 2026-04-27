@@ -339,7 +339,7 @@ describe('process-manager', () => {
 
   describe('requireClaudeCli', () => {
     it('does not throw when claude is available', () => {
-      assert.doesNotThrow(() => requireClaudeCli());
+      requireClaudeCli();
     });
   });
 

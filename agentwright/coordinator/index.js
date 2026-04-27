@@ -33,8 +33,9 @@ function printHelp() {
   process.stdout.write(
     [
       'Usage:',
-      '  node coordinator/index.js start [pipeline-or-stage-list] <scope>',
+      '  node coordinator/index.js start [pipeline-or-stage-list] [scope]',
       '  node coordinator/index.js start-stage <stage> [scope]',
+      '    scope: --diff (changed files vs HEAD, default), --all (entire repo), or one or more paths',
       '  node coordinator/index.js status [runId]',
       '  node coordinator/index.js complete-stage --run <runId> --stage <name> [--result accepted|rejected|approval]',
       '  node coordinator/index.js next --run <runId>',
@@ -193,13 +194,16 @@ async function main() {
   }
 
   const command = argv[0];
-  const { flags, positional } = parseFlags(argv.slice(1));
+  // start and start-stage take a free-form positional argument string that may
+  // include scope tokens like --all or --diff. parseFlags would strip those, so
+  // pass argv through directly for those commands.
   if (command === 'start') {
-    return startRun(positional.join(' '));
+    return startRun(argv.slice(1).join(' '));
   }
   if (command === 'start-stage') {
-    return startSingleStage(positional.join(' '));
+    return startSingleStage(argv.slice(1).join(' '));
   }
+  const { flags, positional } = parseFlags(argv.slice(1));
   if (command === 'status') {
     return printStatus(flags.run || positional[0]);
   }

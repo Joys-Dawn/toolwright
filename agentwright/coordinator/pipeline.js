@@ -179,6 +179,23 @@ function resolveNamedPipeline(name, cwd, config) {
  * @param {string} cwd - Project working directory (used to locate .claude/agentwright.json).
  * @returns {{ pipelineName: string|null, groups: string[][], stages: string[], scope: string }}
  */
+/**
+ * Validates that a scope string is one of: exactly --all, exactly --diff, or
+ * one or more paths with no --flag tokens. Mixed inputs like "--all src/api/"
+ * are rejected — they would otherwise silently drop tokens downstream.
+ * @param {string} scope
+ */
+function validateScope(scope) {
+  const tokens = scope.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return;
+  const flagTokens = tokens.filter(t => t.startsWith('--'));
+  if (flagTokens.length === 0) return;
+  if (tokens.length === 1 && (tokens[0] === '--all' || tokens[0] === '--diff')) return;
+  throw new Error(
+    `Invalid scope "${scope}". Use --all alone, --diff alone, or one or more paths.`
+  );
+}
+
 function resolveCommandArgs(argumentString, cwd, config) {
   config = config || loadUserConfig(cwd);
   const trimmed = String(argumentString || '').trim();
@@ -197,35 +214,42 @@ function resolveCommandArgs(argumentString, cwd, config) {
   const namedPipeline = resolveNamedPipeline(first, cwd, config);
   if (namedPipeline) {
     const groups = normalizePipelineGroups(namedPipeline, cwd, config);
+    const scope = tokens.slice(1).join(' ').trim() || '--diff';
+    validateScope(scope);
     return {
       pipelineName: first,
       groups,
       stages: flattenGroups(groups),
-      scope: tokens.slice(1).join(' ').trim() || '--diff'
+      scope
     };
   }
 
   if (looksLikeStageList(first, cwd, config)) {
     const groups = normalizePipelineGroups(first.split(',').map(part => part.trim()).filter(Boolean), cwd, config);
+    const scope = tokens.slice(1).join(' ').trim() || '--diff';
+    validateScope(scope);
     return {
       pipelineName: null,
       groups,
       stages: flattenGroups(groups),
-      scope: tokens.slice(1).join(' ').trim() || '--diff'
+      scope
     };
   }
 
   if (resolveStageDefinition(first, cwd, config)) {
     const groups = normalizePipelineGroups([first], cwd, config);
+    const scope = tokens.slice(1).join(' ').trim() || '--diff';
+    validateScope(scope);
     return {
       pipelineName: null,
       groups,
       stages: flattenGroups(groups),
-      scope: tokens.slice(1).join(' ').trim() || '--diff'
+      scope
     };
   }
 
   const groups = normalizePipelineGroups(DEFAULT_PIPELINES.default, cwd, config);
+  validateScope(trimmed);
   return {
     pipelineName: 'default',
     groups,
@@ -243,5 +267,6 @@ module.exports = {
   flattenGroups,
   resolveStageDefinition,
   resolveNamedPipeline,
-  resolveCommandArgs
+  resolveCommandArgs,
+  validateScope
 };

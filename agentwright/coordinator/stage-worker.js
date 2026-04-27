@@ -47,6 +47,35 @@ function resolveSkillPaths({ pluginRoot, cwd, stageName, stageDef }) {
   return [resolveBuiltinSkill({ pluginRoot, stageName, skillId: stageDef.skillId })];
 }
 
+function resolveScopeMode({ scope, snapshot, cwd }) {
+  const trimmedScope = String(scope || '').trim();
+  // Match the literal token, not its prefix. \b would match --all-foo because
+  // - is non-word; lookahead for whitespace or end-of-string is the correct
+  // boundary for hyphen-prefixed tokens.
+  if (/^--all(?=\s|$)/.test(trimmedScope)) {
+    return { scopeMode: 'full', effectiveScope: '' };
+  }
+  if (/^--diff(?=\s|$)/.test(trimmedScope)) {
+    if (snapshot.type === 'git-worktree' && snapshot.dirtyOverlay) {
+      return { scopeMode: 'diff', effectiveScope: scope };
+    }
+    if (snapshot.type === 'git-worktree') {
+      return { scopeMode: 'full', effectiveScope: scope };
+    }
+    const diffResult = spawnSync('git', ['diff', '--name-only', 'HEAD'], { cwd, encoding: 'utf8' });
+    const stagedResult = spawnSync('git', ['diff', '--name-only', '--cached'], { cwd, encoding: 'utf8' });
+    const diffFiles = new Set([
+      ...(diffResult.stdout || '').split('\n').map(f => f.trim()).filter(Boolean),
+      ...(stagedResult.stdout || '').split('\n').map(f => f.trim()).filter(Boolean)
+    ]);
+    if (diffFiles.size > 0) {
+      return { scopeMode: 'targeted', effectiveScope: [...diffFiles].join(' ') };
+    }
+    return { scopeMode: 'full', effectiveScope: scope };
+  }
+  return { scopeMode: 'targeted', effectiveScope: scope };
+}
+
 function buildScopeInstruction(scope, scopeMode) {
   const sanitizedScope = String(scope || '')
     .replace(/[\r\n]+/g, ' ')
@@ -231,41 +260,7 @@ async function main() {
     findingsCount: 0
   });
 
-  // Determine scope mode based on snapshot type and requested scope.
-  const isDiffScope = /^--diff\b/.test(String(run.scope || '').trim());
-  let effectiveScope = run.scope;
-  let scopeMode;
-  if (isDiffScope) {
-    if (snapshot.type === 'git-worktree' && snapshot.dirtyOverlay) {
-      // Worktree with dirty files overlaid — auditor can run git diff itself.
-      scopeMode = 'diff';
-    } else if (snapshot.type === 'git-worktree') {
-      // Clean worktree — no diff exists, audit the full repo.
-      scopeMode = 'full';
-    } else {
-      // Non-git temp-copy — resolve file list from live repo as fallback.
-      const diffResult = spawnSync('git', ['diff', '--name-only', 'HEAD'], {
-        cwd,
-        encoding: 'utf8'
-      });
-      const stagedResult = spawnSync('git', ['diff', '--name-only', '--cached'], {
-        cwd,
-        encoding: 'utf8'
-      });
-      const diffFiles = new Set([
-        ...(diffResult.stdout || '').split('\n').map(f => f.trim()).filter(Boolean),
-        ...(stagedResult.stdout || '').split('\n').map(f => f.trim()).filter(Boolean)
-      ]);
-      if (diffFiles.size > 0) {
-        effectiveScope = [...diffFiles].join(' ');
-        scopeMode = 'targeted';
-      } else {
-        scopeMode = 'full';
-      }
-    }
-  } else {
-    scopeMode = 'targeted';
-  }
+  const { scopeMode, effectiveScope } = resolveScopeMode({ scope: run.scope, snapshot, cwd });
 
   const worker = spawnAuditor({
     cwd: snapshot.path,
@@ -365,6 +360,7 @@ if (require.main === module) {
 
 module.exports = {
   buildAuditorPrompt,
+  resolveScopeMode,
   resolveSkillPaths,
   cleanupClaudeProjectFolder
 };

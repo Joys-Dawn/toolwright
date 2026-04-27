@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash(node *), Bash(git *), Bash(np
 
 Run a one-stage audit pipeline using the provided stage and scope.
 
-Interpret the first token of `$ARGUMENTS` as the stage and the remaining text as the scope. If the scope is missing, use `--diff`.
+Interpret the first token of `$ARGUMENTS` as the stage and the remaining text as the scope. If the scope is missing, use `--diff`. Scope tokens: `--diff` (changed lines vs HEAD), `--all` (entire repo), or paths/files (targeted).
 
 1. Start the stage:
 !`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js start-stage $ARGUMENTS`
@@ -14,7 +14,7 @@ Note the `runId` from the JSON output.
 
 2. Follow the same wait-and-fetch loop as `audit-run`:
    - Call `next-finding --run <runId> --wait` (pass `timeout=600000` to Bash). The command blocks internally until a finding lands, the stage errors, or it finishes.
-   - On `"waiting"` (rare; means the ~8-minute internal wait expired), repeat the same call. Do not insert a sleep.
+   - On `"waiting"`, repeat the same call (auditor is still working).
    - On `"finding"`, follow `audit-run`'s verification process exactly (Steps A–D): locate the code, try to contradict the finding, critically reason through whether it's a real issue, then decide.
    - Call `record-decision` for each finding.
    - Repeat until `"done"` or `"error"`.

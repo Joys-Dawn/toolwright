@@ -234,6 +234,164 @@ describe('stage-worker', () => {
     });
   });
 
+  describe('resolveScopeMode', () => {
+    const { resolveScopeMode } = require('../../coordinator/stage-worker');
+
+    function initGitRepoWithCommittedFile(filename, contents) {
+      execFileSync('git', ['init', '-q'], { cwd: tmpDir });
+      execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: tmpDir });
+      execFileSync('git', ['config', 'user.name', 'test'], { cwd: tmpDir });
+      fs.writeFileSync(path.join(tmpDir, filename), contents);
+      execFileSync('git', ['add', '.'], { cwd: tmpDir });
+      execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: tmpDir });
+    }
+
+    it('returns full mode for --all on a git worktree snapshot', () => {
+      const result = resolveScopeMode({
+        scope: '--all',
+        snapshot: { type: 'git-worktree', dirtyOverlay: true },
+        cwd: tmpDir
+      });
+      assert.equal(result.scopeMode, 'full');
+      assert.equal(result.effectiveScope, '');
+    });
+
+    it('returns full mode for --all on a temp-copy snapshot', () => {
+      const result = resolveScopeMode({
+        scope: '--all',
+        snapshot: { type: 'temp-copy' },
+        cwd: tmpDir
+      });
+      assert.equal(result.scopeMode, 'full');
+      assert.equal(result.effectiveScope, '');
+    });
+
+    it('returns diff mode for --diff on a dirty git worktree', () => {
+      const result = resolveScopeMode({
+        scope: '--diff',
+        snapshot: { type: 'git-worktree', dirtyOverlay: true },
+        cwd: tmpDir
+      });
+      assert.equal(result.scopeMode, 'diff');
+      assert.equal(result.effectiveScope, '--diff');
+    });
+
+    it('returns full mode for --diff on a clean git worktree', () => {
+      const result = resolveScopeMode({
+        scope: '--diff',
+        snapshot: { type: 'git-worktree', dirtyOverlay: false },
+        cwd: tmpDir
+      });
+      assert.equal(result.scopeMode, 'full');
+    });
+
+    it('returns targeted mode for a path scope', () => {
+      const result = resolveScopeMode({
+        scope: 'src/api/',
+        snapshot: { type: 'git-worktree', dirtyOverlay: true },
+        cwd: tmpDir
+      });
+      assert.equal(result.scopeMode, 'targeted');
+      assert.equal(result.effectiveScope, 'src/api/');
+    });
+
+    it('returns targeted mode for --all-foo (a token that is not exactly --all)', () => {
+      const result = resolveScopeMode({
+        scope: '--all-foo',
+        snapshot: { type: 'git-worktree', dirtyOverlay: true },
+        cwd: tmpDir
+      });
+      assert.equal(result.scopeMode, 'targeted');
+    });
+
+    it('returns targeted mode for --diff-staged (a token that is not exactly --diff)', () => {
+      const result = resolveScopeMode({
+        scope: '--diff-staged',
+        snapshot: { type: 'git-worktree', dirtyOverlay: true },
+        cwd: tmpDir
+      });
+      assert.equal(result.scopeMode, 'targeted');
+    });
+
+    it('returns targeted with diff filenames for --diff on a temp-copy snapshot of a dirty git repo', () => {
+      initGitRepoWithCommittedFile('tracked.js', 'const x = 1;');
+      fs.writeFileSync(path.join(tmpDir, 'tracked.js'), 'const x = 2;');
+
+      const result = resolveScopeMode({
+        scope: '--diff',
+        snapshot: { type: 'temp-copy' },
+        cwd: tmpDir
+      });
+      assert.equal(result.scopeMode, 'targeted');
+      assert.match(result.effectiveScope, /tracked\.js/);
+    });
+
+    it('returns full for --diff on a temp-copy snapshot of a clean git repo', () => {
+      initGitRepoWithCommittedFile('tracked.js', 'const x = 1;');
+
+      const result = resolveScopeMode({
+        scope: '--diff',
+        snapshot: { type: 'temp-copy' },
+        cwd: tmpDir
+      });
+      assert.equal(result.scopeMode, 'full');
+    });
+
+    it('returns full for --diff on a temp-copy snapshot of a non-git directory', () => {
+      const result = resolveScopeMode({
+        scope: '--diff',
+        snapshot: { type: 'temp-copy' },
+        cwd: tmpDir
+      });
+      assert.equal(result.scopeMode, 'full');
+    });
+
+    it('deduplicates files that are both staged and unstaged on a temp-copy + --diff', () => {
+      initGitRepoWithCommittedFile('dup.js', 'const x = 1;');
+      fs.writeFileSync(path.join(tmpDir, 'dup.js'), 'const x = 2;');
+      execFileSync('git', ['add', 'dup.js'], { cwd: tmpDir });
+      fs.writeFileSync(path.join(tmpDir, 'dup.js'), 'const x = 3;');
+
+      const result = resolveScopeMode({
+        scope: '--diff',
+        snapshot: { type: 'temp-copy' },
+        cwd: tmpDir
+      });
+      const occurrences = result.effectiveScope.split(/\s+/).filter(t => t === 'dup.js').length;
+      assert.equal(occurrences, 1);
+    });
+
+    it('falls through to targeted with the original value when scope is null', () => {
+      const result = resolveScopeMode({
+        scope: null,
+        snapshot: { type: 'git-worktree', dirtyOverlay: true },
+        cwd: tmpDir
+      });
+      assert.equal(result.scopeMode, 'targeted');
+      assert.equal(result.effectiveScope, null);
+    });
+
+    it('falls through to targeted when scope is empty string', () => {
+      const result = resolveScopeMode({
+        scope: '',
+        snapshot: { type: 'git-worktree', dirtyOverlay: true },
+        cwd: tmpDir
+      });
+      assert.equal(result.scopeMode, 'targeted');
+      assert.equal(result.effectiveScope, '');
+    });
+
+    it('falls through to targeted when scope is whitespace only', () => {
+      const result = resolveScopeMode({
+        scope: '   ',
+        snapshot: { type: 'git-worktree', dirtyOverlay: true },
+        cwd: tmpDir
+      });
+      assert.equal(result.scopeMode, 'targeted');
+      assert.equal(result.effectiveScope, '   ');
+    });
+  });
+
   describe('prompt building validation', () => {
     it('rejects invalid skill IDs via worker error path', () => {
       // Create a config with a stage that has an invalid skillId

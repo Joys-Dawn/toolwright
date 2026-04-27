@@ -156,8 +156,11 @@ async function tryAdvanceGroup(cwd, runId) {
   }
 }
 
-// Doc-coupled: commands/audit-{run,step,resume}.md cite ~8 min and require Bash timeout=600000.
-const DEFAULT_WAIT_MS = 480000;
+// Must stay below the Bash timeout=600000 instructed in commands/audit-{run,step,resume}.md.
+// 30s buffer covers a final pollOnce that hits a group transition (tryAdvanceGroup →
+// launchCurrentGroup → createGroupSnapshot, which can copy a large workspace on non-git
+// repos), plus stdout flush, before Bash sends SIGKILL.
+const DEFAULT_WAIT_MS = 570000;
 const POLL_INTERVAL_MS = 3000;
 
 async function pollOnce(cwd, runId) {

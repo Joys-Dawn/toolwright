@@ -52,7 +52,7 @@ describe('decisions', () => {
         ]
       };
 
-      assert.doesNotThrow(() => validateDecisions(tmpDir, run.runId, 'correctness', decisions));
+      validateDecisions(tmpDir, run.runId, 'correctness', decisions);
     });
 
     it('throws when a finding has no corresponding decision', () => {
@@ -113,7 +113,7 @@ describe('decisions', () => {
       const run = createRun(tmpDir, makeSpec());
       const decisions = { stage: 'correctness', decisions: [] };
 
-      assert.doesNotThrow(() => validateDecisions(tmpDir, run.runId, 'correctness', decisions));
+      validateDecisions(tmpDir, run.runId, 'correctness', decisions);
     });
 
     it('ignores non-finding events in the queue', () => {
@@ -133,7 +133,7 @@ describe('decisions', () => {
         ]
       };
 
-      assert.doesNotThrow(() => validateDecisions(tmpDir, run.runId, 'correctness', decisions));
+      validateDecisions(tmpDir, run.runId, 'correctness', decisions);
     });
 
     it('skips findings with non-string IDs', () => {
@@ -151,7 +151,7 @@ describe('decisions', () => {
         ]
       };
 
-      assert.doesNotThrow(() => validateDecisions(tmpDir, run.runId, 'correctness', decisions));
+      validateDecisions(tmpDir, run.runId, 'correctness', decisions);
     });
   });
 

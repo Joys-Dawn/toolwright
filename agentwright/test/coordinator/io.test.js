@@ -156,7 +156,7 @@ describe('io', () => {
     });
 
     it('does not throw for nonexistent path', () => {
-      assert.doesNotThrow(() => removePath(path.join(tmpDir, 'ghost')));
+      removePath(path.join(tmpDir, 'ghost'));
     });
   });
 });

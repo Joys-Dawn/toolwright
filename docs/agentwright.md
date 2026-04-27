@@ -2,7 +2,7 @@
 
 > Chained audit pipelines with a spawned auditor and in-session verification. Run `/audit-run` — a headless `claude -p` subprocess audits a frozen snapshot, the current session independently verifies each finding and applies fixes to the live repo.
 
-**Version**: 1.10.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/agentwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/README.md)
+**Version**: 1.11.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/agentwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/README.md)
 
 ## Install
 
@@ -17,16 +17,19 @@ Requires Node.js ≥ 18 and `claude` on `PATH` (the auditor subprocess calls it)
 
 ```text
 /audit-run                              # default pipeline on git diff (staged + unstaged)
+/audit-run --all                        # default pipeline on the entire repo
 /audit-run src/api/                     # default pipeline on a directory
 /audit-run full --diff                  # named pipeline on git diff
+/audit-run full --all                   # named pipeline on the entire repo
 /audit-run correctness,security src/    # ad-hoc stage list
+/audit-step security --all              # single stage on the entire repo
 /audit-step security src/auth/          # single stage
 /audit-resume 2026-04-15-abc123         # resume an interrupted run
 /audit-clean --logs-only                # keep findings, drop logs
 ```
 
 **Default pipeline** (no argument): `correctness → security → best-practices`.
-**Default scope**: `git diff` (staged + unstaged).
+**Default scope**: `git diff` (staged + unstaged). Pass `--all` for the entire repo, or paths/files for targeted audits.
 
 ## How it runs
 

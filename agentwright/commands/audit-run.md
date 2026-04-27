@@ -9,6 +9,7 @@ Run the audit pipeline and verify/fix findings as they arrive.
 Rules:
 - If `$ARGUMENTS` is empty, treat scope as `--diff`. Default pipeline: correctness, security, best-practices.
 - If the first token is a known pipeline name, use it. If it is a comma-separated stage list, run those stages sequentially. Otherwise treat the full argument string as scope.
+- Scope tokens: `--diff` (changed lines vs HEAD, the default), `--all` (entire repo), or one or more paths/files (targeted).
 - You are the verifier/fixer for the live repo. The auditor runs on a frozen snapshot.
 - Never blindly accept auditor claims. Re-read cited code yourself and **reason about whether the finding is actually a real problem**. Seeing that the code matches what the auditor described is not enough — you must independently judge whether the described behavior is actually wrong. Think about the logic, the context, edge cases, and whether the "fix" would truly improve correctness or safety.
 - **Fix immediately** when objectively correct (any competent reviewer would agree). This applies to all finding types: bugs, security flaws, naming, dead code, missing error handling, and best-practice refactors that are clearly valid improvements (e.g., replacing a brittle pattern with the idiomatic one, extracting duplicated logic, adding missing validation). Do not defer a refactor just because it is a refactor — defer it only if it involves a meaningful tradeoff or is large enough to risk regressions.
@@ -21,11 +22,11 @@ Workflow:
 1. Start the run (output includes the runId):
 !`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js start $ARGUMENTS`
 
-2. Wait for the next event using the runId from step 1. The command blocks internally until a finding is emitted, the run errors, or it completes — typically seconds to a few minutes for the first finding. Pass `timeout=600000` to the Bash call so multi-minute waits don't hit the default 2-minute cap:
+2. Wait for the next event using the runId from step 1. The command blocks internally until a finding is emitted, the run errors, or it completes — typically a few minutes for the first finding. Pass `timeout=600000` to the Bash call so multi-minute waits don't hit the default 2-minute cap:
 `node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js next-finding --run <runId> --wait`
 
 3. Handle the response:
-   - `"waiting"` — the internal wait timed out (~8 minutes with no state change). The auditor is still working; just repeat step 2. Do not insert a sleep — the next call blocks on its own.
+   - `"waiting"` — auditor is still working; repeat step 2.
    - `"finding"` — verify the finding before acting on it. Follow these steps in order:
 
      **Step A — Locate**: Read the cited file and lines in the **live repo** (not the snapshot). Also read surrounding context (±30 lines) and any related files the code interacts with (callers, callees, types, tests).

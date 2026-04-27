@@ -12,7 +12,7 @@ Resume an existing run by advancing to the next incomplete group.
 3. If the run is complete, report that clearly.
 4. Otherwise, enter the same wait-and-fetch loop as `audit-run`:
    - Call `next-finding --run <runId> --wait` (pass `timeout=600000` to Bash). The command blocks internally until a finding lands, the stage errors, or the pipeline finishes.
-   - On `"waiting"` (rare; means the ~8-minute internal wait expired), repeat the same call. Do not insert a sleep.
+   - On `"waiting"`, repeat the same call (auditor is still working).
    - On `"finding"`, follow `audit-run`'s verification process exactly (Steps A–D): locate the code, try to contradict the finding, critically reason through whether it's a real issue, then decide.
    - Call `record-decision` for each finding.
    - Repeat until `"done"` or `"error"`.
