@@ -262,6 +262,58 @@ describe('nextFinding', () => {
     const result = await nextFinding(runId);
     assert.equal(result.status, 'done');
   });
+
+  it('with wait=true returns immediately when finding is available', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1);
+    const t0 = performance.now();
+    const result = await nextFinding(runId, { wait: true, pollIntervalMs: 10 });
+    const elapsed = performance.now() - t0;
+    assert.equal(result.status, 'finding');
+    assert.ok(elapsed < 500, `expected fast return, took ${elapsed}ms`);
+  });
+
+  it('with wait timeout returns waiting after maxWaitMs when no findings appear', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 0, {
+      auditDone: false,
+      stageStatus: 'auditing'
+    });
+    const t0 = performance.now();
+    const result = await nextFinding(runId, { wait: 100, pollIntervalMs: 20 });
+    const elapsed = performance.now() - t0;
+    assert.equal(result.status, 'waiting');
+    assert.ok(elapsed >= 100, `expected wait of at least 100ms, took ${elapsed}ms`);
+    assert.ok(elapsed < 1000, `expected wait to terminate near deadline, took ${elapsed}ms`);
+  });
+
+  it('returns within wait deadline when pollInterval exceeds remaining budget', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 0, {
+      auditDone: false,
+      stageStatus: 'auditing'
+    });
+    const t0 = performance.now();
+    const result = await nextFinding(runId, { wait: 50, pollIntervalMs: 1000 });
+    const elapsed = performance.now() - t0;
+    assert.equal(result.status, 'waiting');
+    assert.ok(elapsed < 300, `expected return within wait budget; took ${elapsed}ms`);
+  });
+
+  it('with wait=true unblocks when a finding appears mid-wait', async () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 0, {
+      auditDone: false,
+      stageStatus: 'auditing'
+    });
+    const queuePath = stageFindingsQueueFile(tmpDir, runId, 'correctness');
+    const timer = setTimeout(() => {
+      appendJsonLine(queuePath, makeFinding('correctness', 1));
+    }, 60);
+    try {
+      const result = await nextFinding(runId, { wait: 5000, pollIntervalMs: 20 });
+      assert.equal(result.status, 'finding');
+      assert.equal(result.finding.id, 'correctness-1');
+    } finally {
+      clearTimeout(timer);
+    }
+  });
 });
 
 describe('recordDecision', () => {
@@ -578,6 +630,29 @@ describe('CLI integration', () => {
     const result = JSON.parse(stdout);
     assert.equal(result.ok, true);
     assert.equal(result.findingId, 'correctness-1');
+  });
+
+  it('next-finding --wait via CLI returns finding when one is already available', () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1);
+    const { exitCode, stdout } = runCli(['next-finding', '--run', runId, '--wait', '1'], tmpDir);
+    assert.equal(exitCode, 0);
+    const result = JSON.parse(stdout);
+    assert.equal(result.status, 'finding');
+    assert.equal(result.finding.id, 'correctness-1');
+  });
+
+  it('next-finding --wait via CLI rejects zero seconds', () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1);
+    const { exitCode, stderr } = runCli(['next-finding', '--run', runId, '--wait', '0'], tmpDir);
+    assert.notEqual(exitCode, 0);
+    assert.match(stderr, /positive number/);
+  });
+
+  it('next-finding --wait via CLI rejects non-numeric value', () => {
+    const { runId } = setupRunWithFindings(tmpDir, 'correctness', 1);
+    const { exitCode, stderr } = runCli(['next-finding', '--run', runId, '--wait', 'abc'], tmpDir);
+    assert.notEqual(exitCode, 0);
+    assert.match(stderr, /positive number/);
   });
 });
 

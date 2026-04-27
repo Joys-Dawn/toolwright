@@ -38,7 +38,7 @@ function printHelp() {
       '  node coordinator/index.js status [runId]',
       '  node coordinator/index.js complete-stage --run <runId> --stage <name> [--result accepted|rejected|approval]',
       '  node coordinator/index.js next --run <runId>',
-      '  node coordinator/index.js next-finding --run <runId>',
+      '  node coordinator/index.js next-finding --run <runId> [--wait [seconds]]',
       '  node coordinator/index.js record-decision --run <runId> --stage <name> --finding <id> --decision <valid|invalid|valid_needs_approval> [--action fixed|none] [--rationale "..."] [--files-changed "a.js,b.js"] [--evidence "..."]',
       '  node coordinator/index.js stop --run <runId>',
       '  node coordinator/index.js cleanup-snapshot --run <runId> --group <index>',
@@ -215,7 +215,17 @@ async function main() {
   }
   if (command === 'next-finding') {
     const runId = requireFlag(flags, 'run');
-    const result = await nextFinding(runId);
+    let wait = false;
+    if (flags.wait === true) {
+      wait = true;
+    } else if (typeof flags.wait === 'string') {
+      const seconds = Number(flags.wait);
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        throw new Error('--wait must be a positive number of seconds.');
+      }
+      wait = seconds * 1000;
+    }
+    const result = await nextFinding(runId, { wait });
     process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     return;
   }

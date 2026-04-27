@@ -12,22 +12,20 @@ Interpret the first token of `$ARGUMENTS` as the stage and the remaining text as
 !`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js start-stage $ARGUMENTS`
 Note the `runId` from the JSON output.
 
-2. Wait 60 seconds for the auditor to start producing findings:
-`sleep 60`
+2. Follow the same wait-and-fetch loop as `audit-run`:
+   - Call `next-finding --run <runId> --wait` (pass `timeout=600000` to Bash). The command blocks internally until a finding lands, the stage errors, or it finishes.
+   - On `"waiting"` (rare; means the ~8-minute internal wait expired), repeat the same call. Do not insert a sleep.
+   - On `"finding"`, follow `audit-run`'s verification process exactly (Steps A–D): locate the code, try to contradict the finding, critically reason through whether it's a real issue, then decide.
+   - Call `record-decision` for each finding.
+   - Repeat until `"done"` or `"error"`.
 
-3. Follow the same poll loop as `audit-run`:
-   - Call `next-finding --run <runId>` to get findings one at a time
-   - For each finding, follow `audit-run`'s verification process exactly (Steps A–D): locate the code, try to contradict the finding, critically reason through whether it's a real issue, then decide
-   - Call `record-decision` for each finding
-   - Repeat until `"done"`
-
-4. Apply the same fix vs. defer rules as `audit-run`:
+3. Apply the same fix vs. defer rules as `audit-run`:
    - **Fix immediately** when objectively correct
    - **Mark `valid_needs_approval`** for judgment calls or large refactors
    - Skip file-contention-blocked findings (they reappear on next poll)
 
-5. After completion, if any fixes were applied, dispatch the `agentwright:verifier` subagent. Do not blindly accept verifier claims.
+4. After completion, if any fixes were applied, dispatch the `agentwright:verifier` subagent. Do not blindly accept verifier claims.
 
-6. Present a concise per-finding summary table (see `audit-run` for format).
+5. Present a concise per-finding summary table (see `audit-run` for format).
 
-7. If any findings were deferred, present them to the user and wait for explicit approval.
+6. If any findings were deferred, present them to the user and wait for explicit approval.

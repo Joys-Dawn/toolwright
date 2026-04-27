@@ -156,10 +156,11 @@ async function tryAdvanceGroup(cwd, runId) {
   }
 }
 
-async function nextFinding(runId) {
-  const cwd = process.cwd();
-  validateRunId(runId);
+// Doc-coupled: commands/audit-{run,step,resume}.md cite ~8 min and require Bash timeout=600000.
+const DEFAULT_WAIT_MS = 480000;
+const POLL_INTERVAL_MS = 3000;
 
+async function pollOnce(cwd, runId) {
   const failedAutoComplete = new Set();
 
   while (true) {
@@ -204,6 +205,30 @@ async function nextFinding(runId) {
     }
 
     return doneResult(cwd, runId);
+  }
+}
+
+async function nextFinding(runId, opts = {}) {
+  const cwd = process.cwd();
+  validateRunId(runId);
+
+  const wait = opts.wait === true || (typeof opts.wait === 'number' && opts.wait > 0);
+  if (!wait) {
+    return pollOnce(cwd, runId);
+  }
+
+  const maxWaitMs = typeof opts.wait === 'number' && opts.wait > 0 ? opts.wait : DEFAULT_WAIT_MS;
+  const pollIntervalMs = typeof opts.pollIntervalMs === 'number' && opts.pollIntervalMs > 0
+    ? opts.pollIntervalMs
+    : POLL_INTERVAL_MS;
+  const startedAt = performance.now();
+
+  while (true) {
+    const result = await pollOnce(cwd, runId);
+    if (result.status !== 'waiting') return result;
+    const remaining = maxWaitMs - (performance.now() - startedAt);
+    if (remaining <= 0) return result;
+    await new Promise(resolve => setTimeout(resolve, Math.min(pollIntervalMs, remaining)));
   }
 }
 

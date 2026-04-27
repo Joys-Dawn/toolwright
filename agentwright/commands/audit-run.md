@@ -21,14 +21,11 @@ Workflow:
 1. Start the run (output includes the runId):
 !`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js start $ARGUMENTS`
 
-2. Wait 60 seconds for the auditor to start producing findings:
-`sleep 60`
+2. Wait for the next event using the runId from step 1. The command blocks internally until a finding is emitted, the run errors, or it completes — typically seconds to a few minutes for the first finding. Pass `timeout=600000` to the Bash call so multi-minute waits don't hit the default 2-minute cap:
+`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js next-finding --run <runId> --wait`
 
-3. Poll for findings using the runId from step 1:
-`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js next-finding --run <runId>`
-
-4. Handle the response:
-   - `"waiting"` — auditor is still running. `sleep 60`, then repeat step 3. The auditor often needs several minutes of reading and thinking before emitting its first finding — this is normal. Keep polling every 60 seconds; do not shorten or lengthen the interval, do not check logs, just loop.
+3. Handle the response:
+   - `"waiting"` — the internal wait timed out (~8 minutes with no state change). The auditor is still working; just repeat step 2. Do not insert a sleep — the next call blocks on its own.
    - `"finding"` — verify the finding before acting on it. Follow these steps in order:
 
      **Step A — Locate**: Read the cited file and lines in the **live repo** (not the snapshot). Also read surrounding context (±30 lines) and any related files the code interacts with (callers, callees, types, tests).
@@ -55,14 +52,14 @@ Workflow:
 `node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js record-decision --run <runId> --stage <stage> --finding <findingId> --decision valid --action fixed --rationale <why> --files-changed <file1.js,file2.js>`
      For invalid findings: `--decision invalid --action none --rationale <why>`
      For deferred findings: `--decision valid_needs_approval --action none --rationale <why>`
-     Then repeat step 3.
+     Then repeat step 2.
    - `"error"` — a stage audit failed. Report the error and stop.
    - `"done"` — pipeline complete. Proceed to step 4.
 
-5. If any fixes were applied, dispatch the `agentwright:verifier` subagent with a summary of every fix (finding ID, description, files changed, what was done). Tell the verifier to compare against the group-0 snapshot directory (its path is in `group-0-snapshot.json` under the run directory) rather than using `git diff`, so it only sees audit-introduced changes. Do not blindly accept verifier claims — re-read cited code yourself and independently confirm any reported issue is real before acting on it. After the verifier completes, clean up the group-0 snapshot:
+4. If any fixes were applied, dispatch the `agentwright:verifier` subagent with a summary of every fix (finding ID, description, files changed, what was done). Tell the verifier to compare against the group-0 snapshot directory (its path is in `group-0-snapshot.json` under the run directory) rather than using `git diff`, so it only sees audit-introduced changes. Do not blindly accept verifier claims — re-read cited code yourself and independently confirm any reported issue is real before acting on it. After the verifier completes, clean up the group-0 snapshot:
 `node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js cleanup-snapshot --run <runId> --group 0`
 
-6. Present a summary table:
+5. Present a summary table:
 
 | # | Stage | Finding | File(s) | Decision | Action |
 |---|-------|---------|---------|----------|--------|
@@ -72,6 +69,6 @@ For findings emitted by a **fused stage** (a single agent running multiple audit
 
 Keep **Finding** and **Action** columns to one short phrase each. After the table, add a **Verifier** section with a one-line result.
 
-7. If `.claude/collab/` exists and other agents are registered, use `/wrightward:collab-done` to release file claims.
+6. If `.claude/collab/` exists and other agents are registered, use `/wrightward:collab-done` to release file claims.
 
-8. If any `valid_needs_approval` findings exist, present them to the user with: finding ID, severity, title, cited file and problem, and your rationale for deferring. Wait for explicit approval before implementing any deferred finding.
+7. If any `valid_needs_approval` findings exist, present them to the user with: finding ID, severity, title, cited file and problem, and your rationale for deferring. Wait for explicit approval before implementing any deferred finding.
