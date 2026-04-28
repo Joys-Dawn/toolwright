@@ -56,7 +56,7 @@ Run `/agentwright:config-init` to drop a fully-defaulted `.claude/agentwright.js
 
 ## Skills
 
-23 vendored skills:
+24 vendored skills:
 
 ### Audit skills (used by the pipeline)
 
@@ -148,8 +148,8 @@ Create `.claude/agentwright.json` in your project to customize pipelines and ret
 ```json
 {
   "pipelines": {
-    "default": ["correctness", "security", "best-practices"],
-    "full": ["correctness", "security", "best-practices", ["migration", "ui"], "test-coverage"]
+    "default": ["implementation", "correctness", "best-practices", "behavior", "test-coverage"],
+    "full": ["implementation", "correctness", "security", "best-practices", ["migration", "ui"], "behavior", "test-coverage"]
   },
   "customStages": {
     "perf": { "type": "skill", "skillId": "performance-investigation" },

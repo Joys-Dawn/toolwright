@@ -48,7 +48,7 @@ Run an audit on your recent changes:
 /audit-run
 ```
 
-This audits files in your `git diff` through any stages you choose (i.e. correctness → security → best-practices → test-coverage or any custom skills/pipelines), verifies each finding, and applies fixes. See [agentwright/README.md](agentwright/) for all commands, skills, and configuration options.
+This audits files in your `git diff` through any stages you choose (i.e. implementation → correctness → best-practices → behavior → test-coverage or any custom skills/pipelines), verifies each finding, and applies fixes. See [agentwright/README.md](agentwright/) for all commands, skills, and configuration options.
 
 ### wrightward
 

@@ -2,7 +2,7 @@
 
 > Chained audit pipelines with a spawned auditor and in-session verification. Run `/audit-run` — a headless `claude -p` subprocess audits a frozen snapshot, the current session independently verifies each finding and applies fixes to the live repo.
 
-**Version**: 1.11.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/agentwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/README.md)
+**Version**: 1.12.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/agentwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/README.md)
 
 ## Install
 
@@ -28,7 +28,7 @@ Requires Node.js ≥ 18 and `claude` on `PATH` (the auditor subprocess calls it)
 /audit-clean --logs-only                # keep findings, drop logs
 ```
 
-**Default pipeline** (no argument): `correctness → security → best-practices`.
+**Default pipeline** (no argument): `implementation → correctness → best-practices → behavior → test-coverage`.
 **Default scope**: `git diff` (staged + unstaged). Pass `--all` for the entire repo, or paths/files for targeted audits.
 
 ## How it runs
@@ -57,7 +57,7 @@ All seven live under the plugin's `/` namespace (they're in `commands/`, not ski
 | `/audit-reset` | `[run-id]` | Guided deletion of a run directory. |
 | `/audit-clean` | `[--logs-only]` | Prune retained artifacts per the retention policy. |
 
-## Skills (23)
+## Skills (24)
 
 Auto-discovered from `agentwright/skills/` and invokable as `/agentwright:<name>` or via the `Skill` tool.
 
@@ -71,6 +71,7 @@ Auto-discovered from `agentwright/skills/` and invokable as `/agentwright:<name>
 | `/agentwright:migration-audit` | PL/pgSQL: NULL traps, race conditions, missing constraints, JSONB pitfalls. Auto-triggers when a `supabase/migrations/*.sql` file is written. |
 | `/agentwright:implementation-audit` | Roundabout solutions, unnecessary complexity, reinvented wheels, naive designs. |
 | `/agentwright:ui-audit` | WCAG 2.2, WAI-ARIA patterns, touch target sizing, focus management, React/Tailwind anti-patterns. |
+| `/agentwright:behavior-audit` | User-perspective walkthrough — surprising behavior, hostile defaults, cross-feature breaks. Reasons from first principles, not patterns. |
 | `/agentwright:test-coverage-audit` | Maps source files against tests, produces a risk-prioritized list of gaps. |
 
 ### Planning
@@ -140,8 +141,8 @@ Run `/agentwright:config-init` to drop the full default config into your repo �
 ```json
 {
   "pipelines": {
-    "default": ["correctness", "security", "best-practices"],
-    "full": ["correctness", "security", ["best-practices", "perf"], ["my-checks", "ui"], "test-coverage"],
+    "default": ["implementation", "correctness", "best-practices", "behavior", "test-coverage"],
+    "full": ["implementation", "correctness", "security", ["best-practices", "perf"], ["my-checks", "ui"], "behavior", "test-coverage"],
     "quick": ["audit-bundle"]
   },
   "customStages": {
@@ -162,7 +163,7 @@ Custom stages are referenced by their key inside `pipelines` (e.g., `"perf"` in 
 
 | Key | Default | Description |
 |---|---|---|
-| `pipelines.default` | `["correctness", "security", "best-practices"]` | Pipeline for `/audit-run` with no argument. |
+| `pipelines.default` | `["implementation", "correctness", "best-practices", "behavior", "test-coverage"]` | Pipeline for `/audit-run` with no argument. |
 | `pipelines.<name>` | — | Named pipeline. Array of stage names or nested arrays for parallel groups. |
 | `customStages.<key>.skillId` | — | Reference a single builtin skill by ID. |
 | `customStages.<key>.skillIds` | — | Array of builtin skill IDs to fuse into one agent (mutually exclusive with `skillId` / `skillPath`). |
