@@ -102,7 +102,6 @@ function spawnAuditor({ cwd, pluginRoot, prompt, logsDir, runId, stageName, onEv
   });
   const args = [
     '-p',
-    prompt,
     '--output-format',
     'stream-json',
     '--include-partial-messages',
@@ -120,11 +119,18 @@ function spawnAuditor({ cwd, pluginRoot, prompt, logsDir, runId, stageName, onEv
     '--append-system-prompt',
     `You are the spawned auditor worker for run ${runId}. You cannot modify files (Edit, Write, NotebookEdit are unavailable) — only return structured findings. Use the Skill tool to load other agentwright skills when an audit needs them, run linters via Bash, and use WebFetch, WebSearch, and MCP tools (e.g. context7) to verify findings against official documentation when uncertain about library APIs, version-specific behavior, or best practices. Do not rely on memory alone for claims about external libraries or specifications.`
   ];
+  // Prompt goes via stdin, not argv. Fused stages concatenate multiple skill
+  // bodies into a prompt that easily exceeds the Windows CreateProcess
+  // command-line limit (~32KB), causing spawn ENAMETOOLONG.
   const child = spawn('claude', args, {
     cwd,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true
   });
+  if (child.stdin) {
+    child.stdin.on('error', () => {});
+    child.stdin.end(prompt);
+  }
   child.stdout.pipe(stdoutLog, { end: false });
   child.stderr.pipe(stderrLog, { end: false });
   createJsonLineReader(child.stdout, line => {

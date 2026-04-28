@@ -5,6 +5,8 @@ const assert = require('node:assert/strict');
 const { Readable } = require('stream');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 
 const {
   requireClaudeCli,
@@ -564,6 +566,35 @@ describe('process-manager', () => {
       assert.equal(findings[0].finding.auditType, 'correctness-audit');
       assert.equal(findings[1].finding.auditType, undefined);
       assert.equal(findings[2].finding.auditType, 'best-practices-audit');
+    });
+  });
+
+  describe('large-prompt regression (Windows ENAMETOOLONG)', () => {
+    it('spawns auditor with a prompt larger than the Windows CreateProcess limit', async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentwright-test-'));
+      const logsDir = path.join(tmpDir, 'logs');
+      // 50KB — well over Windows ~32KB CreateProcess limit. Pre-fix, this
+      // throws spawn ENAMETOOLONG because the prompt was passed as `-p <prompt>` argv.
+      const giantPrompt = 'X'.repeat(50000);
+      let auditor;
+      try {
+        auditor = spawnAuditor({
+          cwd: process.cwd(),
+          pluginRoot: path.resolve(__dirname, '../..'),
+          prompt: giantPrompt,
+          logsDir,
+          runId: 'test-large-prompt',
+          stageName: 'test',
+          onEvent: () => {}
+        });
+        assert.ok(auditor.pid, 'spawn must succeed — pre-fix, Windows would throw ENAMETOOLONG before pid was set');
+      } finally {
+        if (auditor) {
+          try { auditor.kill(); } catch (_) {}
+          try { await auditor.wait(); } catch (_) {}
+        }
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
     });
   });
 });
