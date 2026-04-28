@@ -12,6 +12,7 @@ const BUILTIN_STAGES = {
   ui: { type: 'skill', skillId: 'ui-audit' },
   behavior: { type: 'skill', skillId: 'behavior-audit' },
   'test-coverage': { type: 'skill', skillId: 'test-coverage-audit' },
+  'test-quality': { type: 'skill', skillId: 'test-quality-audit' },
 };
 
 const DEFAULT_PIPELINES = {
@@ -23,7 +24,8 @@ const DEFAULT_PIPELINES = {
     'best-practices',
     ['migration', 'ui'],
     'behavior',
-    'test-coverage'
+    'test-coverage',
+    'test-quality'
   ]
 };
 

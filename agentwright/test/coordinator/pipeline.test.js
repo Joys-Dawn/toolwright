@@ -35,13 +35,18 @@ describe('pipeline', () => {
     it('has all expected stages', () => {
       const expected = [
         'correctness', 'security', 'best-practices',
-        'implementation', 'migration', 'ui', 'behavior', 'test-coverage'
+        'implementation', 'migration', 'ui', 'behavior',
+        'test-coverage', 'test-quality'
       ];
       for (const name of expected) {
         assert.ok(BUILTIN_STAGES[name], `Missing builtin stage: ${name}`);
         assert.equal(BUILTIN_STAGES[name].type, 'skill');
         assert.ok(BUILTIN_STAGES[name].skillId);
       }
+    });
+
+    it('test-quality stage maps to test-quality-audit skill', () => {
+      assert.equal(BUILTIN_STAGES['test-quality'].skillId, 'test-quality-audit');
     });
   });
 
@@ -58,9 +63,22 @@ describe('pipeline', () => {
       );
     });
 
+    it('default pipeline does not include test-quality (opt-in only)', () => {
+      assert.ok(!DEFAULT_PIPELINES.default.includes('test-quality'));
+    });
+
     it('full pipeline includes parallel groups', () => {
       const hasNestedArray = DEFAULT_PIPELINES.full.some(entry => Array.isArray(entry));
       assert.ok(hasNestedArray);
+    });
+
+    it('full pipeline ends with test-coverage then test-quality', () => {
+      const flat = DEFAULT_PIPELINES.full.flat();
+      const coverageIdx = flat.indexOf('test-coverage');
+      const qualityIdx = flat.indexOf('test-quality');
+      assert.ok(coverageIdx >= 0, 'full should include test-coverage');
+      assert.ok(qualityIdx >= 0, 'full should include test-quality');
+      assert.ok(qualityIdx > coverageIdx, 'test-quality must run after test-coverage');
     });
   });
 

@@ -1,7 +1,7 @@
 ---
+name: audit-resume
 description: Resume an audit run from the next incomplete stage
 argument-hint: [run-id]
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash(node *), Bash(git *), Bash(npx *), Bash(npm *), Bash(ruff *)
 ---
 
 Resume an existing run by advancing to the next incomplete group.

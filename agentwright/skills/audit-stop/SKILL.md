@@ -1,7 +1,7 @@
 ---
+name: audit-stop
 description: Stop a running audit and kill its processes
 argument-hint: [run-id]
-allowed-tools: Read, Bash(node *)
 ---
 
 Stop an active audit run, killing all worker and auditor processes.

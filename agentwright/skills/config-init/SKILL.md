@@ -1,7 +1,6 @@
 ---
 name: config-init
 description: Write the default agentwright.json into the current repo so pipelines, custom stages, and retention are visible and editable locally. Use when the user wants to customize agentwright settings.
-allowed-tools: Bash(node *)
 argument-hint: [--force]
 ---
 

@@ -1,7 +1,7 @@
 ---
+name: audit-status
 description: Show audit run status
 argument-hint: [run-id]
-allowed-tools: Read, Bash(node *)
 ---
 
 Show the current state of an `agentwright` audit run.

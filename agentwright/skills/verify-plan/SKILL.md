@@ -19,6 +19,30 @@ Otherwise, launch the Agent tool with `subagent_type` set to exactly `agentwrigh
 
 The subagent does NOT have access to this conversation. Provide all necessary context in the prompt.
 
-After the subagent returns, report its findings to the user **verbatim** — do not soften, summarize, or filter the output. The whole point of this skill is independent verification; collapsing the structured report into a paraphrase defeats it.
+## After the subagent returns
 
-If the subagent flags `unreported_*` items or `fabricated_claims`, do not silently fix them. Surface them clearly so the user can decide whether each is a real omission or a false positive.
+You are the verifier/fixer for the live repo. The subagent ran read-only against extracted artifacts; never blindly accept its claims. For every entry in every `unreported_*` bucket and every `fabricated_claims` item, walk these steps **in order**:
+
+**Step A — Verify the claim**. Read the cited file/diff yourself. Re-search the report (`report.md` in the temp dir) for any acknowledgment the subagent might have missed. Re-search the tool trace (`tool-trace.txt`) for the operation the subagent says is missing. Confirm:
+- The skip / addition / out-of-scope touch / missing test / fabricated claim is actually true against the live repo and the transcript.
+- The report really is silent on it (not just phrased differently).
+- The `--against` base is correct so the diff isn't lying.
+
+**Step B — Try to contradict it**. Did the subagent misread? Was the work done in a different file or under a different name? Is there a Bash invocation that satisfies the claim the subagent dismissed? Is the "out of scope" entry actually about a different file? If you find a contradiction, classify the finding as `invalid` and skip steps C/D.
+
+**Step C — Fix obvious issues immediately** when the right action is unambiguous. Examples:
+- `unreported_missing_tests` where the plan named the exact behavior to cover and the test target is a single function/route → write the test.
+- `unreported_skips` where the plan spelled out a mechanical step and the implementer just forgot it → implement the step.
+- `unreported_out_of_scope` where the plan explicitly listed the touched file/area as off-limits → revert that change.
+- `fabricated_claims` where the underlying work clearly didn't happen (e.g., "ran tests" but no test command in the trace) → actually do it.
+
+**Step D — Defer judgment calls**. Only when multiple valid responses exist and no option is obviously correct: an undisclosed addition that might be a reasonable side-effect *or* unwanted scope creep; a fabricated claim where the work plausibly happened in a way the trace didn't capture; a missing test where the right layer or approach is genuinely ambiguous.
+
+## Final report
+
+Post the subagent's full report (verdict + every bucket) verbatim, then a per-finding table:
+
+| # | Bucket | Finding | Verification | Decision | Action |
+|---|--------|---------|--------------|----------|--------|
+
+Where Decision is `invalid` / `fixed` / `needs your call` and Action is one short phrase (e.g. "wrote auth.test.ts:42-58", "reverted change to config.ts", "no — auditor misread Edit on line 12"). After the table, list every `needs your call` item with full context so the user can decide.

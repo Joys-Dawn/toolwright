@@ -8,8 +8,10 @@
       "best-practices",
       ["migration", "ui"],
       "behavior",
-      "test-coverage"
-    ]
+      "test-coverage",
+      "test-quality"
+    ],
+    "bundle": ["audit-bundle"]
   },
   "customStages": {
     "perf": {

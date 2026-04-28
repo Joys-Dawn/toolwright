@@ -20,15 +20,11 @@ function requireClaudeCli() {
   throw new Error('Claude CLI is not available. Install Claude Code and ensure `claude` is on PATH.');
 }
 
-function buildAllowedTools() {
-  return [
-    'Read',
-    'Glob',
-    'Grep',
-    'Bash(git:*)',
-    'Bash(ruff:*)',
-    'Bash(semgrep:*)'
-  ];
+function buildDisallowedTools() {
+  // Auditor must not modify files (Edit/Write/NotebookEdit). Everything else
+  // (Bash, Skill, WebFetch, WebSearch, MCP tools) is available so it can load
+  // other skills, run linters, and verify findings against official docs.
+  return ['Edit', 'Write', 'NotebookEdit'];
 }
 
 function createJsonLineReader(readable, onLine) {
@@ -117,12 +113,12 @@ function spawnAuditor({ cwd, pluginRoot, prompt, logsDir, runId, stageName, onEv
     pluginRoot,
     '--add-dir',
     cwd,
-    '--allowedTools',
-    ...buildAllowedTools(),
+    '--disallowedTools',
+    ...buildDisallowedTools(),
     '--name',
     `agentic-auditor-${stageName}`,
     '--append-system-prompt',
-    `You are the spawned auditor worker for run ${runId}. You are strictly read-only and must only return structured findings.`
+    `You are the spawned auditor worker for run ${runId}. You cannot modify files (Edit, Write, NotebookEdit are unavailable) — only return structured findings. Use the Skill tool to load other agentwright skills when an audit needs them, run linters via Bash, and use WebFetch, WebSearch, and MCP tools (e.g. context7) to verify findings against official documentation when uncertain about library APIs, version-specific behavior, or best practices. Do not rely on memory alone for claims about external libraries or specifications.`
   ];
   const child = spawn('claude', args, {
     cwd,
@@ -237,7 +233,7 @@ function spawnAuditor({ cwd, pluginRoot, prompt, logsDir, runId, stageName, onEv
 module.exports = {
   requireClaudeCli,
   spawnAuditor,
-  buildAllowedTools,
+  buildDisallowedTools,
   createJsonLineReader,
   createTextDeltaLineReader
 };

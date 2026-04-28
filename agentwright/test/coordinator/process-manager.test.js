@@ -9,7 +9,7 @@ const path = require('path');
 const {
   requireClaudeCli,
   spawnAuditor,
-  buildAllowedTools,
+  buildDisallowedTools,
   createJsonLineReader,
   createTextDeltaLineReader
 } = require('../../coordinator/process-manager');
@@ -33,34 +33,29 @@ describe('process-manager', () => {
     });
   });
 
-  describe('buildAllowedTools', () => {
+  describe('buildDisallowedTools', () => {
     it('returns an array of tool strings', () => {
-      const tools = buildAllowedTools();
+      const tools = buildDisallowedTools();
       assert.ok(Array.isArray(tools));
       assert.ok(tools.length > 0);
     });
 
-    it('includes Read, Glob, Grep', () => {
-      const tools = buildAllowedTools();
-      assert.ok(tools.includes('Read'));
-      assert.ok(tools.includes('Glob'));
-      assert.ok(tools.includes('Grep'));
+    it('blocks file-mutation tools', () => {
+      const tools = buildDisallowedTools();
+      assert.ok(tools.includes('Edit'));
+      assert.ok(tools.includes('Write'));
+      assert.ok(tools.includes('NotebookEdit'));
     });
 
-    it('does not include LS', () => {
-      const tools = buildAllowedTools();
-      assert.ok(!tools.includes('LS'));
-    });
-
-    it('does not include Write or Edit (auditor is read-only)', () => {
-      const tools = buildAllowedTools();
-      assert.ok(!tools.includes('Write'));
-      assert.ok(!tools.includes('Edit'));
-    });
-
-    it('includes scoped Bash tools', () => {
-      const tools = buildAllowedTools();
-      assert.ok(tools.some(t => t.startsWith('Bash(')));
+    it('does not block read or research tools the auditor needs', () => {
+      const tools = buildDisallowedTools();
+      assert.ok(!tools.includes('Read'));
+      assert.ok(!tools.includes('Glob'));
+      assert.ok(!tools.includes('Grep'));
+      assert.ok(!tools.includes('Bash'));
+      assert.ok(!tools.includes('Skill'));
+      assert.ok(!tools.includes('WebFetch'));
+      assert.ok(!tools.includes('WebSearch'));
     });
   });
 

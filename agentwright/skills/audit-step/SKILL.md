@@ -1,7 +1,7 @@
 ---
+name: audit-step
 description: Run a single audit stage
 argument-hint: [stage] [scope]
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash(node *), Bash(git *), Bash(npx *), Bash(npm *), Bash(ruff *)
 ---
 
 Run a one-stage audit pipeline using the provided stage and scope.

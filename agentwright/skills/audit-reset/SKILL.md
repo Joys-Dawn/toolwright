@@ -1,7 +1,7 @@
 ---
+name: audit-reset
 description: Explain how to discard an audit run
 argument-hint: [run-id]
-allowed-tools: Read, Bash(node *)
 ---
 
 This package stores run state in `.claude/audit-runs/<run-id>/`.

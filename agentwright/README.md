@@ -52,11 +52,27 @@ Run `/agentwright:config-init` to drop a fully-defaulted `.claude/agentwright.js
 
 **Default pipeline** (when no pipeline is specified): `implementation → correctness → best-practices → behavior → test-coverage`
 
+**Full pipeline** (`/audit-run full`): default plus `security`, `migration`, `ui`, and `test-quality`.
+
 **Default scope** (when no scope is specified): files changed in `git diff` (staged + unstaged). Pass `--all` to audit the entire repo, or one or more paths to audit only those files/directories.
 
 ## Skills
 
-24 vendored skills:
+33 vendored skills:
+
+### Audit lifecycle skills
+
+Slash commands that drive an audit run. Documented in detail under [Commands](#commands) above.
+
+| Skill | Purpose |
+|-------|---------|
+| **audit-run** | Run the default or named pipeline |
+| **audit-step** | Run a single audit stage |
+| **audit-resume** | Resume an interrupted run |
+| **audit-status** | Show run status |
+| **audit-stop** | Kill an active run |
+| **audit-reset** | Guided run-directory deletion |
+| **audit-clean** | Clean retained run artifacts |
 
 ### Audit skills (used by the pipeline)
 
@@ -70,6 +86,7 @@ Run `/agentwright:config-init` to drop a fully-defaulted `.claude/agentwright.js
 | **ui-audit** | WCAG 2.2 accessibility, WAI-ARIA patterns, component anti-patterns (React/Tailwind) |
 | **behavior-audit** | User-perspective walkthrough — surprising behavior, hostile defaults, cross-feature breaks; reasons from first principles, not patterns |
 | **test-coverage-audit** | Maps source files against tests, produces risk-prioritized coverage gaps |
+| **test-quality-audit** | Routes existing test files to the matching `write-tests-*` skill and audits them in review mode (flaky patterns, weak assertions, over-mocking, isolation issues). Opt-in via `/audit-step test-quality` or the `full` pipeline |
 
 ### Planning skills
 
@@ -88,7 +105,7 @@ Run `/agentwright:config-init` to drop a fully-defaulted `.claude/agentwright.js
 
 ### Test writing skills
 
-Write, review, and fix tests. Typically invoked by the main agent after `test-coverage-audit` identifies gaps.
+Write, review, and fix tests. Loaded by `test-quality-audit` (one per test domain) when auditing existing tests, and invoked by the main agent when writing new tests after `test-coverage-audit` identifies gaps.
 
 | Skill | Focus |
 |-------|-------|
@@ -108,17 +125,19 @@ Skill wrappers that invoke the built-in agents. Use `/agentwright:<name>` instea
 | **critique** `[focus]` | party-pooper |
 | **verify** `[focus]` | verifier |
 | **verify-plan** `[--plan-path <path>] [--against <ref>]` | plan-verifier |
+| **plan-quality-review** `<path>` | plan-quality-reviewer |
 | **challenge** `[claim]` | detective (×2) |
 
 ## Agents
 
-Six built-in agents available for dispatch:
+Seven built-in agents available for dispatch:
 
 | Agent | What it does | Permissions |
 |-------|-------------|-------------|
-| **detective** | Investigates a hypothesis about code behavior — traces logic, reads files, runs tests, reports evidence. Used by `/challenge` to independently verify disputed claims. | Read-only |
+| **detective** | Investigates a hypothesis. Used by `/challenge` to independently verify disputed claims. | Read-only |
 | **verifier** | Validates applied fixes: implementations exist, tests pass, no unstated changes. Dispatched automatically after audit fixes. | Read-only |
-| **plan-verifier** | Validates that an approved plan was implemented faithfully. Cross-checks the plan, the implementer's transcript, and the diff to surface silent skips, undeclared additions, scope violations, missing tests, and fabricated claims. Used by `/verify-plan`. | Read-only |
+| **plan-verifier** | Validates that an approved plan was implemented faithfully. Cross-checks the plan, the implementer's transcript, and the diff to surface silent skips, undeclared additions, scope violations, missing tests, and fabricated claims. | Read-only |
+| **plan-quality-reviewer** | Reviews a plan document for completeness and design soundness before code is written — impact analysis, test plan, risk coverage, file-list verifiability, scope clarity, and design soundness | Read-only |
 | **deep-research** | Web search and literature review with synthesis | Read-only |
 | **party-pooper** | Adversarial critique of ideas, plans, and proposals | Read-only |
 | **update-docs** | Keeps project docs in sync with code changes | `.md` files only |
@@ -149,7 +168,7 @@ Create `.claude/agentwright.json` in your project to customize pipelines and ret
 {
   "pipelines": {
     "default": ["implementation", "correctness", "best-practices", "behavior", "test-coverage"],
-    "full": ["implementation", "correctness", "security", "best-practices", ["migration", "ui"], "behavior", "test-coverage"]
+    "full": ["implementation", "correctness", "security", "best-practices", ["migration", "ui"], "behavior", "test-coverage", "test-quality"]
   },
   "customStages": {
     "perf": { "type": "skill", "skillId": "performance-investigation" },

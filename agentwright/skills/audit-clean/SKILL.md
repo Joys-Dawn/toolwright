@@ -1,7 +1,7 @@
 ---
+name: audit-clean
 description: Clean retained audit artifacts
 argument-hint: [--logs-only]
-allowed-tools: Read, Bash(node *)
 ---
 
 Clean retained artifacts for completed `agentwright` runs under `.claude/`.

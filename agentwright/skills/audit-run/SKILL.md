@@ -1,7 +1,7 @@
 ---
+name: audit-run
 description: Run the default or named audit pipeline
 argument-hint: [pipeline-or-stage-list] [scope]
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash(node *), Bash(git *), Bash(npx *), Bash(npm *), Bash(ruff *)
 ---
 
 Run the audit pipeline and verify/fix findings as they arrive.
