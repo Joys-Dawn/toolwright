@@ -20,6 +20,8 @@ Rules:
 
 Workflow:
 
+**Run all `coordinator/index.js` commands from the project root** — the same cwd where you started the run. The run directory is located at `<cwd>/.claude/audit-runs/<runId>/` by relative path; running from a subdirectory or a different repo will fail with a "run not found" style error rather than a real audit failure.
+
 1. Start the run (output includes the runId):
 !`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js start $ARGUMENTS`
 
@@ -54,8 +56,8 @@ Workflow:
 `node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js record-decision --run <runId> --stage <stage> --finding <findingId> --decision valid --action fixed --rationale <why> --files-changed <file1.js,file2.js>`
      For invalid findings: `--decision invalid --action none --rationale <why>`
      For deferred findings: `--decision valid_needs_approval --action none --rationale <why>`
-     Then repeat step 2.
-   - `"error"` — a stage audit failed. Report the error and stop.
+     Then repeat step 2. **Stages auto-advance**: when you record the last decision in a stage, the next `next-finding --wait` call returns the next stage's first finding. The `record-decision` JSON response includes `stageComplete`, `groupAdvanced`, `pipelineComplete`, and `nextStages` so you can confirm progress. **Keep polling until you receive a `"done"` response — do NOT stop after the last finding of a stage thinking the run is complete.**
+   - `"error"` — a stage audit may have failed. Before treating the run as broken, run `node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js status <runId>` to confirm — a coordinator-level error (wrong cwd, bad args, unknown finding-id) is not the same as a stage audit failure and is usually recoverable by re-running the same command correctly. Only report the run as crashed if `status` confirms a stage is in a failed state.
    - `"done"` — pipeline complete. Proceed to step 4.
 
 4. If any fixes were applied, dispatch the `agentwright:verifier` subagent with a summary of every fix (finding ID, description, files changed, what was done). Tell the verifier to compare against the group-0 snapshot directory (its path is in `group-0-snapshot.json` under the run directory) rather than using `git diff`, so it only sees audit-introduced changes. Do not blindly accept verifier claims — re-read cited code yourself and independently confirm any reported issue is real before acting on it. After the verifier completes, clean up the group-0 snapshot:
