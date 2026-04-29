@@ -36,6 +36,8 @@ const agents = require('../lib/agents');
 const { append } = require('../lib/bus-log');
 const { createEvent, SYNTHETIC_SENDER } = require('../lib/bus-schema');
 const { atomicWriteJson } = require('../lib/atomic-write');
+const { writeMarker: writePromptMarker } = require('../lib/last-prompt');
+const { RESERVED_SESSION_IDS } = require('../lib/constants');
 
 // Cap at 4000 bytes — plenty of room for a useful prompt while preventing
 // a pathological large post from blowing up bus.jsonl.
@@ -90,16 +92,12 @@ function sanitizeThreadsMap(obj) {
 }
 
 /**
- * Writes the marker state in the new shape. Accepts either a full state
- * object `{ broadcast, threads }` or — for backwards-compat with older tests
- * — a single string treated as the broadcast marker.
+ * Writes the marker state. Expects `{ broadcast, threads }`.
  */
 export function writeMarker(collabDir, state) {
   let broadcast = null;
   let threads = {};
-  if (typeof state === 'string') {
-    broadcast = state.length > 0 ? state : null;
-  } else if (state && typeof state === 'object') {
+  if (state && typeof state === 'object') {
     broadcast = typeof state.broadcast === 'string' && state.broadcast.length > 0
       ? state.broadcast
       : null;
@@ -326,11 +324,33 @@ export function createInboundPoller(collabDir, api, options) {
       ambiguous_mention: ambiguous || false
     };
 
+    // Mark each target session's last-prompt as 'discord' BEFORE appending the
+    // bus event. The append triggers the channel-doorbell wakeup; if the
+    // recipient LLM raced and ran AskUserQuestion before the marker was
+    // written, ask-user.js would read a stale 'cli' marker and route the
+    // dialog to the local CLI. Expand the broadcast token 'all' to the actual
+    // roster session IDs — writing a literal last-prompt/all.json no real
+    // session reads would leave every session's marker stale at 'cli'.
+    // Best-effort: marker write failures must not block ingestion.
+    const markerTargets = [...new Set(
+      targets.flatMap(t => t === 'all' ? Object.keys(roster) : [t])
+        .filter(sid => !RESERVED_SESSION_IDS.has(sid))
+    )];
+    for (const targetSessionId of markerTargets) {
+      try {
+        writePromptMarker(collabDir, targetSessionId, 'discord');
+      } catch (err) {
+        log('[inbound] last-prompt marker write failed for ' + targetSessionId +
+          ': ' + (err.message || err));
+      }
+    }
+
     agents.withAgentsLock(collabDir, (token) => {
       append(token, collabDir, createEvent(
         SYNTHETIC_SENDER, to, 'user_message', body, meta
       ));
     });
+
     return 'ingested';
   }
 

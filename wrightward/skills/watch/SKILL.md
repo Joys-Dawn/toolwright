@@ -1,3 +1,8 @@
+---
+name: watch
+description: Register interest in a file another agent currently owns so you are notified (via `file_freed`) when it becomes available. Use when your Edit/Write was blocked by another agent's claim and you need to wait rather than work around it.
+---
+
 # Watch File
 
 Register interest in a file that another agent currently owns. You will be notified when the file becomes available (via `file_freed` event on your next tool call).

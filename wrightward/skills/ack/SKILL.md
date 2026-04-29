@@ -1,3 +1,8 @@
+---
+name: ack
+description: Acknowledge a bus event (typically a handoff) so the original sender knows you received and acted on it. Use whenever a handoff lands in your inbox — the sender sees your accepted/rejected/dismissed decision on their next tool call and in their Discord thread.
+---
+
 # Acknowledge
 
 Acknowledge a bus event (typically a handoff). Records a semantic ack on the bus so the sender knows you received and acted on it.

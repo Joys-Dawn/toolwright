@@ -1,3 +1,8 @@
+---
+name: help
+description: Quick reference for multi-agent coordination — MCP tool catalogue, file-coordination skills, Discord routing, when to emit note vs finding vs decision, urgent event types, and etiquette. Use when you are unsure which wrightward tool or skill applies, or need a refresher on coordination rules.
+---
+
 # Help — wrightward coordination rulebook
 
 Quick reference for multi-agent coordination. Use when you're unsure which tool or skill applies.
@@ -41,6 +46,12 @@ Inbound routing:
 - Reply in an agent's forum thread → routes to that agent (no `@mention` needed)
 - `@agent-<handle>` in broadcast or thread → fans out to the mentioned session(s). Accepts full handles (`@agent-bob-42`) and name-only (`@agent-bob` — resolves if unambiguous, otherwise broadcasts).
 - `@agent-all` → broadcasts to every registered agent
+
+**`AskUserQuestion` and `ExitPlanMode` route automatically based on where the user last replied.** When the user's last input came from Discord:
+- `AskUserQuestion` is denied at the hook — ask via `wrightward_send_message(audience="user")` instead (the deny reason tells you so).
+- `ExitPlanMode` posts the plan to the user's Discord thread and waits up to 5 min for a reply. `approve` / `yes` / `ok` / `lgtm` / `ship it` / `go` / `proceed` / `👍` → allow. Anything else → deny with the user's reply text as feedback. No reply within 5 min → deny with a stop-and-wait message; **do NOT re-present the plan automatically** — wait for the user to say "ask me again" (or similar) before re-calling ExitPlanMode.
+
+When the user's last input came from the CLI, both render natively. The channel toggles automatically every time the user types.
 
 ## When to emit note/finding/decision
 

@@ -1,3 +1,8 @@
+---
+name: handoff
+description: Hand off work to another agent by handle (e.g. `bob-42`), atomically releasing the specified files so the recipient can pick up immediately. Use when you cannot continue a task and want a peer session to take it over with a clean file slate.
+---
+
 # Handoff
 
 Hand off work to another agent, releasing specified files.

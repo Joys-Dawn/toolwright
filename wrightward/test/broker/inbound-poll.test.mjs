@@ -11,6 +11,7 @@ const { ensureCollabDir } = require('../../lib/collab-dir');
 const { registerAgent, readAgents } = require('../../lib/agents');
 const { busPath } = require('../../lib/bus-log');
 const { handleFor } = require('../../lib/handles');
+const { readMarker: readPromptMarker } = require('../../lib/last-prompt');
 
 function makeMockApi(messagesQueue) {
   const calls = [];
@@ -107,7 +108,7 @@ describe('broker/inbound-poll', () => {
     });
 
     it('ingests message matching a known agent handle', async () => {
-      writeMarker(collabDir, 'seed'); // skip first-run seeding
+      writeMarker(collabDir, { broadcast: 'seed', threads: {} }); // skip first-run seeding
       const api = makeMockApi([[
         { id: 'm1', author: { id: 'u1', bot: false }, content: '@agent-' + aHandle + ' please fix auth' }
       ]]);
@@ -124,8 +125,39 @@ describe('broker/inbound-poll', () => {
       assert.equal(events[0].meta.discord_message_id, 'm1');
     });
 
+    it("writes 'discord' last-prompt marker for the targeted session on ingest", async () => {
+      writeMarker(collabDir, { broadcast: 'seed', threads: {} });
+      const api = makeMockApi([[
+        { id: 'm1', author: { id: 'u1', bot: false }, content: '@agent-' + aHandle + ' fix it' }
+      ]]);
+      const p = createInboundPoller(collabDir, api, {
+        broadcastChannelId: 'b', allowedSenders: ['u1']
+      });
+      await p.pollOnce();
+      const marker = readPromptMarker(collabDir, 'sess-abcdef12');
+      assert.ok(marker, 'marker should be written');
+      assert.equal(marker.channel, 'discord');
+      // The non-targeted session must NOT receive a marker.
+      assert.equal(readPromptMarker(collabDir, 'sess-12345678'), null);
+    });
+
+    it("@agent-all expands to every roster session's marker, not a literal 'all' marker", async () => {
+      writeMarker(collabDir, { broadcast: 'seed', threads: {} });
+      const api = makeMockApi([[
+        { id: 'm1', author: { id: 'u1', bot: false }, content: '@agent-all deploy now' }
+      ]]);
+      const p = createInboundPoller(collabDir, api, {
+        broadcastChannelId: 'b', allowedSenders: ['u1']
+      });
+      await p.pollOnce();
+      assert.equal(readPromptMarker(collabDir, 'sess-abcdef12').channel, 'discord');
+      assert.equal(readPromptMarker(collabDir, 'sess-12345678').channel, 'discord');
+      // Literal 'all' would fail validateSessionId — the file must not exist.
+      assert.ok(!fs.existsSync(path.join(collabDir, 'last-prompt', 'all.json')));
+    });
+
     it('redacts tokens BEFORE appending to bus', async () => {
-      writeMarker(collabDir, 'seed');
+      writeMarker(collabDir, { broadcast: 'seed', threads: {} });
       const SECRET = 'MTExMTExMTExMTExMTExMTEx.XxXxXx.abcdefghijklmnopqrstuvwxyz_';
       const api = makeMockApi([[
         { id: 'm1', author: { id: 'u1', bot: false },
@@ -143,7 +175,7 @@ describe('broker/inbound-poll', () => {
     });
 
     it('bookmarks the newest message ID (Discord returns newest-first)', async () => {
-      writeMarker(collabDir, 'seed');
+      writeMarker(collabDir, { broadcast: 'seed', threads: {} });
       const api = makeMockApi([[
         { id: 'm3', author: { id: 'u1', bot: false }, content: '@agent-' + aHandle + ' c' },
         { id: 'm2', author: { id: 'u1', bot: false }, content: '@agent-' + aHandle + ' b' },
@@ -215,7 +247,7 @@ describe('broker/inbound-poll', () => {
     });
 
     it('drops messages with no actionable @agent mention', async () => {
-      writeMarker(collabDir, 'seed');
+      writeMarker(collabDir, { broadcast: 'seed', threads: {} });
       const api = makeMockApi([[
         { id: 'm1', author: { id: 'u1', bot: false }, content: 'just chatting, no mention' }
       ]]);
@@ -227,7 +259,7 @@ describe('broker/inbound-poll', () => {
     });
 
     it('marks ambiguous-mention meta when name-only handle collides', async () => {
-      writeMarker(collabDir, 'seed');
+      writeMarker(collabDir, { broadcast: 'seed', threads: {} });
       // Two handles sharing the same name prefix → `@agent-twin` is ambiguous.
       const { writeAgents } = require('../../lib/agents');
       const ambigRoster = {
@@ -255,7 +287,7 @@ describe('broker/inbound-poll', () => {
       // every registered session must receive the message. Distinct from
       // the ambiguous name-only path above — meta.ambiguous_mention stays
       // false because the broadcast was explicit, not a collision fallback.
-      writeMarker(collabDir, 'seed');
+      writeMarker(collabDir, { broadcast: 'seed', threads: {} });
       const api = makeMockApi([[
         { id: 'm1', author: { id: 'u1', bot: false },
           content: '@agent-all heads up, deploying in 5' }
@@ -359,14 +391,6 @@ describe('broker/inbound-poll', () => {
       fs.writeFileSync(file, JSON.stringify({ last_polled_message_id: '' }));
 
       assert.deepEqual(readMarker(collabDir), { broadcast: null, threads: {} });
-    });
-
-    it('writeMarker accepts a plain string and stores it as the broadcast marker', () => {
-      // Older broadcast-only tests call writeMarker(dir, 'seed') — that
-      // shape must keep working so test setup doesn't need to migrate.
-      writeMarker(collabDir, 'bcast-only-id');
-      assert.deepEqual(readMarker(collabDir),
-        { broadcast: 'bcast-only-id', threads: {} });
     });
 
     it('writeMarker normalizes an array-shaped threads field to an empty object', () => {

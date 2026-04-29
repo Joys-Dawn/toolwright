@@ -176,6 +176,15 @@ When the bridge is disabled (default), Phases 1–2 behave identically to prior 
 - `context_updated` → renames the sender's thread to match the new task string.
 - `interest`, `delivery_failed`, `rate_limited` → **never mirrored** (hard rail; user cannot elevate these to a mirror action).
 
+### Approval & question routing
+
+When the bridge is enabled, the model's interactive prompts route to wherever you last replied:
+
+- **`AskUserQuestion`** (the model's native interactive question tool) — if you last replied on Discord, the local CLI dialog is suppressed and the model asks you via your forum thread instead. If your last input was a CLI prompt, the native dialog renders.
+- **`ExitPlanMode`** (plan-mode approval) — if you last replied on Discord, the plan is posted to your forum thread and the model waits up to 5 minutes for a reply. Reply with `approve`, `yes`, `ok`, `lgtm`, `ship it`, `go`, `proceed`, or `👍` (case-insensitive, trailing `!` / `.` OK) to accept; anything else is treated as feedback and denies the plan with your text. No reply within 5 minutes denies with a stop-and-wait message — the model waits silently for you to come back instead of re-presenting.
+
+The channel toggles automatically per session: typing in the CLI flips you back to CLI; replying on Discord flips you back to Discord. With the bridge disabled, both prompts always render locally.
+
 ### Security model
 
 - **`ALLOWED_SENDERS` gates on Discord user ID, not channel membership.** Giving someone access to the broadcast channel alone does **not** let them inject into your bus — only IDs explicitly listed in `ALLOWED_SENDERS` can route mentions. Empty list = send-only.
@@ -209,7 +218,7 @@ Phase 2's channel doorbell requires Claude Code ≥ 2.1.80 and either approved-a
 
 ## Hooks
 
-Six hooks run automatically — no user intervention needed:
+Nine hooks run automatically — no user intervention needed:
 
 | Hook | Trigger | What it does |
 |------|---------|--------------|
@@ -218,6 +227,9 @@ Six hooks run automatically — no user intervention needed:
 | `guard.js` | Before Edit/Write/Read/Glob/Grep | Blocks conflicting writes, injects awareness context |
 | `bash-allow.js` | Before Bash | Auto-approves wrightward's own script invocations (workaround for [claude-code#11932](https://github.com/anthropics/claude-code/issues/11932)) |
 | `plan-exit.js` | After exiting plan mode | Reminds the agent to declare files (only when other agents are active) |
+| `mark-prompt-cli.js` | On every CLI prompt submit | Marks the session's last input channel as CLI so approval/question prompts render locally |
+| `ask-user.js` | Before `AskUserQuestion` | When the user is on Discord, denies the local dialog and redirects the model to ask via Discord |
+| `plan-approve.js` | On `ExitPlanMode` permission request | When the user is on Discord, posts the plan to their thread and waits up to 5 min for approval or feedback |
 | `cleanup.js` | Session end | Deregisters the agent and releases all claims |
 
 ## Recommended permissions
