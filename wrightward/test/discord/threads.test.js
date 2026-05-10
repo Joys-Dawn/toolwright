@@ -553,6 +553,23 @@ describe('discord/threads', () => {
         assert.equal(threads.getThreadIdFor('unknown'), null);
       });
 
+      it('getThreadIdFor returns null for an archived entry (treats archived as "no thread")', async () => {
+        // Contract relied on by dispatchEvent's post_thread branch: if the
+        // local idx still shows archived_at after a failed reconcile, the
+        // post must drop rather than land in the archived (Discord-side
+        // auto-unarchived) thread — listActiveThreads filters archived
+        // entries out, so replies in that thread would never be polled.
+        const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-a': { registered_at: 1, last_active: 1, handle: 'bob-42' }
+        });
+        const threads = createThreads(collabDir, api, 'forum-1');
+        await threads.ensureThreadForSession('sess-a', 'task');
+        await threads.archiveThread('sess-a');
+        assert.equal(threads.getThreadIdFor('sess-a'), null,
+          'archived entries must be reported as "no thread"');
+      });
+
       it('listSessions returns all keys from the index', async () => {
         const api = makeMockApi();
         seedRoster(collabDir, {
@@ -629,6 +646,39 @@ describe('discord/threads', () => {
         const threads = createThreads(collabDir, api, 'forum-1');
         const result = await threads.reconcileThreads();
         assert.deepEqual(result, { created: [], existing: [], failed: [] });
+      });
+
+      it('treats archived entries as missing and creates a fresh thread', async () => {
+        // Regression: previously reconcileThreads gated on getThreadIdFor,
+        // which returns the stored id regardless of archived_at. A session
+        // whose previous run ended (and had its thread archived) would
+        // therefore be skipped on resume — listActiveThreads then filters
+        // the archived entry out, so messages posted in the (Discord-side
+        // auto-unarchived) thread vanish on the inbound side.
+        const api = makeMockApi();
+        seedRoster(collabDir, {
+          'sess-resumed': { registered_at: 1, last_active: 1, handle: 'bob-42' },
+          'sess-live':    { registered_at: 2, last_active: 2, handle: 'sam-17' }
+        });
+        const threads = createThreads(collabDir, api, 'forum-1');
+        await threads.ensureThreadForSession('sess-resumed', 'first run');
+        await threads.archiveThread('sess-resumed');
+        await threads.ensureThreadForSession('sess-live', 'still running');
+        api.calls.createForumThread = [];
+
+        const result = await threads.reconcileThreads();
+        assert.deepEqual(result.created, ['sess-resumed'],
+          'archived entries must be reconciled into a fresh thread');
+        assert.deepEqual(result.existing, ['sess-live']);
+        assert.equal(api.calls.createForumThread.length, 1);
+
+        // The new thread overwrites the archived row so listActiveThreads
+        // and getThreadIdFor both surface the live thread from now on.
+        const idx = readIndex(collabDir);
+        assert.equal(idx['sess-resumed'].archived_at, null);
+        assert.ok(idx['sess-resumed'].thread_id);
+        assert.equal(threads.listActiveThreads().length, 2,
+          'resumed session must appear in listActiveThreads after reconcile');
       });
     });
   });

@@ -27,7 +27,7 @@ describe('config', () => {
     assert.equal(config.PLANNED_FILE_TIMEOUT_MS, 15 * 60 * 1000);
     assert.equal(config.PLANNED_FILE_GRACE_MS, 2 * 60 * 1000);
     assert.equal(config.AUTO_TRACKED_FILE_TIMEOUT_MS, 2 * 60 * 1000);
-    assert.equal(config.SESSION_HARD_SCAVENGE_MS, 60 * 60 * 1000);
+    assert.equal(config.SESSION_HARD_SCAVENGE_MS, 300 * 60 * 1000);
     assert.equal(config.REMINDER_IDLE_MS, 5 * 60 * 1000);
     assert.equal(config.INACTIVE_THRESHOLD_MS, 6 * 60 * 1000);
   });

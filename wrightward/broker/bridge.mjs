@@ -236,19 +236,25 @@ async function runOutboundTick(collabDir, policy, api, threads, config) {
   let lastDelivered = null;
   for (const event of events) {
     try {
-      // session_started: ensure thread exists so subsequent handoffs can post
-      // into it. Independent of mirror policy (which also posts the event to
-      // the broadcast channel per default policy).
+      // session_started: ensure a LIVE thread exists so subsequent handoffs
+      // can post into it. Independent of mirror policy (which also posts the
+      // event to the broadcast channel per default policy).
+      // ensureThreadForSession is idempotent — it returns the existing
+      // thread_id when the entry is non-archived, and creates a fresh thread
+      // when the entry is archived or missing. Calling it unconditionally
+      // (rather than guarding on getThreadIdFor) means a session resuming
+      // after a prior session_ended (which archived its thread) actually
+      // gets a new live thread — the previous getThreadIdFor guard returned
+      // the archived id, treated it as "thread exists", and left the
+      // session stuck with no pollable thread.
       if (event.type === 'session_started' && event.from) {
-        if (!threads.getThreadIdFor(event.from)) {
-          const ctx = readContext(collabDir, event.from);
-          const taskHint = (ctx && ctx.task) || '';
-          try {
-            await threads.ensureThreadForSession(event.from, taskHint);
-          } catch (err) {
-            appendLog(collabDir, '[bridge] thread create failed for ' + event.from +
-              ': ' + redactTokens(err.message || String(err)));
-          }
+        const ctx = readContext(collabDir, event.from);
+        const taskHint = (ctx && ctx.task) || '';
+        try {
+          await threads.ensureThreadForSession(event.from, taskHint);
+        } catch (err) {
+          appendLog(collabDir, '[bridge] thread create failed for ' + event.from +
+            ': ' + redactTokens(err.message || String(err)));
         }
       }
 

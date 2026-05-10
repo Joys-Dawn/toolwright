@@ -46,7 +46,7 @@ async function main() {
 
   // Create MCP server
   const server = new Server(
-    { name: 'wrightward-bus', version: '3.10.1' },
+    { name: 'wrightward-bus', version: '3.10.2' },
     {
       capabilities: {
         tools: {},

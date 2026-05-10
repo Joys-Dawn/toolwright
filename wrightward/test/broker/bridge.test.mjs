@@ -8,7 +8,8 @@ import {
   dispatchEvent,
   readBridgeFresh,
   seedBookmarkIfFresh,
-  runDrainLoop
+  runDrainLoop,
+  runOutboundTick
 } from '../../broker/bridge.mjs';
 
 // Seeds agents.json with a registered row for each given sessionId so the
@@ -227,6 +228,33 @@ describe('broker/bridge', () => {
       assert.equal(threads._calls.ensureThreadForSession.length, 0);
       // Distinct reason from the not-in-agents.json path so operators can
       // tell "hallucinated UUID" from "reconcile race" in bridge.log.
+      assert.match(readBridgeLog(),
+        /post_thread dropped: sess-bbbbbbbb has no thread \(reconcile may have failed\)/);
+    });
+
+    it('drops post_thread when target has only an archived thread (stale-archive race)', async () => {
+      // Companion to the reconcile-race case: if reconcile failed to
+      // overwrite an archived entry on resume, getThreadIdFor returns null
+      // (archived treated as "no thread"). The post_thread branch must then
+      // drop rather than POST to the archived id — POSTing would Discord-
+      // side auto-unarchive the thread, but listActiveThreads still filters
+      // the archived entry out, so inbound replies in that thread would be
+      // silently lost. Drop forces operators to notice via bridge.log.
+      seedRegisteredAgents(collabDir, ['sess-bbbbbbbb']);
+      const threads = makeThreadsStub({
+        // Mirror the live (archived-aware) getThreadIdFor: returns null
+        // when archived_at is set, even though a thread_id is stored.
+        getThreadIdFor: () => null
+      });
+      const api = makeApiStub();
+      const event = {
+        type: 'handoff', from: 'sess-aaaaaaaa', to: 'sess-bbbbbbbb',
+        body: 'after a failed reconcile'
+      };
+      const result = await dispatchEvent(event, policy, threads, api, BASE_CONFIG, collabDir);
+      assert.equal(result, false, 'must drop, not post to archived thread');
+      assert.equal(api._calls.postMessage.length, 0,
+        'no POST to archived thread (would Discord-unarchive but local stays archived)');
       assert.match(readBridgeLog(),
         /post_thread dropped: sess-bbbbbbbb has no thread \(reconcile may have failed\)/);
     });
@@ -647,6 +675,84 @@ describe('broker/bridge', () => {
       // once. After iteration 2, now=500 >= deadline → no trailing sleep.
       assert.equal(sleepCalls.length, 1,
         'sleep must not fire after the last iteration');
+    });
+  });
+
+  describe('runOutboundTick — session_started thread provisioning', () => {
+    const policy = mergePolicy();
+
+    it('calls ensureThreadForSession even when getThreadIdFor returns a stored id', async () => {
+      // Regression: the previous handler was guarded by
+      //   if (!threads.getThreadIdFor(event.from)) { ensureThreadForSession(...) }
+      // getThreadIdFor returns the stored thread_id regardless of archived_at,
+      // so a session whose prior run ended (and had its thread archived) was
+      // treated as already-having-a-thread. listActiveThreads then filters
+      // archived entries out, so the inbound poller never polled the resumed
+      // session's thread — forum-thread messages were silently dropped.
+      // The fix: call ensureThreadForSession unconditionally (it is itself
+      // idempotent — returns the existing id when live, creates fresh when
+      // archived or missing).
+      seedRegisteredAgents(collabDir, ['sess-resumed']);
+      // Plant an archived discord-threads.json entry so getThreadIdFor
+      // returns a non-null id — the exact shape that fooled the old guard.
+      const idxPath = path.join(collabDir, 'bus-index', 'discord-threads.json');
+      fs.mkdirSync(path.dirname(idxPath), { recursive: true });
+      fs.writeFileSync(idxPath, JSON.stringify({
+        'sess-resumed': {
+          thread_id: 'thread-from-prior-run',
+          archived_at: Date.now() - 60_000,
+          rendered_name: 'prior task (bob-42)'
+        }
+      }));
+
+      const threads = makeThreadsStub({
+        // Pin the stub to the OLD getThreadIdFor semantic (returns stored
+        // id regardless of archived_at) so this test still proves
+        // unconditional dispatch even if a future change made getThreadIdFor
+        // archived-aware. The real fix is in two layers: (1) getThreadIdFor
+        // now returns null for archived entries, and (2) the session_started
+        // handler doesn't gate on it at all. This test guards layer 2.
+        getThreadIdFor: (sid) => (sid === 'sess-resumed' ? 'thread-from-prior-run' : null)
+      });
+      const api = makeApiStub();
+
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir,
+          createEvent('sess-resumed', 'all', 'session_started', 'resuming work'));
+      });
+
+      await runOutboundTick(collabDir, policy, api, threads, BASE_CONFIG);
+
+      assert.equal(threads._calls.ensureThreadForSession.length, 1,
+        'session_started must trigger ensureThreadForSession unconditionally');
+      assert.equal(threads._calls.ensureThreadForSession[0].sid, 'sess-resumed');
+    });
+
+    it('logs and continues when ensureThreadForSession throws', async () => {
+      // Thread provisioning failures must not abort dispatch of the
+      // session_started event — the broadcast post still goes out so peers
+      // see the join, and the bookmark advances so we don't reprocess the
+      // event. The failure is captured in bridge.log for operator visibility.
+      seedRegisteredAgents(collabDir, ['sess-resumed']);
+      const threads = makeThreadsStub({
+        ensureThreadForSession: async () => { throw new Error('Discord 500 simulated'); }
+      });
+      const api = makeApiStub();
+
+      withAgentsLock(collabDir, (token) => {
+        append(token, collabDir,
+          createEvent('sess-resumed', 'all', 'session_started', 'resuming'));
+      });
+
+      await runOutboundTick(collabDir, policy, api, threads, BASE_CONFIG);
+
+      assert.equal(threads._calls.ensureThreadForSession.length, 1,
+        'ensure was attempted');
+      assert.equal(api._calls.postMessage.length, 1,
+        'broadcast post must still go out despite thread-create failure');
+      assert.equal(api._calls.postMessage[0].channelId, 'broadcast-999');
+      const log = fs.readFileSync(path.join(collabDir, 'bridge', 'bridge.log'), 'utf8');
+      assert.match(log, /thread create failed for sess-resumed: Discord 500 simulated/);
     });
   });
 });

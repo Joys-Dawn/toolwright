@@ -307,7 +307,7 @@ export function createInboundPoller(collabDir, api, options) {
       // natively mention the bot. Log content length so operators can tell
       // "no @agent-<id> in message" apart from "empty payload".
       log('[inbound] skip msg=' + msgId + ' reason=no_mention content_len=' +
-        raw.length + ' roster_size=' + roster.length);
+        raw.length + ' roster_size=' + Object.keys(roster).length);
       return 'skipped';
     }
 

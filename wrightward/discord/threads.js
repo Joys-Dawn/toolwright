@@ -134,8 +134,15 @@ function createThreads(collabDir, api, forumChannelId) {
   }
 
   function getThreadIdFor(sessionId) {
-    const idx = readIndex(collabDir);
-    return (idx[sessionId] && idx[sessionId].thread_id) || null;
+    // Archived entries are treated as "no thread". Posting to an archived
+    // thread would Discord-side auto-unarchive it, but the local
+    // archived_at would stay set — listActiveThreads would then still
+    // exclude the thread from inbound polling, silently dropping replies.
+    // The post_thread branch in dispatchEvent depends on this contract to
+    // route around stale entries and let the reconcile/ensureThreadForSession
+    // path materialize a fresh thread instead.
+    const entry = readIndex(collabDir)[sessionId];
+    return entry && entry.thread_id && !entry.archived_at ? entry.thread_id : null;
   }
 
   function listSessions() {
@@ -221,12 +228,20 @@ function createThreads(collabDir, api, forumChannelId) {
    */
   async function reconcileThreads(onError) {
     const roster = readAgents(collabDir);
+    const idx = readIndex(collabDir);
     const created = [];
     const existing = [];
     const failed = [];
     for (const sessionId of Object.keys(roster)) {
-      const existingThreadId = getThreadIdFor(sessionId);
-      if (existingThreadId) {
+      // A session counts as "having a thread" only when its entry is LIVE
+      // (thread_id present AND not archived). Archived entries fall through
+      // to ensureThreadForSession, which creates a fresh thread. Without
+      // this, a session whose thread was archived on its previous
+      // session_ended would never get a live thread on resume — inbound-poll
+      // skips archived threads via listActiveThreads, so messages posted in
+      // the (Discord-side auto-unarchived) thread would be silently dropped.
+      const entry = idx[sessionId];
+      if (entry && entry.thread_id && !entry.archived_at) {
         existing.push(sessionId);
         continue;
       }
