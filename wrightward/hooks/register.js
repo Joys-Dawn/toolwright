@@ -42,7 +42,15 @@ function emitSessionStartContext(collabDir, sessionId, source) {
     'Broadcast to all agents: `audience="all"`. Reach the user on Discord: `audience="user"`. ' +
     'You can also call `wrightward_whoami` at any time to re-confirm your handle. ' +
     'Long messages are auto-split across multiple Discord posts; keep per-message content focused ' +
-    'so the user can follow along — a plan can span chunks, but a one-line ack should not.';
+    'so the user can follow along — a plan can span chunks, but a one-line ack should not.' +
+    '\n\n**Invoke wrightward slash commands via the Skill tool.** When this plugin (guard messages, ' +
+    'inbox events, README, peers) refers you to a command like `/wrightward:collab-context`, ' +
+    '`/wrightward:collab-release`, `/wrightward:collab-done`, `/wrightward:handoff`, `/wrightward:ack`, ' +
+    'etc., invoke it via the Skill tool (`skill: wrightward:<name>`). Do NOT run the underlying script ' +
+    'directly via Bash with a hardcoded path (e.g. `node .../wrightward/3.10.0/scripts/context.js ...`). ' +
+    'Plugin versions change between releases and stale SKILL.md bodies linger in your context after ' +
+    'compaction — only the Skill tool resolves the currently-installed path. This rule applies to every ' +
+    '`/wrightward:` reference, regardless of where you saw it.';
   if (source === 'compact') {
     msg += '\n\n**Context was just compacted.** Read the compaction summary at the top of your ' +
       'context — it tells you where you left off. Any skill content (SKILL.md bodies) you see ' +

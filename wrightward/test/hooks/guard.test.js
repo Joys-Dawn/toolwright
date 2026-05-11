@@ -695,6 +695,77 @@ describe('guard hook', () => {
       assert.equal(interest.meta.file, 'target.js');
     });
 
+    it('auto-emits a blocker event targeted at the overlap owner when Write is blocked', () => {
+      registerAgent(collabDir, 'sess-1');
+      registerAgent(collabDir, 'sess-2');
+      writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
+      writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'target.js')], status: 'in-progress' });
+
+      runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Write',
+        tool_input: { file_path: path.join(tmpDir, 'target.js') }
+      });
+
+      const bp = busPath(collabDir);
+      const events = fs.readFileSync(bp, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+      const blockers = events.filter(e => e.type === 'blocker');
+      assert.equal(blockers.length, 1, 'Expected exactly one blocker event');
+      assert.equal(blockers[0].from, 'sess-1');
+      assert.equal(blockers[0].to, 'sess-2');
+      assert.equal(blockers[0].meta.file, 'target.js');
+      assert.equal(blockers[0].severity, 'warn');
+    });
+
+    it('emits one blocker per overlap owner when multiple agents claim the same file', () => {
+      // Defensive: today context.js strips already-claimed files so this is rare,
+      // but the guard still maps overlap → blocker per owner. Pin that fan-out.
+      registerAgent(collabDir, 'sess-1');
+      registerAgent(collabDir, 'sess-2');
+      registerAgent(collabDir, 'sess-3');
+      writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
+      writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'shared.js')], status: 'in-progress' });
+      writeContext(collabDir, 'sess-3', { task: 'their other work', files: [fe('~', 'shared.js')], status: 'in-progress' });
+
+      runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Write',
+        tool_input: { file_path: path.join(tmpDir, 'shared.js') }
+      });
+
+      const bp = busPath(collabDir);
+      const events = fs.readFileSync(bp, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+      const blockerOwners = events.filter(e => e.type === 'blocker').map(e => e.to).sort();
+      assert.deepEqual(blockerOwners, ['sess-2', 'sess-3']);
+    });
+
+    it('does NOT emit a blocker when BUS_ENABLED is false', () => {
+      registerAgent(collabDir, 'sess-1');
+      registerAgent(collabDir, 'sess-2');
+      writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
+      writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'target.js')], status: 'in-progress' });
+
+      const claudeDir = path.join(tmpDir, '.claude');
+      fs.writeFileSync(path.join(claudeDir, 'wrightward.json'), JSON.stringify({ BUS_ENABLED: false }));
+
+      runHook({
+        session_id: 'sess-1',
+        cwd: tmpDir,
+        tool_name: 'Write',
+        tool_input: { file_path: path.join(tmpDir, 'target.js') }
+      });
+
+      // bus.jsonl may not exist at all when BUS_ENABLED=false — that's fine,
+      // it just means no blocker leaked through.
+      const bp = busPath(collabDir);
+      if (fs.existsSync(bp)) {
+        const events = fs.readFileSync(bp, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+        assert.equal(events.filter(e => e.type === 'blocker').length, 0);
+      }
+    });
+
     it('updates interest index when Write is blocked', () => {
       registerAgent(collabDir, 'sess-1');
       registerAgent(collabDir, 'sess-2');
@@ -713,10 +784,11 @@ describe('guard hook', () => {
       assert.ok(entries.some(e => e.sessionId === 'sess-1'));
     });
 
-    it('block message informs the agent that interest was recorded and it will be notified', () => {
+    it('block message informs the agent that interest + auto-notification fired and it will be woken', () => {
       // Without this signal, the blocked agent has no idea the plugin will
       // notify it when the file frees up — it may just move on assuming the
-      // file is permanently off-limits. Pin the user-facing line.
+      // file is permanently off-limits, OR it may try to redundantly ping
+      // the holder when the auto-blocker already did that. Pin both signals.
       registerAgent(collabDir, 'sess-1');
       registerAgent(collabDir, 'sess-2');
       writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
@@ -730,7 +802,8 @@ describe('guard hook', () => {
       });
       assert.equal(result.exitCode, 2, 'Write should be blocked');
       assert.match(result.stderr, /interest has been recorded/i);
-      assert.match(result.stderr, /notification will wake you when this file frees up/i);
+      assert.match(result.stderr, /holder was auto-notified/i);
+      assert.match(result.stderr, /file_freed/i);
       // Time-expectation guidance lets the agent decide whether to wait or ask the user.
       assert.match(result.stderr, /auto-tracked.+2 min|declared.+15 min/i);
     });
@@ -754,6 +827,68 @@ describe('guard hook', () => {
       });
       assert.equal(result.exitCode, 2, 'Write should still be blocked');
       assert.doesNotMatch(result.stderr, /interest has been recorded/i);
+    });
+
+    it('block message does NOT claim interest was recorded when the lock-held bus ops throw', () => {
+      // BUS_ENABLED=true but the lock acquisition (or one of the writes inside)
+      // fails — historically the wakeupLine still said "interest has been
+      // recorded AND the holder was auto-notified", which is a lie: nothing
+      // landed on the bus, and no file_freed will ever wake the agent up.
+      // Now busOpsOk gates the optimistic message, with a recording-failed
+      // branch in its place.
+      registerAgent(collabDir, 'sess-1');
+      registerAgent(collabDir, 'sess-2');
+      writeContext(collabDir, 'sess-1', { task: 'my work', status: 'in-progress' });
+      writeContext(collabDir, 'sess-2', { task: 'their work', files: [fe('~', 'target.js')], status: 'in-progress' });
+
+      // Shim withAgentsLock to throw whenever guard calls it with this collabDir.
+      // The hard-block + readContext paths don't take the lock, so this targets
+      // only the scanInboxAndEmitOverlapEvents call.
+      const shimPath = path.join(tmpDir, 'lock-throw-shim.js');
+      fs.writeFileSync(shimPath, `
+        const Module = require('module');
+        const origLoad = Module._load;
+        Module._load = function(req, parent, isMain) {
+          const mod = origLoad.apply(this, arguments);
+          if (req.endsWith('lib/agents') || req === '../lib/agents' || req === '../../lib/agents') {
+            if (!mod.__throwPatched) {
+              mod.withAgentsLock = function() {
+                throw new Error('simulated lock failure');
+              };
+              mod.__throwPatched = true;
+            }
+          }
+          return mod;
+        };
+      `);
+
+      const env = { ...process.env, NODE_OPTIONS: '--require ' + shimPath };
+      let stderr = '';
+      let exitCode = 0;
+      try {
+        execFileSync('node', [HOOK], {
+          input: JSON.stringify({
+            session_id: 'sess-1',
+            cwd: tmpDir,
+            tool_name: 'Write',
+            tool_input: { file_path: path.join(tmpDir, 'target.js') }
+          }),
+          encoding: 'utf8',
+          timeout: 5000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env
+        });
+      } catch (e) {
+        exitCode = e.status;
+        stderr = e.stderr || '';
+      }
+
+      assert.equal(exitCode, 2, 'Write should still be blocked even when bus ops throw');
+      // Must NOT lie about a wake-up that will never come.
+      assert.doesNotMatch(stderr, /interest has been recorded/i);
+      assert.doesNotMatch(stderr, /holder was auto-notified/i);
+      // SHOULD tell the agent why no wake-up is coming so it can decide what to do next.
+      assert.match(stderr, /recording your interest failed|No wake-up/i);
     });
 
     it('injects urgent inbox events as additionalContext', () => {

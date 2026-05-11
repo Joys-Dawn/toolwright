@@ -1,6 +1,6 @@
 ---
 name: inbox
-description: Check your bus inbox for pending urgent events from other agents (handoffs, file_freed, user_message, blocker, ack, finding, decision, agent_message, delivery_failed). Urgent events auto-inject on the next tool call; use this skill to query explicitly when you suspect something is waiting.
+description: Check your bus inbox for pending urgent events from other agents (handoffs, file_freed, user_message, blocker, ack, finding, decision, agent_message, delivery_failed). Urgent events auto-inject via the channel doorbell (between turns, when channels are enabled) or on your next tool call; use this skill to query explicitly when you suspect something is waiting.
 ---
 
 # Inbox

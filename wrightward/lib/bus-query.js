@@ -10,6 +10,14 @@ const interestIndex = require('./interest-index');
 // collapse to the first. Anchored to the first occurrence (see deduplicateFileFreed).
 const FILE_FREED_DEDUP_WINDOW_MS = 5000;
 
+// Two blocker events for the same (from, to, file) emitted within this window
+// collapse to the first. Suppresses retry spam in the holder's inbox AND Discord
+// thread (the bridge posts one Discord message per event — without dedup, every
+// blocked-Write retry fires a new post for what is logically one block episode).
+// Longer than file_freed because retries are typically slower-paced than
+// release-and-re-claim churn.
+const BLOCKER_DEDUP_WINDOW_MS = 30000;
+
 /**
  * Returns urgent events targeted at this session from the bus log.
  * `token` must be the lock-acquisition token from withAgentsLock.
@@ -146,6 +154,59 @@ function writeInterest(token, collabDir, sessionId, filePath, ttlMs) {
 }
 
 /**
+ * Emits a `blocker` event targeted at the owner of a file that this session
+ * just tried (and failed) to write. Emitted automatically by guard.js under
+ * the same lock as the interest registration, so the owner sees a single
+ * coordinated coordinate-or-handoff prompt instead of relying on the blocked
+ * agent to remember to ping.
+ *
+ * `token` must be the lock-acquisition token from withAgentsLock.
+ *
+ * Body is intentionally terse — the inbox formatter renders the sender's
+ * handle, the file, and the action hint from `meta.file` at display time.
+ *
+ * @param {symbol} token
+ * @param {string} collabDir
+ * @param {string} blockedSessionId - The session that tried to write.
+ * @param {string} ownerSessionId   - The session holding the claim.
+ * @param {string} filePath         - Project-relative path of the contested file.
+ * @returns {string|null} Event ID, or null when suppressed by the per-(from, to, file)
+ *   cooldown — an equivalent blocker was already emitted within BLOCKER_DEDUP_WINDOW_MS.
+ */
+function writeBlocker(token, collabDir, blockedSessionId, ownerSessionId, filePath) {
+  assertLockHeld(token, collabDir);
+  filePath = normalizeFilePath(filePath);
+
+  // Per-(from, to, file) cooldown. Scan the bus tail for an existing blocker
+  // with the same triple within BLOCKER_DEDUP_WINDOW_MS and skip the write if
+  // one is found — prevents retry spam at the source (no inbox duplicates and
+  // no Discord re-posts). Bus is append-only and time-ordered, so we can
+  // break as soon as we cross the window boundary.
+  const now = Date.now();
+  const cutoff = now - BLOCKER_DEDUP_WINDOW_MS;
+  const { events: tail } = tailReader(token, collabDir, 0);
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const e = tail[i];
+    if (typeof e.ts !== 'number' || e.ts < cutoff) break;
+    if (e.type !== 'blocker') continue;
+    if (e.from !== blockedSessionId || e.to !== ownerSessionId) continue;
+    if (!e.meta || e.meta.file !== filePath) continue;
+    return null; // suppressed — recent equivalent blocker already on the bus
+  }
+
+  const event = createEvent(
+    blockedSessionId,
+    ownerSessionId,
+    'blocker',
+    'Blocked on ' + filePath,
+    { file: filePath, blocked_at: now },
+    'warn'
+  );
+  append(token, collabDir, event);
+  return event.id;
+}
+
+/**
  * Scans bus.jsonl for an event with matching id. O(n) but bounded by
  * retention (10k events default) so cost is negligible at current scale.
  * Returns null when the event is absent (garbage-collected, expired, or
@@ -238,4 +299,4 @@ function buildFileFreedEvents(token, collabDir, { releasedBy, files, reason, exc
   return events;
 }
 
-module.exports = { listInbox, findInterested, writeInterest, writeAck, findEventById, buildFileFreedEvents, matchesSession, isUrgent };
+module.exports = { listInbox, findInterested, writeInterest, writeBlocker, writeAck, findEventById, buildFileFreedEvents, matchesSession, isUrgent };

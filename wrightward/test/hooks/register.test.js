@@ -318,6 +318,25 @@ describe('register hook', () => {
         'context message must point at the self-discovery tool for post-compaction recovery');
     });
 
+    it('tells agents to invoke /wrightward: commands via the Skill tool, not via Bash', () => {
+      // Failure mode this guards against: an agent sees a stale SKILL.md
+      // body in context (e.g. after compaction) with a hardcoded plugin path
+      // like `node .../wrightward/3.10.0/scripts/context.js`, copies that path
+      // into a Bash call for a sibling skill, and hits ENOENT because the
+      // installed version has drifted. The SessionStart context is the
+      // canonical place to lay down the "invoke via Skill tool" rule — it
+      // re-fires on resume/compact and is read before any slash-command
+      // reference the agent will encounter (guard stderr, inbox hints, README).
+      const stdout = runHook({ session_id: 'test-sess-skillrule', cwd: tmpDir });
+      const msg = JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext;
+      assert.match(msg, /Invoke wrightward slash commands via the Skill tool/i,
+        'must explicitly tell agents to use the Skill tool for /wrightward: commands: ' + msg);
+      assert.match(msg, /Do NOT run.+directly via Bash/i,
+        'must call out the Bash-with-hardcoded-path failure mode: ' + msg);
+      assert.match(msg, /Plugin versions change|stale SKILL\.md/i,
+        'must explain WHY (version drift / stale skill bodies) so the rule sticks: ' + msg);
+    });
+
     it('mentions the Discord auto-chunk envelope so agents self-moderate length', () => {
       // Agents otherwise have no way to know the bridge will split long
       // messages across multiple Discord posts. Without this hint, a short
@@ -385,17 +404,26 @@ describe('register hook', () => {
     });
 
     it('does NOT append the compaction warning on source=startup', () => {
+      // Asserts against the signature of the compaction-specific paragraph,
+      // not any mention of the word "compaction". Other rules in the base
+      // message legitimately reference compaction when explaining WHY they
+      // exist (e.g. the Skill-tool-invocation rule), so a bare regex over
+      // "compact|compaction" is too loose.
       const stdout = runHook({ session_id: 'sess-startup-ctx', cwd: tmpDir, source: 'startup' });
       const msg = JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext;
-      assert.doesNotMatch(msg, /compact|compaction/i,
-        'startup must not carry the compaction warning: ' + msg);
+      assert.doesNotMatch(msg, /Context was just compacted/i,
+        'startup must not carry the post-compaction warning paragraph: ' + msg);
+      assert.doesNotMatch(msg, /Read the compaction summary/i,
+        'startup must not carry the post-compaction warning paragraph: ' + msg);
     });
 
     it('does NOT append the compaction warning on source=resume', () => {
       const stdout = runHook({ session_id: 'sess-resume-ctx', cwd: tmpDir, source: 'resume' });
       const msg = JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext;
-      assert.doesNotMatch(msg, /compact|compaction/i,
-        'resume must not carry the compaction warning: ' + msg);
+      assert.doesNotMatch(msg, /Context was just compacted/i,
+        'resume must not carry the post-compaction warning paragraph: ' + msg);
+      assert.doesNotMatch(msg, /Read the compaction summary/i,
+        'resume must not carry the post-compaction warning paragraph: ' + msg);
     });
   });
 });

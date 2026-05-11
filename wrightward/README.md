@@ -2,7 +2,7 @@
 
 Claude Code plugin for multi-agent coordination. When multiple Claude Code sessions work in the same repo, wrightward prevents them from silently overwriting each other's work and gives them a peer-to-peer message bus to hand off tasks, watch files, and wake each other up.
 
-- **File conflict prevention** — auto-tracks Edits/Writes; blocks overlapping writes with a summary of who owns the file.
+- **File conflict prevention** — auto-tracks Edits/Writes; blocks overlapping writes with a summary of who owns the file, auto-registers the blocked agent's interest, and auto-emits a `blocker` event to the holder so they know who's waiting.
 - **Awareness context** — injects short summaries of other agents' active work into the guard hook's output.
 - **Message bus** — eight MCP tools for sending notes, handoffs, file-watch registrations, and inbox checks between sessions.
 - **Channel push** (research preview) — optional wake-up `notifications/claude/channel` ping when an idle session receives an urgent bus event.
@@ -45,7 +45,7 @@ Running `/wrightward:collab-context` lets an agent declare files up front with a
 Before every tool call, wrightward checks for conflicts:
 
 - **Read/Glob/Grep on another agent's files** — non-blocking context injected (who owns it, what they're doing)
-- **Write to another agent's file** — blocked, agent sees who owns it
+- **Write to another agent's file** — blocked. The agent sees who owns it; in the same lock, the guard auto-registers the blocked agent's interest in the file AND auto-emits a `blocker` event to the holder (the holder sees the blocked agent's handle + the file, with an inbox hint to reply via `wrightward_send_message` with whether/when they can free it or hand off). Both sides are coordinated automatically — no manual ping required.
 - **Write to an unrelated file** — proceeds with awareness of other active agents; if the writing session hasn't declared its own context, the injection also nudges it to run `/wrightward:collab-context` so peers can see its claims
 - **Solo agent** — everything proceeds silently with zero overhead
 
@@ -55,7 +55,7 @@ Context injection is deduplicated — the same summary is only shown once per ch
 
 Edit/Write on any file inside `.claude/collab/` is hard-blocked unconditionally — whether or not other agents are active (and the block tells the model to NOT use Bash to get around this). This prevents an agent from bypassing the coordination system by directly editing `agents.json` or another agent's context file (e.g., to remove what it perceives as a "stale" claim). Collab state is managed exclusively by the wrightward skills and hooks. Read access is not blocked — agents can still inspect their own state for debugging.
 
-If an agent believes another agent's claim is stale, the instructions in every collab skill tell it to **wait 6 minutes and try again**. After 6 minutes of no heartbeat, a crashed or abandoned session is automatically excluded from the active set, and its claims stop enforcing. If the claim is still enforced after 6 minutes, the other agent is alive — the claim is legitimate, not stale, and agents are explicitly instructed never to bypass it. Claims declared through `/wrightward:collab-context` can persist for 15 minutes or longer while the other agent works through a plan.
+If an agent's write is blocked by another agent's claim, the guard hook does two things automatically under the same lock: **it registers the blocked agent's interest** in the file (so it gets a `file_freed` wake-up the moment the holder releases), and **it emits a `blocker` event to the holder** (who sees who's waiting, on which file, and a prompt to reply with whether/when they can free it or hand off). The blocked agent is told to move on rather than ping the holder or retry — the holder will reply via `wrightward_send_message` if they choose to, and that reply lands as an `agent_message` on the blocked agent. Both `file_freed` and `agent_message` are delivered via the channel doorbell (between turns, when channels are enabled) or on the blocked agent's next tool call as the fallback. `ScheduleWakeup` is also available if the blocked agent has a known wait time and wants to self-pace. Crashed or abandoned sessions auto-scavenge after 6 minutes of no heartbeat, so their claims stop enforcing on their own — agents are explicitly instructed never to bypass an enforced claim. `/wrightward:collab-context`-declared claims can persist for 15 minutes or longer while the other agent works through a plan.
 
 ### Idle reminders
 

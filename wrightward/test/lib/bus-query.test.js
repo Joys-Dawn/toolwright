@@ -9,7 +9,7 @@ const { ensureCollabDir } = require('../../lib/collab-dir');
 const { withAgentsLock, registerAgent, registerAgentInLock } = require('../../lib/agents');
 const { createEvent } = require('../../lib/bus-schema');
 const { append, appendBatch, busPath } = require('../../lib/bus-log');
-const { listInbox, findInterested, writeInterest, writeAck, findEventById, buildFileFreedEvents } = require('../../lib/bus-query');
+const { listInbox, findInterested, writeInterest, writeBlocker, writeAck, findEventById, buildFileFreedEvents } = require('../../lib/bus-query');
 const { writeContext } = require('../../lib/context');
 const interestIndex = require('../../lib/interest-index');
 
@@ -231,6 +231,86 @@ describe('bus-query', () => {
 
       const lines = fs.readFileSync(busPath(collabDir), 'utf8').trim().split('\n');
       assert.equal(lines.length, 1);
+    });
+  });
+
+  describe('writeBlocker', () => {
+    it('appends a blocker event from the blocked agent targeted at the holder', () => {
+      withAgentsLock(collabDir, (token) => {
+        const id = writeBlocker(token, collabDir, 'sess-1', 'sess-2', 'src/auth.ts');
+        assert.ok(typeof id === 'string' && id.length > 0);
+      });
+
+      const content = fs.readFileSync(busPath(collabDir), 'utf8').trim();
+      const event = JSON.parse(content);
+      assert.equal(event.type, 'blocker');
+      assert.equal(event.from, 'sess-1');
+      assert.equal(event.to, 'sess-2');
+      assert.equal(event.meta.file, 'src/auth.ts');
+      assert.equal(event.severity, 'warn');
+      assert.match(event.body, /Blocked on src\/auth\.ts/);
+    });
+
+    it('normalizes the file path so the holder sees the same key as the interest index', () => {
+      withAgentsLock(collabDir, (token) => {
+        // Backslash-separated Windows-style input should be coerced to the
+        // same canonical form writeInterest/auto-track use, so a downstream
+        // index lookup or file_freed match agrees on the key.
+        writeBlocker(token, collabDir, 'sess-1', 'sess-2', 'src\\auth.ts');
+      });
+
+      const content = fs.readFileSync(busPath(collabDir), 'utf8').trim();
+      const event = JSON.parse(content);
+      assert.equal(event.meta.file, 'src/auth.ts');
+    });
+
+    it('suppresses a second blocker for the same (from, to, file) within the cooldown window', () => {
+      // Realistic causes of repeats inside the window: agent retries a Write
+      // despite the "Do NOT retry" instruction, Edit→Write on the same path,
+      // user re-prompts the same task. Without dedup, every retry would fire
+      // a Discord post in the holder's thread for what is logically one block.
+      let firstId, secondId;
+      withAgentsLock(collabDir, (token) => {
+        firstId = writeBlocker(token, collabDir, 'sess-1', 'sess-2', 'auth.ts');
+        secondId = writeBlocker(token, collabDir, 'sess-1', 'sess-2', 'auth.ts');
+      });
+
+      assert.ok(typeof firstId === 'string' && firstId.length > 0);
+      assert.equal(secondId, null);
+
+      const lines = fs.readFileSync(busPath(collabDir), 'utf8').trim().split('\n');
+      const blockers = lines.map(l => JSON.parse(l)).filter(e => e.type === 'blocker');
+      assert.equal(blockers.length, 1);
+    });
+
+    it('does NOT dedup across different owners — each holder gets their own blocker', () => {
+      // Multi-owner fan-out (rare but possible if context.js stripping ever
+      // races) must reach all owners, not collapse to the first.
+      let id2, id3;
+      withAgentsLock(collabDir, (token) => {
+        id2 = writeBlocker(token, collabDir, 'sess-1', 'sess-2', 'shared.ts');
+        id3 = writeBlocker(token, collabDir, 'sess-1', 'sess-3', 'shared.ts');
+      });
+
+      assert.ok(id2 && id3);
+      const blockers = fs.readFileSync(busPath(collabDir), 'utf8')
+        .trim().split('\n').map(l => JSON.parse(l))
+        .filter(e => e.type === 'blocker');
+      assert.deepEqual(blockers.map(e => e.to).sort(), ['sess-2', 'sess-3']);
+    });
+
+    it('does NOT dedup across different files — a second file is its own block episode', () => {
+      let firstId, secondId;
+      withAgentsLock(collabDir, (token) => {
+        firstId = writeBlocker(token, collabDir, 'sess-1', 'sess-2', 'auth.ts');
+        secondId = writeBlocker(token, collabDir, 'sess-1', 'sess-2', 'db.ts');
+      });
+
+      assert.ok(firstId && secondId);
+      const blockers = fs.readFileSync(busPath(collabDir), 'utf8')
+        .trim().split('\n').map(l => JSON.parse(l))
+        .filter(e => e.type === 'blocker');
+      assert.deepEqual(blockers.map(e => e.meta.file).sort(), ['auth.ts', 'db.ts']);
     });
   });
 

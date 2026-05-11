@@ -267,12 +267,26 @@ describe('bus-delivery', () => {
       });
     });
 
-    it('blocker line carries an unblock hint', () => {
+    it('blocker line names the blocked agent, file, and prompts a reply via wrightward_send_message', () => {
       withAgentsLock(collabDir, (token) => {
-        append(token, collabDir, createEvent('sess-2', 'sess-1', 'blocker', 'stuck on X'));
+        append(token, collabDir, createEvent(
+          'sess-2', 'sess-1', 'blocker', 'Blocked on src/auth.ts',
+          { file: 'src/auth.ts' }
+        ));
         const result = scanAndFormatInbox(token, collabDir, 'sess-1', {});
-        assert.match(result.text, /→ another agent is blocked — consider unblocking/);
+        const expectedHandle = deriveHandle('sess-2');
+        assert.match(result.text, new RegExp(`${expectedHandle} is blocked on src/auth\\.ts`));
+        assert.match(result.text, new RegExp(`audience="${expectedHandle}"`));
+        assert.match(result.text, /whether\/when you can free it/);
       });
+    });
+
+    it('blocker hint falls back to a file-only message when sender is missing from the event', () => {
+      // createEvent rejects empty `from` so we can't construct this via the normal
+      // emission path. Defensive fallback exists for malformed/legacy events on
+      // older bus.jsonl files — exercise it by calling hintForType directly.
+      const hint = hintForType({ type: 'blocker', from: '', meta: { file: 'src/auth.ts' } }, {});
+      assert.match(hint, /another agent is blocked on src\/auth\.ts/);
     });
 
     it('delivery_failed line points at the bus-status tool', () => {

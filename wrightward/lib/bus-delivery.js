@@ -105,8 +105,19 @@ function hintForType(event, roster) {
       const file = event.meta && event.meta.file;
       return file ? ` → retry your blocked write on ${file}` : '';
     }
-    case 'blocker':
-      return ' → another agent is blocked — consider unblocking';
+    case 'blocker': {
+      const from = event.from || '';
+      const file = event.meta && event.meta.file;
+      if (!from) {
+        return file
+          ? ` → another agent is blocked on ${file} — reply via wrightward_send_message with whether/when you can free it (or hand off)`
+          : ' → another agent is blocked — let them know if/when you can free the file (or hand off)';
+      }
+      const row = roster && typeof roster === 'object' ? roster[from] : undefined;
+      const handle = handleFor(from, row);
+      const filePart = file ? ` on ${file}` : '';
+      return ` → ${handle} is blocked${filePart} — reply via wrightward_send_message audience="${handle}" with whether/when you can free it (or hand off)`;
+    }
     case 'delivery_failed':
       return ' → see wrightward_bus_status';
     // ack / finding / decision are informational — no action suffix.

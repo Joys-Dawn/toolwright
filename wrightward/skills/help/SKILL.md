@@ -22,7 +22,13 @@ Agents are addressed by **handle** — a deterministic `<name>-<number>` derived
 | Check inbox manually | `wrightward_list_inbox` | Returns urgent events only |
 | Diagnose bus health | `wrightward_bus_status` | Bridge, lock, pending counts |
 
-Urgent events are **automatically injected** into your context on the next tool call (capped at `BUS_URGENT_INJECTION_CAP`, default 5). You rarely need to call `wrightward_list_inbox`. Each injected line carries the event `id` and an `→` action hint — pass the id verbatim to `wrightward_ack` and follow the hint rather than re-querying.
+Urgent events are **automatically delivered** to your context (capped at `BUS_URGENT_INJECTION_CAP`, default 5). Two paths:
+- **Channel doorbell** (when enabled — plain CLI only, not IDE extensions): a `notifications/claude/channel` wake-up pings the session between turns so events surface within seconds without needing a new user prompt.
+- **On your next tool call** (always-on fallback): the guard/heartbeat hooks inject pending events as `additionalContext`.
+
+You rarely need to call `wrightward_list_inbox`. Each injected line carries the event `id` and an `→` action hint — pass the id verbatim to `wrightward_ack` and follow the hint rather than re-querying.
+
+If you have a known wait time (e.g., you kicked off a long script and want to resume in 5 min), you can also call `ScheduleWakeup` to self-pace.
 
 Tool responses include a `hint` field on success (e.g., "Broadcast to all agents' inboxes") and on actionable errors (e.g., `ackOf … unknown` → "Call wrightward_list_inbox to see live event ids"). Read it before deciding what to do next.
 
@@ -32,7 +38,7 @@ Tool responses include a `hint` field on success (e.g., "Broadcast to all agents
 - `/wrightward:collab-release` — release specific files early
 - `/wrightward:collab-done` — clear your context entirely
 
-**Never edit `.claude/collab/*` files by hand.** The guard hook blocks it unconditionally. If a claim looks stale, wait 6 min — it may legitimately persist for 15+ min while the other agent works through a plan.
+**Never edit `.claude/collab/*` files by hand.** The guard hook blocks it unconditionally. **When your write is blocked**: your interest is auto-registered AND a `blocker` event is auto-emitted to the holder (they see who's blocked and on what, and are prompted to reply with whether/when they can free it). Move on — `file_freed`/`agent_message` will reach you via the channel doorbell (between turns) or on your next tool call. Only manually message the holder if you need to clarify scope/timing beyond the auto-notification; `ScheduleWakeup` is available for known-timing waits. Crashed sessions auto-scavenge after 6 min of no heartbeat; declared claims can legitimately persist 15+ min while the other agent works through a plan.
 
 ## Discord integration
 
