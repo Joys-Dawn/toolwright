@@ -19,6 +19,12 @@ Type `/undo` after Claude makes changes you want to revert.
 /undo
 ```
 
+If a request reached Claude via wrightward/Discord (between turns), the `UserPromptSubmit` hook didn't fire and there's no fresh snapshot to undo to. Use `/snapshot` first if needed to capture the current state, then proceed.
+
+```
+/snapshot
+```
+
 Claude will show you exactly what will change:
 
 - **Modified** — files Claude changed, will be reverted to their state before Claude's turn

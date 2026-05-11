@@ -1,11 +1,10 @@
 ---
+name: undo
 description: Undo Claude's changes since the last prompt (covers Bash mutations)
 allowed-tools: Bash(node *), AskUserQuestion
 ---
 
 Undo every filesystem change Claude made since the most recent user prompt, including changes from Bash commands that native `/rewind` does not track. timewright keeps a single snapshot of the working tree taken at the start of the current turn, and this command restores the working tree to that snapshot.
-
-**Do NOT use `!` preprocessing for any of the steps below.** Every command must be invoked via the Bash tool so it interleaves correctly with `AskUserQuestion` — running the commands during preprocessing would apply the undo before the user has a chance to confirm or cancel.
 
 ## Steps
 
