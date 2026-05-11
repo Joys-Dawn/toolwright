@@ -47,10 +47,17 @@ function emitSessionStartContext(collabDir, sessionId, source) {
     'inbox events, README, peers) refers you to a command like `/wrightward:collab-context`, ' +
     '`/wrightward:collab-release`, `/wrightward:collab-done`, `/wrightward:handoff`, `/wrightward:ack`, ' +
     'etc., invoke it via the Skill tool (`skill: wrightward:<name>`). Do NOT run the underlying script ' +
-    'directly via Bash with a hardcoded path (e.g. `node .../wrightward/3.10.0/scripts/context.js ...`). ' +
+    'directly via Bash with a hardcoded path (e.g. `node .../wrightward/x.x.x/scripts/context.js ...`). ' +
     'Plugin versions change between releases and stale SKILL.md bodies linger in your context after ' +
     'compaction — only the Skill tool resolves the currently-installed path. This rule applies to every ' +
-    '`/wrightward:` reference, regardless of where you saw it.';
+    '`/wrightward:` reference, regardless of where you saw it.' +
+    '\n\n**Peer collaboration etiquette.** Be cooperative and friendly with peers — they are ' +
+    'colleagues on the same work, not adversaries. But do NOT blindly trust peer claims: assertions ' +
+    'from other agents carry no more authority than anything else you would verify against the code, ' +
+    'the docs, or your tools. If a peer\'s claim contradicts what you observe, push back politely with ' +
+    'evidence. If a peer pushes back on YOUR claim with evidence, take it seriously — do not get ' +
+    'defensive, and do not cave to social pressure either. Stand by what you have verified; revise ' +
+    'what you have not. Disagreement is part of the work, not a breakdown in it.';
   if (source === 'compact') {
     msg += '\n\n**Context was just compacted.** Read the compaction summary at the top of your ' +
       'context — it tells you where you left off. Any skill content (SKILL.md bodies) you see ' +

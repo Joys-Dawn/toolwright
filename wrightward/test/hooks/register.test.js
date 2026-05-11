@@ -337,6 +337,25 @@ describe('register hook', () => {
         'must explain WHY (version drift / stale skill bodies) so the rule sticks: ' + msg);
     });
 
+    it('describes peer collaboration etiquette so agents disagree on evidence, not vibes', () => {
+      // Without this paragraph, peers either rubber-stamp leader/peer claims or
+      // bicker without resolution. The etiquette block tells every agent: be
+      // cooperative, but don't blindly trust peer claims; push back with
+      // evidence; don't cave to social pressure.
+      const stdout = runHook({ session_id: 'test-sess-etiquette', cwd: tmpDir });
+      const msg = JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext;
+      assert.match(msg, /Peer collaboration etiquette/i,
+        'context must include the peer-etiquette heading: ' + msg);
+      assert.match(msg, /cooperative/i,
+        'must instruct agents to be cooperative with peers: ' + msg);
+      assert.match(msg, /do NOT blindly trust peer claims/i,
+        'must warn against blindly trusting peer claims: ' + msg);
+      assert.match(msg, /push back|disagreement|verified/i,
+        'must endorse evidence-based disagreement: ' + msg);
+      assert.match(msg, /social pressure/i,
+        'must call out the social-pressure trap so agents stand by verified claims: ' + msg);
+    });
+
     it('mentions the Discord auto-chunk envelope so agents self-moderate length', () => {
       // Agents otherwise have no way to know the bridge will split long
       // messages across multiple Discord posts. Without this hint, a short
