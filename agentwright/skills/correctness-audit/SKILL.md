@@ -1,11 +1,11 @@
 ---
 name: correctness-audit
-description: Reviews code for correctness bugs, uncaught edge cases, and scalability problems. Use when reviewing code changes, performing code audits, or when the user asks for a review or quality check. For security vulnerabilities use security-audit; for design, maintainability, and principle violations use best-practices-audit.
+description: Reviews code for correctness bugs, uncaught edge cases, and scalability problems. Use when reviewing code changes, performing code audits, or when the user asks for a review or quality check. For security vulnerabilities use `agentwright:security-audit`; for design, maintainability, and principle violations use `agentwright:best-practices-audit`.
 ---
 
 # Code Quality Review
 
-Perform a systematic review focused on **correctness** and **runtime concerns**: will this code work correctly under all realistic inputs and load? Every finding must cite the file, line(s), dimension, and a concrete fix. For security vulnerabilities, use `security-audit`. For principle violations (DRY, SOLID, Clean Code), use `best-practices-audit`.
+Perform a systematic review focused on **correctness** and **runtime concerns**: will this code work correctly under all realistic inputs and load? Every finding must cite the file, line(s), dimension, and a concrete fix. For security vulnerabilities, use `agentwright:security-audit`. For principle violations (DRY, SOLID, Clean Code), use `agentwright:best-practices-audit`.
 
 ## Scope
 
@@ -206,4 +206,4 @@ Before finalizing your report, verify every finding:
 - **Severity by real-world impact**: rate by what breaks in production, not theoretical worst-case.
 - **No fluff**: skip dimensions with no findings. Don't praise code that is merely acceptable.
 - **Respect scope**: in diff mode, only flag issues in changed lines and their immediate context. Don't audit the entire file when asked about a one-line change.
-- **Don't duplicate other skills**: correctness bugs only — no security (use `security-audit`), no principle violations (use `best-practices-audit`). Edge cases and concurrency bugs that are also security vulnerabilities should be flagged here for correctness and referenced to `security-audit` for the security angle.
+- **Don't duplicate other skills**: correctness bugs only — no security (use `agentwright:security-audit`), no principle violations (use `agentwright:best-practices-audit`). Edge cases and concurrency bugs that are also security vulnerabilities should be flagged here for correctness and referenced to `agentwright:security-audit` for the security angle.

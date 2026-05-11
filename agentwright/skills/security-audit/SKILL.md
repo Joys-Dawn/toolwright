@@ -5,7 +5,7 @@ description: Performs a thorough security audit against established industry sta
 
 # Security Audit
 
-Audit code against established security standards and threat models. Every finding **must** cite the specific standard ID (OWASP, CWE, GDPR article, etc.) so the developer understands the authoritative source for each requirement. This skill is for security-specific review; for clean code and architecture concerns, use `best-practices-audit` instead.
+Audit code against established security standards and threat models. Every finding **must** cite the specific standard ID (OWASP, CWE, GDPR article, etc.) so the developer understands the authoritative source for each requirement. This skill is for security-specific review; for clean code and architecture concerns, use `agentwright:best-practices-audit` instead.
 
 ## Scope
 

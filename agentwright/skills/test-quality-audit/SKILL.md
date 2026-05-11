@@ -1,11 +1,11 @@
 ---
 name: test-quality-audit
-description: Audits existing test files for anti-patterns and best-practice violations using the rules defined in the four write-tests skills (write-tests, write-tests-frontend, write-tests-deno, write-tests-pgtap). Use to find flaky patterns, weak assertions, over-mocking, isolation issues, structure-coupled tests, and other quality problems in tests that already exist. Complements test-coverage-audit (which finds missing tests).
+description: Audits existing test files for anti-patterns and best-practice violations using the rules defined in the four write-tests skills (`agentwright:write-tests`, `agentwright:write-tests-frontend`, `agentwright:write-tests-deno`, `agentwright:write-tests-pgtap`). Use to find flaky patterns, weak assertions, over-mocking, isolation issues, structure-coupled tests, and other quality problems in tests that already exist. Complements `agentwright:test-coverage-audit` (which finds missing tests).
 ---
 
 # Test Quality Audit
 
-Audit existing test files for anti-patterns and best-practice violations against the rules defined in the four `write-tests-*` skills. This audit finds **bad tests that already exist** — not missing tests (use `test-coverage-audit` for that) and not bugs in production code (use `correctness-audit`).
+Audit existing test files for anti-patterns and best-practice violations against the rules defined in the four `agentwright:write-tests-*` skills. This audit finds **bad tests that already exist** — not missing tests (use `agentwright:test-coverage-audit` for that) and not bugs in production code (use `agentwright:correctness-audit`).
 
 The rule definitions live in the per-domain skills. This audit does NOT restate them — it routes test files to the right skill, loads that skill, and applies its rules.
 

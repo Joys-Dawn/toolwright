@@ -9,10 +9,10 @@ Enter plan mode and produce a targeted, minimal fix plan. Do not write any code 
 
 ## When to Use This vs. Systematic Debugging
 
-- **systematic-debugging**: You don't know what's wrong yet. Use it to reproduce, isolate, and find the root cause.
-- **bug-fix-planning** (this skill): You know (or strongly suspect) the root cause and need to plan the fix carefully — because the area is risky, the blast radius is unclear, or you want to prevent regressions.
+- **`agentwright:systematic-debugging`**: You don't know what's wrong yet. Use it to reproduce, isolate, and find the root cause.
+- **`agentwright:bug-fix-planning`** (this skill): You know (or strongly suspect) the root cause and need to plan the fix carefully — because the area is risky, the blast radius is unclear, or you want to prevent regressions.
 
-If the root cause is unknown, start with systematic-debugging first. Come here once you have a confirmed or strongly suspected cause.
+If the root cause is unknown, start with `agentwright:systematic-debugging` first. Come here once you have a confirmed or strongly suspected cause.
 
 ## Trigger
 
@@ -21,7 +21,7 @@ When this skill is invoked, **immediately enter plan mode** using the EnterPlanM
 ## Scope
 
 - **User describes a bug with known cause**: Validate the diagnosis against the codebase before planning the fix. The stated cause may be a symptom, not the root.
-- **User describes symptoms only**: Spend time in the codebase confirming the root cause before planning. If you cannot confirm it, say so and recommend systematic-debugging instead.
+- **User describes symptoms only**: Spend time in the codebase confirming the root cause before planning. If you cannot confirm it, say so and recommend `agentwright:systematic-debugging` instead.
 - **Bug is in unfamiliar code**: Read the surrounding module, its tests, and its callers before proposing any change. Understand the design intent.
 
 ## Process
@@ -74,11 +74,11 @@ Every bug fix needs tests — both to verify the fix works and to cover any gaps
 - **New tests for affected code**: If the change impact analysis revealed untested code paths that the fix touches, write tests for them. A bug in untested code means the surrounding code is likely untested too.
 - **Existing test updates**: If current tests assert the buggy behavior (and will break when you fix it), note which ones need updating and what the correct assertions should be.
 
-Delegate test writing to the appropriate skill based on what's being tested:
-- **write-tests-frontend**: React components, hooks, RTL / Vitest
-- **write-tests-deno**: Deno / Supabase Edge Functions
-- **write-tests-pgtap**: Database migrations, RLS policies, SQL logic
-- **write-tests**: Everything else (general-purpose, any language/framework)
+Delegate test writing to the appropriate skill (invoke via the Skill tool with the full ID):
+- **`agentwright:write-tests-frontend`**: React components, hooks, RTL / Vitest
+- **`agentwright:write-tests-deno`**: Deno / Supabase Edge Functions
+- **`agentwright:write-tests-pgtap`**: Database migrations, RLS policies, SQL logic
+- **`agentwright:write-tests`**: Everything else (general-purpose, any language/framework)
 
 ### 6. Identify Risks
 
@@ -124,7 +124,7 @@ Write the plan to the plan file with this structure:
 - **Regression test**: [Reproduces the bug: inputs, expected output, test file]
 - **New tests**: [Tests for affected code paths that lacked coverage]
 - **Updated tests**: [Existing tests that assert buggy behavior and need correction]
-- **Test skill**: [Which test skill to delegate to: write-tests-frontend / write-tests-deno / write-tests-pgtap / write-tests]
+- **Test skill**: [Which test skill to delegate to: `agentwright:write-tests-frontend` / `agentwright:write-tests-deno` / `agentwright:write-tests-pgtap` / `agentwright:write-tests`]
 
 ## Risks
 - [Risk with mitigation]
@@ -137,6 +137,6 @@ Write the plan to the plan file with this structure:
 - **Minimal fix**: Fix the root cause with the smallest change that fully resolves the bug. Do not refactor surrounding code, add features, or "improve" unrelated things.
 - **Read before planning**: Explore the affected code, its callers, and its tests before proposing any change.
 - **Root cause, not symptoms**: Confirm the root cause before designing the fix. A fix aimed at symptoms will need to be re-fixed.
-- **Every fix gets tests**: At minimum a regression test. If the fix touches untested code, add coverage for that too. Delegate to the appropriate test skill (write-tests-frontend, write-tests-deno, write-tests-pgtap, or write-tests).
+- **Every fix gets tests**: At minimum a regression test. If the fix touches untested code, add coverage for that too. Delegate to the appropriate test skill (`agentwright:write-tests-frontend`, `agentwright:write-tests-deno`, `agentwright:write-tests-pgtap`, or `agentwright:write-tests`).
 - **Name what you're leaving alone**: Explicitly scope the fix. Prevent "while I'm in here" scope creep.
 - **Honest about uncertainty**: If the root cause is not fully confirmed, say so. A "probably X" plan should note the uncertainty and include a verification step.

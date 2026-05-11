@@ -11,4 +11,4 @@ If the user provided a run id:
 - ask for confirmation before doing anything destructive
 
 If the user did not provide a run id:
-- explain how to list run ids with `/audit-status` and no arguments
+- explain how to list run ids with `/agentwright:audit-status` and no arguments

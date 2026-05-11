@@ -114,11 +114,11 @@ Produce a plan that covers each of the following sections. Skip a section only i
 
 #### 4f. Testing Strategy
 - Identify what needs to be tested and at which layer (unit, integration, E2E).
-- For each layer, note the appropriate test writing skill:
-  - **Database tests** (RLS policies, RPCs, triggers, migrations): `write-tests-pgtap`
-  - **Edge function tests** (Supabase/Deno HTTP integration tests): `write-tests-deno`
-  - **Frontend tests** (React components, hooks, user interactions): `write-tests-frontend`
-  - **All other tests** (backend logic, utilities, APIs, CLI, libraries): `write-tests`
+- For each layer, note the appropriate test writing skill (full ID — the implementer invokes via the Skill tool):
+  - **Database tests** (RLS policies, RPCs, triggers, migrations): `agentwright:write-tests-pgtap`
+  - **Edge function tests** (Supabase/Deno HTTP integration tests): `agentwright:write-tests-deno`
+  - **Frontend tests** (React components, hooks, user interactions): `agentwright:write-tests-frontend`
+  - **All other tests** (backend logic, utilities, APIs, CLI, libraries): `agentwright:write-tests`
 - Call out specific behaviors that must be tested (e.g., "RLS: user A cannot read user B's data", "API: returns 400 on malformed input").
 - Note any tests that should be written *before* implementation (test-first for complex logic or regression-prone areas).
 

@@ -32,7 +32,7 @@ Read all code involved in the refactor. Map:
 - **What the code does** — the actual behavior, not just the structure
 - **Who depends on it** — grep for imports, function calls, type references. List every consumer.
 - **What tests exist** — identify tests that exercise the code being refactored. These are your safety net.
-- **What tests are missing** — if critical behavior has no tests, the refactor plan must include writing them FIRST (before the refactor), using the appropriate `write-tests-*` skill
+- **What tests are missing** — if critical behavior has no tests, the refactor plan must include writing them FIRST (before the refactor), using the appropriate `agentwright:write-tests-*` skill
 
 ### 2. Define the Target State
 

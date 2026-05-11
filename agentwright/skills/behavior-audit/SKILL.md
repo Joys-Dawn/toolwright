@@ -1,6 +1,6 @@
 ---
 name: behavior-audit
-description: Audits whether a feature's actual behavior makes sense from the user's perspective — not against patterns or specs, but reasoned from first principles. Catches bugs where code is internally consistent and matches its intended design but produces surprising, illogical, or hostile user experiences. Use after correctness-audit when reviewing a feature change, or when something works but feels wrong.
+description: Audits whether a feature's actual behavior makes sense from the user's perspective — not against patterns or specs, but reasoned from first principles. Catches bugs where code is internally consistent and matches its intended design but produces surprising, illogical, or hostile user experiences. Use after `agentwright:correctness-audit` when reviewing a feature change, or when something works but feels wrong.
 ---
 
 # Behavior Audit
