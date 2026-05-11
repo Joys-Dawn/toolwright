@@ -20,7 +20,16 @@ import * as arxiv from './arxiv.mjs';
 import * as biorxiv from './biorxiv.mjs';
 import * as pubmed from './pubmed.mjs';
 import { validateSignal, validateSignalBatch } from './validator.mjs';
-import { computeId, getSourceCursor, insertIdea, setSourceCursor } from '../db.mjs';
+import {
+  computeId,
+  getSourceCursor,
+  insertIdea,
+  insertRawObservation,
+  markRawObservationError,
+  markRawObservationValidated,
+  setSourceCursor,
+  touchSourceLastRun,
+} from '../db.mjs';
 
 export const MINERS = { reddit, hn, github, arxiv, biorxiv, pubmed };
 
@@ -95,9 +104,13 @@ export async function runMiners({
     const model = perSourceCfg.llm?.model ?? defaultModel ?? null;
     const sourceModule = SUPPLY_PIPELINE.has(id) ? 'A-tech' : 'A';
 
-    const batchSize = config.novelty?.batch_size ?? 10;
+    // Real batching: how many observations are concatenated into one
+    // `claude -p` validate call. The judge pipes the prompt via stdin
+    // (see lib/judge.mjs) so this is bounded by token budget / latency,
+    // not by Windows' CLI arg limit.
+    const batchSize = config.validate?.batch_size ?? 20;
     const batchValidate = _batchValidate ?? miner.batchValidator ?? validateSignalBatch;
-    const { validated, inserted } = await validateAndInsertBatch(
+    const { validated, inserted, errored, skipped: skippedAlreadyValidated } = await validateAndInsertBatch(
       db,
       obs,
       batchSize,
@@ -108,13 +121,34 @@ export async function runMiners({
     summary.validated += validated;
     summary.inserted += inserted;
 
-    setSourceCursor(db, id, {
-      last_seen_id: null,
-      notes: JSON.stringify(result.cursors ?? {}),
-    });
+    // Cursor advancement policy: only advance when this source had ZERO
+    // per-item validation errors. If even one signal failed (likely the
+    // 5-hour Claude usage cap), keep the cursor where it was so the next
+    // run re-mines those signals once the cap resets. The raw_observations
+    // table also retains them, so they're recoverable either way. Always
+    // record a heartbeat (last_run_at) so operators can see when a source
+    // was last attempted, even when it never advances.
+    if (errored > 0) {
+      touchSourceLastRun(db, id);
+      logger.warn(
+        `[scan:${id}] keeping cursor unchanged: ${errored} per-item validate errors `
+        + `(likely upstream rate limit). Next run will re-mine.`
+      );
+    } else {
+      setSourceCursor(db, id, {
+        last_seen_id: null,
+        notes: JSON.stringify(result.cursors ?? {}),
+      });
+    }
 
-    summary.sources[id] = { observations: obs.length, validated, inserted };
-    logger.info(`[scan:${id}] obs=${obs.length} validated=${validated} inserted=${inserted}`);
+    summary.sources[id] = {
+      observations: obs.length,
+      validated,
+      inserted,
+      errored,
+      skipped_already_validated: skippedAlreadyValidated,
+    };
+    logger.info(`[scan:${id}] obs=${obs.length} validated=${validated} inserted=${inserted} errored=${errored} skipped=${skippedAlreadyValidated}`);
   }
 
   summary.finished_at = new Date().toISOString();
@@ -143,34 +177,75 @@ function enabledSources(config) {
 }
 
 async function validateAndInsertBatch(db, observations, batchSize, logger, validate, opts = {}) {
-  const state = { validated: 0, inserted: 0 };
+  const state = { validated: 0, inserted: 0, errored: 0, skipped: 0 };
   const batchFn = opts.batchValidate ?? validateSignalBatch;
+
+  // Persist every raw observation BEFORE validation. If validation later
+  // fails (e.g., usage cap) the signal is still recoverable. Existing rows
+  // already validated in a prior run carry `validated=true` so we skip them
+  // here — recovery + re-mine no longer wastes LLM tokens re-judging them.
+  const inserts = observations.map((o) => insertRawObservation(db, o));
+  const pending = [];
+  for (let i = 0; i < observations.length; i++) {
+    const ins = inserts[i];
+    if (!ins) continue;
+    if (ins.validated) {
+      state.skipped += 1;
+      continue;
+    }
+    pending.push({ obs: observations[i], rawId: ins.id });
+  }
+
   // Chunk observations into batches and send one LLM call per batch
-  for (let i = 0; i < observations.length; i += batchSize) {
-    const batch = observations.slice(i, i + batchSize);
+  for (let i = 0; i < pending.length; i += batchSize) {
+    const batch = pending.slice(i, i + batchSize);
     let verdicts;
     try {
       // Use batch validator (single claude -p call for the whole batch)
-      verdicts = await batchFn(batch, { model: opts.model });
+      verdicts = await batchFn(batch.map((b) => b.obs), { model: opts.model });
     } catch (err) {
       logger.warn(`[validate] batch ${i}-${i + batch.length} failed: ${err.message}, falling back to per-item`);
       // Fallback: validate individually so one bad item doesn't lose the whole batch
       verdicts = await Promise.all(
-        batch.map(async (o) => {
-          try { return await validate(o, { model: opts.model }); }
-          catch { return { idea: null }; }
+        batch.map(async ({ obs }) => {
+          try { return await validate(obs, { model: opts.model }); }
+          catch (e) {
+            logger.warn(`[validate] per-item ${obs.source}/${obs.source_url ?? '<no-url>'} failed: ${e.message}`);
+            return { idea: null, _error: e.message };
+          }
         }),
       );
     }
 
     for (let j = 0; j < batch.length; j++) {
       const verdict = verdicts[j];
-      if (!verdict?.idea) continue;
+      const { obs, rawId } = batch[j];
+      if (!verdict) {
+        // Batch returned fewer entries than inputs (truncated output or
+        // non-array wrapped to length 1). Treat as error so cursor pins
+        // and the obs is retried next run instead of silently lost.
+        state.errored += 1;
+        markRawObservationError(db, rawId, 'batch returned no entry for this index');
+        logger.warn(`[validate] batch missing entry at index ${i + j} for ${obs.source}/${obs.source_url ?? '<no-url>'}`);
+        continue;
+      }
+      if (verdict._error) {
+        state.errored += 1;
+        markRawObservationError(db, rawId, verdict._error);
+        continue;
+      }
+      if (!verdict.idea) {
+        // Validation succeeded but the judge said "not a real need" — stamp
+        // it as validated (with no idea_id) so we don't re-judge it next run.
+        markRawObservationValidated(db, rawId, null);
+        continue;
+      }
       state.validated += 1;
-      const idea = toIdea(verdict, batch[j], opts.sourceModule);
+      const idea = toIdea(verdict, obs, opts.sourceModule);
       try {
         const res = insertIdea(db, idea);
         if (res.inserted) state.inserted += 1;
+        markRawObservationValidated(db, rawId, idea.id);
       } catch (err) {
         logger.warn(`[insert] ${idea.title}: ${err.message}`);
       }

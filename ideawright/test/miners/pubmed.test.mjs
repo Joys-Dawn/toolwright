@@ -130,6 +130,53 @@ test('mine calls esearch + efetch and emits observations', async (t) => {
   assert.ok(observations[0].raw_id.startsWith('pubmed:'));
 });
 
+test('mine uses POST for efetch (not GET) so large PMID lists do not 414', async (t) => {
+  // Regression: with max_per_query=1000 the efetch URL exceeded NCBI's
+  // ~200-UID GET limit and returned HTTP 414. NCBI's docs (NBK25499) say
+  // "if more than about 200 UIDs are to be provided, the request should be
+  // made using the HTTP POST method." This test pins POST as the transport
+  // for efetch regardless of list size.
+  const originalFetch = globalThis.fetch;
+  const efetchCalls = [];
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('esearch.fcgi')) {
+      return {
+        ok: true,
+        async json() { return { esearchresult: { idlist: ['1', '2'] } }; },
+      };
+    }
+    if (String(url).includes('efetch.fcgi')) {
+      efetchCalls.push({ url: String(url), init });
+      return { ok: true, async text() { return FIXTURE; } };
+    }
+    throw new Error(`unexpected url: ${url}`);
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  await mine({
+    cursors: {},
+    config: { queries: ['(algorithm[Title]) AND hasabstract[Filter]'] },
+    logger: { warn() {}, info() {}, error() {} },
+    lookbackDays: 3650,
+  });
+
+  assert.equal(efetchCalls.length, 1, 'efetch should be called once');
+  assert.equal(efetchCalls[0].init?.method, 'POST', 'efetch must use POST');
+  assert.equal(
+    efetchCalls[0].init?.headers?.['Content-Type'],
+    'application/x-www-form-urlencoded',
+    'efetch must send form-urlencoded body',
+  );
+  assert.ok(
+    String(efetchCalls[0].init?.body ?? '').includes('id=1%2C2'),
+    'PMIDs must be in the body, not the URL',
+  );
+  assert.ok(
+    !efetchCalls[0].url.includes('id='),
+    'efetch URL must not carry the id param when POSTing',
+  );
+});
+
 test('mine skips efetch when esearch returns no PMIDs', async (t) => {
   const originalFetch = globalThis.fetch;
   let efetchCalled = false;

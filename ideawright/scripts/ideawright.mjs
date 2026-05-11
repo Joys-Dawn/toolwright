@@ -79,11 +79,20 @@ const DEFAULTS = {
       queries: null,
     },
   },
+  // Validate stage (inside scan): groups N raw observations into one
+  // `claude -p` validate call. Real batching — keep small to avoid
+  // ENAMETOOLONG on Windows.
+  validate: { batch_size: 20 },
   novelty: {
     novel_max: 2,
     niche_max: 5,
     competitor_overlap: 0.6,
-    batch_size: 10,
+    // Optional cap on how many `new` ideas /vet processes per run. Omit
+    // (or set null) to vet every `new` idea in the DB.
+    max_per_run: null,
+    // How many ideas are vetted in parallel. Each idea fires its own
+    // search-+-judge pipeline, so higher values multiply external-API load.
+    concurrency: 8,
     // Competitor classification is a simple yes/no judgement — Haiku handles
     // it well at ~10x the speed of Opus. Override to use the global
     // `llm.model` if you want Opus here too.
@@ -103,6 +112,11 @@ const DEFAULTS = {
     require_code_only: true,
     require_no_capital: true,
     require_no_private_data: true,
+    // Real batching: how many verified ideas are concatenated into one
+    // `claude -p` feasibility call. Bounded by token budget per call
+    // (Haiku context window) and per-call latency, not Windows argv —
+    // judge.mjs pipes the prompt via stdin.
+    batch_size: 10,
   },
   weights: { pain: 0.3, novelty: 0.4, feasibility: 0.3 },
   digest: { top_n: 10 },
@@ -183,7 +197,8 @@ async function runVet({ db: externalDb } = {}) {
     const sources = { ...DEFAULTS.novelty.sources, ...(n.sources ?? {}) };
     const runOpts = {
       db,
-      batchSize: n.batch_size,
+      maxPerRun: n.max_per_run ?? Infinity,
+      concurrency: n.concurrency ?? 8,
       thresholds,
       sources,
     };

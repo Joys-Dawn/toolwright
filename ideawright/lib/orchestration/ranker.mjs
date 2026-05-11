@@ -11,8 +11,11 @@ export function rankAll({ db, weights = {} } = {}) {
     feasibility: weights.feasibility ?? 0.3,
   };
   const gated = listByStatus(db, 'gated');
+  // Intentionally NOT bumping updated_at: a rank recomputation isn't a real
+  // state change. listByStatus orders gated ideas by updated_at DESC, so
+  // bumping here would reshuffle processing order on every re-rank.
   const stmt = db.prepare(
-    `UPDATE ideas SET composite_rank = ?, updated_at = datetime('now') WHERE id = ?`
+    `UPDATE ideas SET composite_rank = ? WHERE id = ?`
   );
   let ranked = 0;
   for (const idea of gated) {

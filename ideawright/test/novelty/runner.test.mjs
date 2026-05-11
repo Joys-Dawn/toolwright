@@ -38,7 +38,7 @@ test("runNoveltyPass advances novel/niche to verified, archives crowded", async 
     const { id: idC } = seedIdea(db, { title: "C", target_user: "u3" });
 
     const pipeline = mockPipelineFor({ A: "novel", B: "niche", C: "crowded" });
-    const summary = await runNoveltyPass({ db, pipeline, batchSize: 10 });
+    const summary = await runNoveltyPass({ db, pipeline, maxPerRun: 10 });
 
     assert.equal(summary.processed, 3);
     assert.equal(summary.novel, 1);
@@ -78,7 +78,7 @@ test("runNoveltyPass only touches status=new rows", async () => {
   } finally { db.close(); }
 });
 
-test("runNoveltyPass honors batchSize", async () => {
+test("runNoveltyPass honors maxPerRun cap", async () => {
   const db = setupDb();
   try {
     for (let i = 0; i < 5; i++) seedIdea(db, { title: `T${i}`, target_user: `u${i}` });
@@ -87,9 +87,63 @@ test("runNoveltyPass honors batchSize", async () => {
       calls++;
       return mockPipelineFor({})({ title: "T0" });
     };
-    const summary = await runNoveltyPass({ db, pipeline, batchSize: 2 });
+    const summary = await runNoveltyPass({ db, pipeline, maxPerRun: 2 });
     assert.equal(calls, 2);
     assert.equal(summary.processed, 2);
+  } finally { db.close(); }
+});
+
+test("runNoveltyPass runs ideas in parallel up to concurrency cap", async () => {
+  // Pin the concurrency contract: with concurrency=4 and 8 ideas, at any
+  // given moment up to 4 pipelines should be in-flight. Without parallelism,
+  // peakInFlight would be 1.
+  const db = setupDb();
+  try {
+    for (let i = 0; i < 8; i++) seedIdea(db, { title: `T${i}`, target_user: `u${i}` });
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const pipeline = async (idea) => {
+      inFlight++;
+      if (inFlight > peakInFlight) peakInFlight = inFlight;
+      // Force overlap: each idea waits 30ms, so concurrent starts overlap.
+      await new Promise((r) => setTimeout(r, 30));
+      inFlight--;
+      return mockPipelineFor({ [idea.title]: "novel" })(idea);
+    };
+    const summary = await runNoveltyPass({ db, pipeline, concurrency: 4 });
+    assert.equal(summary.processed, 8);
+    assert.equal(peakInFlight, 4, 'should reach but not exceed concurrency cap');
+  } finally { db.close(); }
+});
+
+test("runNoveltyPass concurrency=1 is serial (no overlap)", async () => {
+  const db = setupDb();
+  try {
+    for (let i = 0; i < 5; i++) seedIdea(db, { title: `T${i}`, target_user: `u${i}` });
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const pipeline = async (idea) => {
+      inFlight++;
+      if (inFlight > peakInFlight) peakInFlight = inFlight;
+      await new Promise((r) => setTimeout(r, 10));
+      inFlight--;
+      return mockPipelineFor({ [idea.title]: "novel" })(idea);
+    };
+    await runNoveltyPass({ db, pipeline, concurrency: 1 });
+    assert.equal(peakInFlight, 1, 'concurrency=1 must process strictly one at a time');
+  } finally { db.close(); }
+});
+
+test("runNoveltyPass with no maxPerRun processes ALL new ideas (unlimited)", async () => {
+  // Regression for the original bug: batch_size was being conflated with
+  // a per-run LIMIT, capping vet at e.g. 20 ideas even when 400+ were
+  // waiting at status='new'. The default must be unlimited.
+  const db = setupDb();
+  try {
+    for (let i = 0; i < 50; i++) seedIdea(db, { title: `T${i}`, target_user: `u${i}` });
+    const pipeline = async (idea) => mockPipelineFor({ [idea.title]: "novel" })(idea);
+    const summary = await runNoveltyPass({ db, pipeline });
+    assert.equal(summary.processed, 50, 'must process every new idea by default');
   } finally { db.close(); }
 });
 

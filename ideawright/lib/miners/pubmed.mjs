@@ -55,6 +55,10 @@ async function esearch(term, fromDate, toDate, retmax) {
   return data?.esearchresult?.idlist ?? [];
 }
 
+// NCBI E-utilities docs (NBK25499): "if more than about 200 UIDs are to be
+// provided, the request should be made using the HTTP POST method."
+// max_per_query is configurable up to 1000+, so we always POST — same params,
+// just moved to the body — to stay safely under any URL-length limit.
 async function efetch(pmids) {
   if (pmids.length === 0) return [];
   const params = new URLSearchParams({
@@ -64,7 +68,14 @@ async function efetch(pmids) {
     rettype: 'abstract',
   });
   if (process.env.NCBI_API_KEY) params.set('api_key', process.env.NCBI_API_KEY);
-  const res = await fetch(`${BASE}/efetch.fcgi?${params}`, { headers: { 'User-Agent': USER_AGENT } });
+  const res = await fetch(`${BASE}/efetch.fcgi`, {
+    method: 'POST',
+    headers: {
+      'User-Agent': USER_AGENT,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: params.toString(),
+  });
   if (!res.ok) throw new Error(`pubmed efetch: HTTP ${res.status}`);
   const xml = await res.text();
   return parsePubmedXml(xml);

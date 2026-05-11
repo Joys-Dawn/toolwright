@@ -45,7 +45,7 @@ export async function gateFeasibility({ db, config = {}, _judge } = {}) {
     no_private_data: config?.feasibility?.require_no_private_data ?? true,
   };
   const model = config?.llm?.model ?? null;
-  const batchSize = config?.novelty?.batch_size ?? 10;
+  const batchSize = config?.feasibility?.batch_size ?? 10;
   const judge = _judge ?? callJudge;
   const ideas = listByStatus(db, 'verified');
   let gated = 0, archived = 0, errored = 0;
@@ -69,6 +69,7 @@ export async function gateFeasibility({ db, config = {}, _judge } = {}) {
           if (model) judgeOpts.model = model;
           results.push(await judge(judgeOpts));
         } catch (err) {
+          console.error(`[feasibility] per-item ${idea.id} failed: ${err.message}`);
           results.push(null);
         }
       }

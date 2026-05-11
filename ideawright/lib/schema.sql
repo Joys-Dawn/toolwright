@@ -43,3 +43,27 @@ CREATE TABLE IF NOT EXISTS state_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_state_log_idea ON state_log(idea_id, ts DESC);
+
+-- Raw observations from miners, persisted BEFORE validation. If validation
+-- fails (e.g., the 5-hour Claude usage cap zeroes out a whole source), the
+-- raw signal is still recoverable here for re-validation later.
+-- One row per (source, source_url) — re-mining the same URL is a no-op.
+-- `validated_at` is set when the signal has been judged at least once;
+-- `last_error` is set when the most recent attempt failed (rate limit, etc.).
+CREATE TABLE IF NOT EXISTS raw_observations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,
+  source_url TEXT,
+  title TEXT,
+  quote TEXT,
+  author TEXT,
+  engagement TEXT,
+  code_url TEXT,
+  observed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  validated_at TEXT,
+  last_error TEXT,
+  idea_id TEXT,
+  UNIQUE(source, source_url)
+);
+
+CREATE INDEX IF NOT EXISTS idx_raw_obs_unvalidated ON raw_observations(source, validated_at);

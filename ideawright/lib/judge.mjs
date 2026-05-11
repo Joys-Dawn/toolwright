@@ -46,14 +46,19 @@ export async function callJudge({
   if (!system || !user) throw new Error('callJudge: system and user are required');
   const spawnCwd = cwd ?? getJudgeCwd();
   return new Promise((resolve, reject) => {
+    // Prompt goes via stdin (-p with no inline arg), not argv. Long
+    // batches (e.g., 20 arxiv abstracts at 1800 chars each) easily
+    // exceed Windows' ~32KB CreateProcess command-line limit, causing
+    // spawn ENAMETOOLONG. Same pattern agentwright uses in
+    // coordinator/process-manager.js.
     const args = [
-      '-p', user,
+      '-p',
       '--output-format', 'json',
       '--append-system-prompt', system,
       '--model', model,
       '--permission-mode', 'dontAsk',
     ];
-    const child = spawn('claude', args, { cwd: spawnCwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn('claude', args, { cwd: spawnCwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => {
@@ -61,6 +66,10 @@ export async function callJudge({
       reject(new Error(`callJudge timeout after ${timeoutMs}ms`));
     }, timeoutMs);
 
+    if (child.stdin) {
+      child.stdin.on('error', () => {});
+      child.stdin.end(user);
+    }
     child.stdout.on('data', d => { stdout += d.toString(); });
     child.stderr.on('data', d => { stderr += d.toString(); });
     child.on('error', err => { clearTimeout(timer); reject(err); });

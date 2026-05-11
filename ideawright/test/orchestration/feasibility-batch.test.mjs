@@ -113,7 +113,7 @@ test('gateFeasibility respects batch_size from config', async () => {
 
   await gateFeasibility({
     db,
-    config: { novelty: { batch_size: 2 } },
+    config: { feasibility: { batch_size: 2 } },
     _judge: countingJudge,
   });
 

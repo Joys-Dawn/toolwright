@@ -15,6 +15,16 @@ const DEFAULT_HOST_CAPS = {
   scholar: 1,
 };
 
+export function makeHostLimiters(hostCaps = DEFAULT_HOST_CAPS) {
+  return {
+    exa: makeLimiter(hostCaps.exa ?? DEFAULT_HOST_CAPS.exa),
+    github: makeLimiter(hostCaps.github ?? DEFAULT_HOST_CAPS.github),
+    hn: makeLimiter(hostCaps.hn ?? DEFAULT_HOST_CAPS.hn),
+    npm: makeLimiter(hostCaps.npm ?? DEFAULT_HOST_CAPS.npm),
+    scholar: makeLimiter(hostCaps.scholar ?? DEFAULT_HOST_CAPS.scholar),
+  };
+}
+
 async function timed(label, fn, timeoutMs) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -62,6 +72,11 @@ export async function runSearchBattery(variants, options = {}) {
     limitPerSource = 8,
     hostCaps = DEFAULT_HOST_CAPS,
     sources = {},
+    // Shared limiters from the caller. When null/undefined, makes a fresh
+    // set scoped to this call. Pass shared limiters when running multiple
+    // batteries in parallel (e.g., novelty pass with concurrency > 1) so
+    // per-host caps stay global instead of being multiplied by concurrency.
+    limiters: providedLimiters,
   } = options;
   const exaEnabled = sources.exa?.enabled !== false;
   const githubEnabled = sources.github?.enabled !== false;
@@ -69,13 +84,7 @@ export async function runSearchBattery(variants, options = {}) {
   const npmEnabled = sources.npm?.enabled !== false;
   const scholarEnabled = sources.scholar?.enabled !== false;
 
-  const limiters = {
-    exa: makeLimiter(hostCaps.exa ?? DEFAULT_HOST_CAPS.exa),
-    github: makeLimiter(hostCaps.github ?? DEFAULT_HOST_CAPS.github),
-    hn: makeLimiter(hostCaps.hn ?? DEFAULT_HOST_CAPS.hn),
-    npm: makeLimiter(hostCaps.npm ?? DEFAULT_HOST_CAPS.npm),
-    scholar: makeLimiter(hostCaps.scholar ?? DEFAULT_HOST_CAPS.scholar),
-  };
+  const limiters = providedLimiters ?? makeHostLimiters(hostCaps);
 
   const tasks = [];
   const seenQueries = new Set();

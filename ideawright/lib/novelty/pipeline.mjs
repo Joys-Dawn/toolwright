@@ -13,6 +13,7 @@ export async function runNoveltyPipeline(idea, options = {}) {
     judge,
     model,
     sources,
+    limiters,
   } = options;
 
   const startedAt = new Date().toISOString();
@@ -21,6 +22,7 @@ export async function runNoveltyPipeline(idea, options = {}) {
     timeoutMs: searchTimeoutMs,
     limitPerSource,
     sources,
+    limiters,
   });
   const candidates = prefilterResults(idea, battery.results, { keep: maxCandidates });
   const scorerOpts = { judge };

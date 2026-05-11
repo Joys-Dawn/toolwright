@@ -136,9 +136,70 @@ export function setSourceCursor(db, source, { last_seen_id, notes } = {}) {
   `).run({ source, last_seen_id: last_seen_id ?? null, notes: notes ?? null });
 }
 
+// Heartbeat: update last_run_at without touching notes/last_seen_id.
+// Lets the runner record "we attempted this source at T" even when errors
+// prevent advancing the cursor. Distinct from setSourceCursor which is
+// for recording forward progress.
+export function touchSourceLastRun(db, source) {
+  db.prepare(`
+    INSERT INTO sources (source, last_run_at)
+    VALUES (?, datetime('now'))
+    ON CONFLICT(source) DO UPDATE SET last_run_at = excluded.last_run_at
+  `).run(source);
+}
+
 function logTransition(db, idea_id, from_status, to_status, actor, note) {
   db.prepare(`
     INSERT INTO state_log (idea_id, from_status, to_status, actor, note)
     VALUES (?, ?, ?, ?, ?)
   `).run(idea_id, from_status, to_status, actor, note);
+}
+
+// Insert a raw observation BEFORE validation runs. Idempotent on
+// (source, source_url) — re-mining the same signal is a no-op. Returns
+// `{ id, validated }`: `validated=true` when the existing row already has
+// `validated_at` set, so the caller can skip re-judging it.
+export function insertRawObservation(db, obs) {
+  const info = db.prepare(`
+    INSERT OR IGNORE INTO raw_observations
+      (source, source_url, title, quote, author, engagement, code_url)
+    VALUES
+      (@source, @source_url, @title, @quote, @author, @engagement, @code_url)
+  `).run({
+    source: obs.source,
+    source_url: obs.source_url ?? null,
+    title: obs.title ?? null,
+    quote: obs.quote ?? null,
+    author: obs.author ?? null,
+    engagement: obs.engagement ? JSON.stringify(obs.engagement) : null,
+    code_url: obs.code_url ?? null,
+  });
+  if (Number(info.changes) > 0) {
+    return { id: Number(info.lastInsertRowid), validated: false };
+  }
+  const row = db.prepare(
+    'SELECT id, validated_at FROM raw_observations WHERE source = ? AND source_url IS ?'
+  ).get(obs.source, obs.source_url ?? null);
+  if (!row) return null;
+  return { id: row.id, validated: row.validated_at != null };
+}
+
+export function markRawObservationValidated(db, rowid, ideaId) {
+  if (!rowid) return;
+  db.prepare(`
+    UPDATE raw_observations
+       SET validated_at = datetime('now'),
+           last_error = NULL,
+           idea_id = ?
+     WHERE id = ?
+  `).run(ideaId ?? null, rowid);
+}
+
+export function markRawObservationError(db, rowid, errorMessage) {
+  if (!rowid) return;
+  db.prepare(`
+    UPDATE raw_observations
+       SET last_error = ?
+     WHERE id = ?
+  `).run(String(errorMessage ?? '').slice(0, 1000), rowid);
 }

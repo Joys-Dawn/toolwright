@@ -63,11 +63,15 @@
       "queries": null
     }
   },
+  "validate": {
+    "batch_size": 20
+  },
   "novelty": {
     "novel_max": 2,
     "niche_max": 5,
     "competitor_overlap": 0.6,
-    "batch_size": 10,
+    "max_per_run": null,
+    "concurrency": 8,
     "llm": {
       "model": "claude-haiku-4-5-20251001"
     },
@@ -92,7 +96,8 @@
   "feasibility": {
     "require_code_only": true,
     "require_no_capital": true,
-    "require_no_private_data": true
+    "require_no_private_data": true,
+    "batch_size": 10
   },
   "weights": {
     "pain": 0.3,

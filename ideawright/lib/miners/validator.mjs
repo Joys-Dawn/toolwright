@@ -115,5 +115,27 @@ export async function validateSignalBatch(observations, { timeoutMs, model, _cal
   const judge = _callJudge ?? callJudge;
   const results = await judge(opts);
   const arr = Array.isArray(results) ? results : [results];
-  return arr.map((r) => normalizeVerdict(r));
+
+  // Align by the LLM-supplied `index` field (BATCH_SYSTEM promises it on
+  // every entry). Position-based alignment silently misattributes if the
+  // LLM omits a middle entry — wrong pain_evidence, wrong source_url
+  // paired with wrong title. Missing slots become undefined and the
+  // caller treats them as errors (see runner.mjs's !verdict guard).
+  const byIndex = new Map();
+  let sawAnyIndex = false;
+  for (let pos = 0; pos < arr.length; pos++) {
+    const r = arr[pos];
+    if (r && Number.isInteger(r.index) && r.index >= 0 && r.index < observations.length) {
+      sawAnyIndex = true;
+      byIndex.set(r.index, r);
+    } else if (!sawAnyIndex && r) {
+      // Fall back to positional only while no entry has had a valid index
+      // yet — protects against models that ignore the index instruction.
+      byIndex.set(pos, r);
+    }
+  }
+  return observations.map((_, i) => {
+    const r = byIndex.get(i);
+    return r ? normalizeVerdict(r) : undefined;
+  });
 }
