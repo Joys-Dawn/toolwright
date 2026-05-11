@@ -10,7 +10,7 @@ You ↔ Leader Claude  ──── plans, audits, verifies, posts to Discord
        Peer Claude(s) ──── implement, ack the leader (or — zero peers — the leader does it)
 ```
 
-- **One command per workflow.** `/forgewright:workflow-run feature "..."` runs plan → plan-quality-review → checkpoint → handoff(implement) → verify-plan → audit pipeline → tests end-to-end.
+- **One command per workflow.** `/forgewright:workflow-run feature "..."` runs plan → plan-quality-review → checkpoint → handoff(implement) → verify-plan → audit pipeline → tests → update-docs end-to-end.
 - **Plan-driven implementation goes to peers.** The leader decomposes the plan into independent tasks and dispatches them across whatever peer sessions are connected. With zero peers, the leader executes the tasks itself.
 - **Audit fixes stay with the leader.** Mechanical, narrow-scope fixes happen during pipeline phases on the same Steps A→D verification flow as `/agentwright:audit-run`. Subjective tradeoffs are surfaced to you on Discord.
 - **You stay in the loop on Discord.** The leader posts at every checkpoint, on test failures, on deferred audit findings that need your judgment, and on completion.
@@ -27,13 +27,13 @@ You ↔ Leader Claude  ──── plans, audits, verifies, posts to Discord
 /forgewright:config-init
 ```
 
-`config-init` writes [.claude/forgewright.json](forgewright.example.json) with every default populated and resolves the agentwright CLI path. Every subsequent workflow start re-verifies agentwright and wrightward versions and refreshes the path automatically — you don't need to re-run `config-init` after an agentwright upgrade.
+`config-init` writes [.claude/forgewright.json](forgewright.default.json) with every default populated and resolves the agentwright CLI path. Every subsequent workflow start re-verifies agentwright and wrightward versions and refreshes the path automatically — you don't need to re-run `config-init` after an agentwright upgrade.
 
 ### Requirements
 
 - Node.js ≥ 18
 - agentwright ≥ 2.1.5
-- wrightward ≥ 3.10.4
+- wrightward ≥ 3.11.0
 - One leader Claude Code session, plus zero or more peer sessions in the same repo. With zero peers connected the leader does all the work itself.
 
 > **Plain CLI sessions strongly recommended for smoothest operation — both for the leader and for any peers.** wrightward's bus and Discord bridge work everywhere (CLI and IDE extensions alike). The piece that extensions don't deliver is wrightward's between-turn **channel doorbell**, the wake-up ping that lets an idle session notice bus events without a new user prompt. Forgewright relies on that doorbell on both sides of a handoff:
@@ -92,10 +92,21 @@ Inside a `handoff` phase the leader:
 
 1. Calls `wrightward_bus_status` to find live peers (handles other than its own) and drains `wrightward_list_inbox` once.
 2. Decomposes the work — by `consumes` artifact items, or by directive if no artifact.
-3. Dispatches to peers round-robin with `wrightward_send_handoff`. The dispatched `next_action` body includes a leader-rules block telling the peer not to contact the user, to ping the leader on ambiguity, to send a progress message at least every 15 min, and to ack on completion.
+3. Dispatches to peers round-robin with `wrightward_send_handoff`. Every dispatched task tells the peer: don't contact the user, ping the leader on ambiguity, send a progress message at least every 15 min, and ack on completion.
 4. Settles event-driven: wrightward's channel push wakes the leader when a peer acks or messages it. Between wake-ups the leader works on tasks it kept for itself. When everything is dispatched and self-tasks are done it calls `ScheduleWakeup` for 15 minutes (silent-peer check) and returns control — channel push wakes it sooner if peers ack.
 5. On every wake: silent peers (no ack and no progress message in 15+ min) get pinged once for a status check. They either reply or the send fails synchronously — both are unambiguous.
 6. Reports a batch result via `--mcp-result`. Per-task audit trail is logged to `.claude/forgewright/workflows/<id>/peer-handoffs.jsonl`.
+
+### Peer ↔ leader challenge protocol
+
+Peers and the leader are colleagues, not subordinates rubber-stamping each other. When either side genuinely doubts a claim, the dispute is resolved through a formal challenge instead of back-and-forth bickering or silent compliance:
+
+- A peer that disagrees with a leader claim or directive sends `wrightward_send_message` to the leader with a `[CHALLENGE-REQUEST]` body that quotes the claim and cites the evidence.
+- The leader resolves it by running the [`agentwright:challenge`](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/skills/challenge/SKILL.md) skill on the disputed claim, then replies with `[CHALLENGE-VERDICT] <upheld|overturned|partial>: <rationale>`.
+- The verdict is final. The reverse direction runs the same way — when the leader doubts a peer's claim, the leader runs the challenge themselves and posts the verdict to the peer.
+- The leader also calls out repeated peer mistakes directly.
+
+Cooperative-but-skeptical peer etiquette (the framing the protocol sits on top of) is injected into every Claude Code session on startup by wrightward 3.11+. The challenge-specific instructions ride along with every `handoff` phase the leader runs.
 
 ### End-of-workflow re-audit
 
@@ -133,6 +144,7 @@ End-to-end feature development.
 5. `verify` — `agentwright:verify-plan` skill confirms the implementation matches the plan. Small drifts the leader fixes itself; large drifts trigger corrective handoffs.
 6. `audit` — pipeline (default: implementation → correctness → best-practices → behavior → test-coverage). Loopable (eligible for end-of-workflow re-audit). The leader writes missing tests in-line via the audit-run decision loop, so no separate test-writing handoff phase is needed.
 7. `tests` — command (`${TEST_CMD}`).
+8. `docs` — `agentwright:update-docs` skill closes README / architecture / setup / docstring drift before the workflow exits.
 
 ```
 /forgewright:workflow-run feature "Add markdown export to the notes feature"
@@ -140,19 +152,20 @@ End-to-end feature development.
 
 ### `bug-fix`
 
-Diagnose → plan → checkpoint → fix → verify → audit → tests.
+Diagnose → plan → audit-the-plan → checkpoint → fix → verify → audit → tests.
 
 1. `diagnose` — `agentwright:systematic-debugging` skill produces `diagnosis.md`.
 2. `plan` — `agentwright:bug-fix-planning` skill consumes the diagnosis and produces `plan.md`.
-3. `fix-plan-review` — checkpoint.
-4. `implement` — handoff (fix per plan).
-5. `verify` — `agentwright:verify-plan`.
-6. `audit` — pipeline (default, `--diff`, loopable).
-7. `tests` — command (`${TEST_CMD}`).
+3. `plan-quality-review` — `agentwright:plan-quality-review` audits the fix plan for completeness and risk coverage.
+4. `fix-plan-review` — checkpoint.
+5. `implement` — handoff (fix per plan).
+6. `verify` — `agentwright:verify-plan`.
+7. `audit` — pipeline (default, `--diff`, loopable).
+8. `tests` — command (`${TEST_CMD}`).
 
 ### `refactor`
 
-Plan → review → checkpoint → write characterization tests first → refactor → verify → audit → tests. The pre-refactor `test-coverage` pipeline drives the leader to write characterization tests for any uncovered code, and the resulting tests must keep passing through the refactor — that's how behavior preservation is enforced.
+Plan → review → checkpoint → write characterization tests first → refactor → verify → audit → tests → update docs. The pre-refactor `test-coverage` pipeline drives the leader to write characterization tests for any uncovered code, and the resulting tests must keep passing through the refactor — that's how behavior preservation is enforced.
 
 1. `plan` — `agentwright:refactor-planning` skill produces `plan.md`.
 2. `plan-quality-review` — `agentwright:plan-quality-review`.
@@ -163,6 +176,34 @@ Plan → review → checkpoint → write characterization tests first → refact
 7. `verify` — `agentwright:verify-plan`.
 8. `audit` — pipeline (default, `--diff`, loopable).
 9. `post-refactor-tests` — command (`${TEST_CMD}`). Compare to step 5.
+10. `docs` — `agentwright:update-docs` closes documentation drift after the structural change.
+
+### `idea-exploration`
+
+Go/no-go evaluation for an idea you're not yet committed to building. Research the domain, sketch a tentative plan, adversarially critique it, then research again to fact-check which critiques are real. Ends at a decision checkpoint — no implementation phases.
+
+1. `research` — `agentwright:research` skill investigates the problem domain, prior art, market validation, technical feasibility. Produces `research.md`.
+2. `plan` — `agentwright:project-planning` consumes the research and produces a tentative `plan.md`.
+3. `critique` — `agentwright:critique` adversarially pokes at the plan (assumptions, missing failure modes, scope creep, prior-art collisions). Produces `critique.md`.
+4. `verify-critique` — `agentwright:research` consumes the critique and investigates each point against current literature and prior art. Produces `critique-verification.md` scoring each critique VALID / PARTIAL / INVALID with citations.
+5. `decision` — terminal checkpoint. User reviews all four artifacts and decides build vs shelve. If build → start `greenfield` (new project) or `feature` (existing codebase). If shelve → `workflow-stop` to mark this run cancelled.
+
+```
+/forgewright:workflow-run idea-exploration "Should we build a weekly retro CLI tool?"
+```
+
+### `greenfield`
+
+Build a project or major subsystem from scratch when the idea is already validated. Same shape as `feature` but with `project-planning` instead of `feature-planning`. Run `idea-exploration` first if you haven't yet decided whether to build the idea.
+
+1. `plan` — `agentwright:project-planning` skill produces `plan.md`.
+2. `plan-quality-review` — `agentwright:plan-quality-review` audits the plan.
+3. `plan-review` — checkpoint.
+4. `implement` — handoff (build per plan).
+5. `verify` — `agentwright:verify-plan`.
+6. `audit` — pipeline (default, `--diff`, loopable).
+7. `tests` — command (`${TEST_CMD}`).
+8. `docs` — `agentwright:update-docs` writes the project's first-pass docs.
 
 ### Custom workflows
 
@@ -191,7 +232,7 @@ Custom workflow names take precedence over built-in ones — redefining `feature
 
 ## Configuration
 
-`.claude/forgewright.json` (all fields optional). Run `/forgewright:config-init` to drop a fully-defaulted version into your repo. See [forgewright.example.json](forgewright.example.json).
+`.claude/forgewright.json` (all fields optional). Run `/forgewright:config-init` to drop a fully-defaulted file into your repo — see [forgewright.default.json](forgewright.default.json) for what gets written, and [forgewright.example.json](forgewright.example.json) for a copyable example of custom workflows.
 
 ```json
 {

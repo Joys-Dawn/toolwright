@@ -25,14 +25,14 @@ The workflow command itself may have arrived via CLI OR via Discord (the wrightw
 Call `mcp__plugin_wrightward_wrightward-bus__wrightward_whoami` once before the first descriptor. Record your handle as `<leader-handle>` — peers will address you via `audience="<leader-handle>"`. If whoami errors with "MCP server not bound" or the tool is missing, surface the install instructions and exit:
 
 ```
-forgewright requires wrightward >= 3.10.4.
+forgewright requires wrightward >= 3.11.0.
 Install:  /plugin install wrightward@Joys-Dawn/toolwright
 Note:     wrightward's bus and Discord work in CLI and IDE extensions alike. Only wrightward's between-turn channel doorbell is CLI-only — and that applies to peers as much as to the leader. In extensions the leader falls back to a 15-min ScheduleWakeup cadence for idle peer-settle, and idle peers in extensions only see handoffs on their next user-driven turn. Run leader AND peers from plain CLI terminals for autonomous dispatch.
 ```
 
 ## Step 1 — start the workflow
 
-!`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js workflow-start $ARGUMENTS`
+!`CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}" node "${CLAUDE_PLUGIN_ROOT}/coordinator/index.js" workflow-start $ARGUMENTS`
 
 Extract `workflowId` and `descriptor` from the output JSON.
 
@@ -48,7 +48,7 @@ Invoke the named skill via the Skill tool. If `produces` is set, write the artif
 Then advance:
 
 ```
-node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js workflow-advance --workflow <workflowId> --result completed [--artifact-path artifacts/<file>]
+CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}" node "${CLAUDE_PLUGIN_ROOT}/coordinator/index.js" workflow-advance --workflow <workflowId> --result completed [--artifact-path artifacts/<file>]
 ```
 
 For `agentwright:verify-plan`, `agentwright:feature-planning`, `agentwright:bug-fix-planning`, `agentwright:refactor-planning`, and `agentwright:plan-quality-review` the descriptor's `instruction` includes specific routing/branching guidance — follow it exactly.
@@ -65,7 +65,7 @@ The phase is **atomic from forgewright's POV** — you (the leader) drive everyt
 5. Advance, passing the check-deltas JSON as `--mcp-result`:
 
 ```
-node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js workflow-advance --workflow <workflowId> --result completed --mcp-result '<check-deltas JSON>'
+CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}" node "${CLAUDE_PLUGIN_ROOT}/coordinator/index.js" workflow-advance --workflow <workflowId> --result completed --mcp-result '<check-deltas JSON>'
 ```
 
 The check-deltas payload is what the end-of-workflow re-audit reads to decide whether to replay. Skipping check-deltas means re-audit can't trigger.
@@ -131,7 +131,7 @@ Build the batch result and advance:
 ```
 
 ```
-node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js workflow-advance --workflow <workflowId> --result completed --mcp-result '<json>'
+CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}" node "${CLAUDE_PLUGIN_ROOT}/coordinator/index.js" workflow-advance --workflow <workflowId> --result completed --mcp-result '<json>'
 ```
 
 If any task failed irrecoverably, send `wrightward_send_message(audience="user", body="<summary>")` and call `--result failed` instead.
@@ -144,7 +144,7 @@ If `descriptor.consumes` is non-empty, the listed upstream artifacts have alread
 If the descriptor has an `instruction` field (overlay for non-test commands like backtests, training scripts), follow it: read the artifact(s) the command produced, decide whether to advance with `completed` or `failed`, and put the structured decision into `summary` (a JSON blob is fine — downstream phases and end-of-workflow re-audit read it from `phase.lastMcpResult`).
 
 ```
-node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js workflow-advance --workflow <workflowId> --result completed --mcp-result '{"command":"<cmd>","exitCode":N,"summary":"..."}'
+CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}" node "${CLAUDE_PLUGIN_ROOT}/coordinator/index.js" workflow-advance --workflow <workflowId> --result completed --mcp-result '{"command":"<cmd>","exitCode":N,"summary":"..."}'
 ```
 
 When the phase declares `produces` with an extension (single or multi-map), the script must write to those filenames inside `${ARTIFACTS}`. Forgewright reads the produces config and auto-registers each entry under its stem — no `--artifact-path` flag needed. For bare-name `produces` on a command phase, pass `--artifact-path <path-you-wrote>`.

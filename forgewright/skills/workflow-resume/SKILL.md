@@ -12,7 +12,7 @@ Call `mcp__plugin_wrightward_wrightward-bus__wrightward_whoami` once. Record you
 
 ## Step 1 — resume
 
-!`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js workflow-resume --workflow $ARGUMENTS`
+!`CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}" node "${CLAUDE_PLUGIN_ROOT}/coordinator/index.js" workflow-resume --workflow $ARGUMENTS`
 
 If the user passes `--bump-reaudit-cycles N` after the workflow ID (used to escape a "Reaudit cap reached" pause), forgewright will atomically raise the workflow's frozen `reaudit.maxCycles` by N before resuming. The shell already forwards the flag through `$ARGUMENTS` — no special handling needed.
 

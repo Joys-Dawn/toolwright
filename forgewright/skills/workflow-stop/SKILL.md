@@ -10,7 +10,7 @@ Important: workflow-stop only halts the LEADER coordinator. Peers that received 
 
 Step 1 — run the coordinator stop:
 
-!`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js workflow-stop --workflow $ARGUMENTS`
+!`CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}" node "${CLAUDE_PLUGIN_ROOT}/coordinator/index.js" workflow-stop --workflow $ARGUMENTS`
 
 Step 2 — inspect the JSON output:
 - If `broadcastNeeded` is `true`, the workflow had an active state and possible in-flight peer handoffs. Broadcast once:

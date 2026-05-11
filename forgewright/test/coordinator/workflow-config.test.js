@@ -482,10 +482,10 @@ describe('workflow-config', () => {
       }
     });
 
-    test('built-in feature / bug-fix / refactor workflows validate cleanly', () => {
+    test('built-in feature / bug-fix / refactor / idea-exploration / greenfield workflows validate cleanly', () => {
       const cwd = tmpDir();
       try {
-        for (const name of ['feature', 'bug-fix', 'refactor']) {
+        for (const name of ['feature', 'bug-fix', 'refactor', 'idea-exploration', 'greenfield']) {
           const def = resolveWorkflowDefinition(name, cwd);
           assert.ok(def, `expected built-in "${name}" workflow`);
           assert.ok(Array.isArray(def.phases) && def.phases.length > 0);

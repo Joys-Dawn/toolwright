@@ -14,14 +14,14 @@ function tmpDir(prefix = 'fw-cfg-init-') {
 }
 
 const REAL_PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
-const REAL_EXAMPLE_FILE = path.join(REAL_PLUGIN_ROOT, 'forgewright.example.json');
+const REAL_DEFAULT_FILE = path.join(REAL_PLUGIN_ROOT, 'forgewright.default.json');
 
 function runConfigInit(projectDir, args = [], extraEnv = {}) {
   const scriptPath = path.join(REAL_PLUGIN_ROOT, 'scripts', 'config-init.js');
   const baseEnv = { ...process.env };
   // Default to the real plugin root so the script can read the real
-  // forgewright.example.json. Tests that exercise discovery override
-  // CLAUDE_PLUGIN_ROOT and stage their own example file alongside.
+  // forgewright.default.json. Tests that exercise discovery override
+  // CLAUDE_PLUGIN_ROOT and stage their own default file alongside.
   delete baseEnv.CLAUDE_PLUGIN_ROOT;
   const env = {
     ...baseEnv,
@@ -34,15 +34,15 @@ function runConfigInit(projectDir, args = [], extraEnv = {}) {
   });
 }
 
-function stagePluginRootWithExample(root) {
-  // Copies the real forgewright.example.json to a tmpDir so a test can use it
+function stagePluginRootWithDefault(root) {
+  // Copies the real forgewright.default.json to a tmpDir so a test can use it
   // as a fake CLAUDE_PLUGIN_ROOT. The script also uses this dir as the start
   // point for the bootstrap walk-up to find agentwright.
-  fs.copyFileSync(REAL_EXAMPLE_FILE, path.join(root, 'forgewright.example.json'));
+  fs.copyFileSync(REAL_DEFAULT_FILE, path.join(root, 'forgewright.default.json'));
 }
 
 describe('scripts/config-init', () => {
-  test('writes .claude/forgewright.json from forgewright.example.json', () => {
+  test('writes .claude/forgewright.json from forgewright.default.json', () => {
     const projectDir = tmpDir();
     try {
       const proc = runConfigInit(projectDir);
@@ -50,9 +50,12 @@ describe('scripts/config-init', () => {
       const target = path.join(projectDir, '.claude', 'forgewright.json');
       assert.ok(fs.existsSync(target), 'config file was not written');
       const written = JSON.parse(fs.readFileSync(target, 'utf8'));
-      // Must preserve the example's top-level shape
+      // Must preserve the default's top-level shape — workflows + all knobs.
       assert.ok(written.workflows, 'workflows section missing');
+      assert.deepEqual(written.workflows, {}, 'default workflows should be empty');
       assert.ok(written.reaudit, 'reaudit section missing');
+      assert.ok(written.agentwright, 'agentwright section missing');
+      assert.ok(written.tests, 'tests section missing');
       assert.ok(written.retention, 'retention section missing');
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });
@@ -117,11 +120,11 @@ describe('scripts/config-init', () => {
       // (Claude Code's plugin cache layout). Build the dev-checkout shape:
       // pluginCacheRoot/
       //   forgewright/             ← CLAUDE_PLUGIN_ROOT
-      //     forgewright.example.json
+      //     forgewright.default.json
       //   agentwright/coordinator/index.js
       const fakeForgewrightRoot = path.join(pluginCacheRoot, 'forgewright');
       fs.mkdirSync(fakeForgewrightRoot, { recursive: true });
-      stagePluginRootWithExample(fakeForgewrightRoot);
+      stagePluginRootWithDefault(fakeForgewrightRoot);
       const stubCli = writeStubAgentwright(pluginCacheRoot, { version: '2.1.5', runId: 'cfg-init-stub' });
       const proc = runConfigInit(projectDir, [], { CLAUDE_PLUGIN_ROOT: fakeForgewrightRoot });
       assert.equal(proc.status, 0, proc.stderr);
@@ -129,6 +132,8 @@ describe('scripts/config-init', () => {
       assert.equal(written.agentwright.path, stubCli);
       assert.match(proc.stdout, /Discovered agentwright at/);
       assert.match(proc.stdout, /agentwright version: 2\.1\.5/);
+      // discovery injects the path; the rest of the shape stays the default
+      assert.deepEqual(written.workflows, {});
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });
       fs.rmSync(pluginCacheRoot, { recursive: true, force: true });
@@ -139,14 +144,14 @@ describe('scripts/config-init', () => {
     const projectDir = tmpDir();
     const emptyPluginRoot = tmpDir();
     try {
-      // CLAUDE_PLUGIN_ROOT pointed at an isolated dir with the example file
+      // CLAUDE_PLUGIN_ROOT pointed at an isolated dir with the default file
       // staged but no sibling agentwright → bootstrap finds nothing.
-      stagePluginRootWithExample(emptyPluginRoot);
+      stagePluginRootWithDefault(emptyPluginRoot);
       const proc = runConfigInit(projectDir, [], { CLAUDE_PLUGIN_ROOT: emptyPluginRoot });
       assert.equal(proc.status, 0, proc.stderr);
       assert.match(proc.stdout, /agentwright CLI was not discovered/);
       const written = JSON.parse(fs.readFileSync(path.join(projectDir, '.claude', 'forgewright.json'), 'utf8'));
-      // example file ships agentwright.path = null
+      // default file ships agentwright.path = null
       assert.equal(written.agentwright.path, null);
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });

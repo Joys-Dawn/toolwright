@@ -34,7 +34,7 @@ const {
 // version forgewright depends on. Surfaced in the busProbeInstruction so the
 // LLM tells the user exactly which version to install when the MCP server is
 // missing or out of date.
-const WRIGHTWARD_MIN_VERSION = '3.10.4';
+const WRIGHTWARD_MIN_VERSION = '3.11.0';
 
 function printHelp() {
   process.stdout.write([

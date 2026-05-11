@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const EXAMPLE_FILE = 'forgewright.example.json';
+const DEFAULT_FILE = 'forgewright.default.json';
 const TARGET_FILE = 'forgewright.json';
 
 function parseArgs(argv) {
@@ -33,7 +33,7 @@ function main() {
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, '..');
   const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
-  const sourcePath = path.join(pluginRoot, EXAMPLE_FILE);
+  const sourcePath = path.join(pluginRoot, DEFAULT_FILE);
   const claudeDir = path.join(projectRoot, '.claude');
   const targetPath = path.join(claudeDir, TARGET_FILE);
 
@@ -62,15 +62,15 @@ function main() {
     process.exit(1);
   }
 
-  // Load the example, optionally inject agentwright.path from discovery.
-  const example = JSON.parse(fs.readFileSync(sourcePath, 'utf8'));
+  // Load the default, optionally inject agentwright.path from discovery.
+  const defaultConfig = JSON.parse(fs.readFileSync(sourcePath, 'utf8'));
   const discovery = tryDiscoverAgentwrightCli();
   if (discovery.cli) {
-    example.agentwright = example.agentwright || {};
-    example.agentwright.path = discovery.cli;
+    defaultConfig.agentwright = defaultConfig.agentwright || {};
+    defaultConfig.agentwright.path = discovery.cli;
   }
 
-  fs.writeFileSync(targetPath, JSON.stringify(example, null, 2) + '\n', 'utf8');
+  fs.writeFileSync(targetPath, JSON.stringify(defaultConfig, null, 2) + '\n', 'utf8');
 
   console.log(`Wrote default config: ${path.relative(projectRoot, targetPath)}`);
   if (discovery.cli) {

@@ -1,5 +1,5 @@
 {
-  "description": "Bug-fix workflow — diagnose, plan, implement (peer), verify, narrow audit, run tests.",
+  "description": "Bug-fix workflow — diagnose, plan, audit-the-plan, implement (peer), verify, narrow audit, run tests.",
   "phases": [
     {
       "name": "diagnose",
@@ -17,9 +17,16 @@
       "idempotent": false
     },
     {
+      "name": "plan-quality-review",
+      "type": "skill",
+      "skillId": "agentwright:plan-quality-review",
+      "consumes": "plan",
+      "idempotent": true
+    },
+    {
       "name": "fix-plan-review",
       "type": "checkpoint",
-      "summary": "Diagnosis + fix plan ready. User reviews. Resume to dispatch the fix to a peer."
+      "summary": "Diagnosis + fix plan + plan-quality-review findings ready. User reviews. Resume to dispatch the fix to a peer."
     },
     {
       "name": "implement",

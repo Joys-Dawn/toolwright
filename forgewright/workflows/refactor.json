@@ -1,5 +1,5 @@
 {
-  "description": "Refactor workflow — plan, write characterization tests first (via agentwright test-coverage pipeline), refactor (peers), verify behavior unchanged via full audit pipeline.",
+  "description": "Refactor workflow — plan, write characterization tests first (via agentwright test-coverage pipeline), refactor (peers), verify behavior unchanged via full audit pipeline, update docs.",
   "phases": [
     {
       "name": "plan",
@@ -60,6 +60,12 @@
       "type": "command",
       "command": "${TEST_CMD}",
       "idempotent": false
+    },
+    {
+      "name": "docs",
+      "type": "skill",
+      "skillId": "agentwright:update-docs",
+      "idempotent": true
     }
   ]
 }

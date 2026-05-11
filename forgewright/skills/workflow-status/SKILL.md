@@ -10,7 +10,7 @@ If `$ARGUMENTS` is empty, list every workflow with its summary state. Otherwise,
 
 Run:
 
-!`node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js workflow-status $ARGUMENTS`
+!`CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}" node "${CLAUDE_PLUGIN_ROOT}/coordinator/index.js" workflow-status $ARGUMENTS`
 
 Format the output for the user:
 

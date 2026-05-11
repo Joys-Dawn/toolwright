@@ -1,0 +1,42 @@
+{
+  "description": "Idea-exploration workflow — research the domain, sketch a tentative plan, adversarially critique it, research again to verify which critiques are real, then exit at a decision checkpoint. Use to determine whether to build an idea. No implementation phases — when you decide yes, run /forgewright:workflow-run greenfield (or feature) to actually build it.",
+  "phases": [
+    {
+      "name": "research",
+      "type": "skill",
+      "skillId": "agentwright:research",
+      "produces": "research.md",
+      "idempotent": false
+    },
+    {
+      "name": "plan",
+      "type": "skill",
+      "skillId": "agentwright:project-planning",
+      "consumes": "research",
+      "produces": "plan.md",
+      "idempotent": false
+    },
+    {
+      "name": "critique",
+      "type": "skill",
+      "skillId": "agentwright:critique",
+      "consumes": "plan",
+      "produces": "critique.md",
+      "idempotent": false
+    },
+    {
+      "name": "verify-critique",
+      "type": "skill",
+      "skillId": "agentwright:research",
+      "consumes": "critique",
+      "produces": "critique-verification.md",
+      "instruction": "Invoke the \"agentwright:research\" skill via the Skill tool. This phase consumes the \"critique\" artifact — read artifacts/critique.md before invoking the skill. The research target is: for each critique point, investigate whether the critique's underlying claim holds up against current literature, prior art, and real-world evidence. Score each critique as VALID (the concern is substantiated), PARTIAL (some merit but overstated or context-dependent), or INVALID (the critique's premise is wrong). Write the result to artifacts/critique-verification.md as a per-critique table with the verdict and citations, then report the path back via workflow-advance --artifact-path <path>. When done, call workflow-advance --result completed.",
+      "idempotent": false
+    },
+    {
+      "name": "decision",
+      "type": "checkpoint",
+      "summary": "Idea exploration complete. Artifacts: research.md, plan.md, critique.md, critique-verification.md. User reviews and decides. If you decide to build, run /forgewright:workflow-run greenfield (or feature for an existing codebase). If not, /forgewright:workflow-stop this workflow to mark it cancelled."
+    }
+  ]
+}

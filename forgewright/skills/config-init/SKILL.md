@@ -7,7 +7,7 @@ argument-hint: [--force]
 Create `.claude/forgewright.json` populated with every default value, and resolve `agentwright.path` so steady-state workflow runs don't depend on the Claude Code plugin cache layout.
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/config-init.js $ARGUMENTS
+CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}" node "${CLAUDE_PLUGIN_ROOT}/scripts/config-init.js" $ARGUMENTS
 ```
 
 **Instructions:**

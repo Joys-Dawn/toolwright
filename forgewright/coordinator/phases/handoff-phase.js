@@ -129,9 +129,35 @@ function buildLeaderRules() {
     `    ping you asking for a status update — reply promptly so you don't get marked unresponsive.`,
     `  - When done, call wrightward_ack on this handoff id.`,
     `  - Surface findings (bugs, gotchas) via wrightward_send_note(kind="finding").`,
+    `  - Disagreement & challenge protocol: if you doubt a leader claim or directive, do NOT silently`,
+    `    comply and do NOT just argue back-and-forth. Formally request a challenge:`,
+    `      wrightward_send_message(audience="<leader-handle>",`,
+    `        body="[CHALLENGE-REQUEST] claim: <verbatim leader claim>; reason: <why you think it's wrong, with evidence — file:line, doc citations, test output>")`,
+    `    The leader will run /agentwright:challenge and reply with "[CHALLENGE-VERDICT] <verdict>".`,
+    `    The verdict is final — accept it and proceed; do not re-litigate. The leader may also`,
+    `    challenge YOUR claims the same way; accept their verdict and adjust.`,
     `  Task: <task body>`,
     `  Files in your scope: <files>`,
     `  """`,
+    ``,
+  ];
+}
+
+function buildChallengeProtocol() {
+  return [
+    `Challenge protocol (leader-side):`,
+    `  - On [CHALLENGE-REQUEST] from a peer: do NOT debate. Invoke /agentwright:challenge via the`,
+    `    Skill tool, passing the verbatim claim plus the peer's reasoning. The skill spawns a`,
+    `    party-pooper subagent that adversarially audits the claim and returns a verdict.`,
+    `    Post the verdict back: wrightward_send_message(audience="<peer-handle>",`,
+    `      body="[CHALLENGE-VERDICT] <upheld|overturned|partial>: <one-line rationale>").`,
+    `    If the verdict overturns your claim, also adjust the plan/dispatch accordingly.`,
+    `  - When YOU doubt a peer's claim (e.g. they assert a file works but your read shows otherwise):`,
+    `    invoke /agentwright:challenge yourself on the peer's claim, then post the [CHALLENGE-VERDICT]`,
+    `    to that peer. Don't accept peer claims on faith just because they came from a peer.`,
+    `  - Repeated peer mistakes: track them. If the same peer keeps tripping the same kind of error`,
+    `    (skips tests, ignores leader-rules, hallucinates APIs), call it out directly in your reply.`,
+    `    Correctness over politeness — but stay specific and evidence-based.`,
     ``,
   ];
 }
@@ -181,6 +207,7 @@ function buildInstruction(phase, workflow, items) {
     ...buildStep2Decompose(phase),
     ...buildStep3Dispatch(taskRefBase),
     ...buildLeaderRules(),
+    ...buildChallengeProtocol(),
     ...buildStep4Settle(workflow.workflowId),
     ...buildStep5Advance(workflow.workflowId),
   ].join('\n');

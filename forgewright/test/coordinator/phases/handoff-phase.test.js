@@ -137,6 +137,41 @@ describe('handoff-phase', () => {
     });
   });
 
+  describe('buildInstruction — challenge protocol', () => {
+    // The leader instruction must carry both sides of the peer-↔-leader
+    // challenge contract. Peers learn how to formally request a challenge
+    // via [CHALLENGE-REQUEST]; the leader learns to resolve via
+    // /agentwright:challenge and reply with [CHALLENGE-VERDICT]. Without
+    // these markers, peer doubt either turns into silent compliance or
+    // unbounded back-and-forth.
+    const baseWorkflow = SAMPLE_WORKFLOW();
+    const phase = { name: 'implement', index: 3, type: 'handoff', directive: 'implement plan' };
+    const instruction = handoffPhase.buildInstruction(phase, baseWorkflow, null);
+
+    test('peer-side rules tell peers to send [CHALLENGE-REQUEST] when they disagree', () => {
+      assert.match(instruction, /\[CHALLENGE-REQUEST\]/,
+        'peer-side rules must define the [CHALLENGE-REQUEST] marker');
+      assert.match(instruction, /formally request a challenge/i,
+        'peer-side rules must direct peers to formally request a challenge instead of arguing or capitulating');
+    });
+
+    test('leader-side rules tell the leader to invoke /agentwright:challenge and reply with [CHALLENGE-VERDICT]', () => {
+      assert.match(instruction, /\/agentwright:challenge/,
+        'leader-side rules must point at the /agentwright:challenge skill');
+      assert.match(instruction, /\[CHALLENGE-VERDICT\]/,
+        'leader-side rules must define the [CHALLENGE-VERDICT] reply marker');
+      assert.match(instruction, /verdict is final/i,
+        'peer-side rules must declare the leader verdict final so disputes do not re-litigate');
+    });
+
+    test('leader-side rules cover both peer-initiated and leader-initiated challenges', () => {
+      assert.match(instruction, /When YOU doubt a peer/i,
+        'leader-side rules must cover the leader-initiated path (leader challenges peer claim)');
+      assert.match(instruction, /Repeated peer mistakes/i,
+        'leader-side rules must tell the leader to track and call out repeated peer mistakes');
+    });
+  });
+
   describe('validateResult', () => {
     test('accepts a batch with peer + self tasks', () => {
       const phase = { index: 3, directive: 'do it' };

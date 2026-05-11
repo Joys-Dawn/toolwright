@@ -1,10 +1,10 @@
 {
-  "description": "Feature workflow — leader plans, peers implement, leader verifies, docs updated. Plan, audit-the-plan, checkpoint, peer-handoff(implement), verify-plan, audit pipeline (includes test-coverage; leader writes missing tests in-line via the decision loop), run tests, update docs.",
+  "description": "Greenfield workflow — build a project or major subsystem from scratch when the idea is already validated. project-planning sets the design, plan-quality-review tightens it, then standard implementation / audit / test / docs. Run idea-exploration first if you haven't decided whether to build the idea.",
   "phases": [
     {
       "name": "plan",
       "type": "skill",
-      "skillId": "agentwright:feature-planning",
+      "skillId": "agentwright:project-planning",
       "produces": "plan.md",
       "idempotent": false
     },
@@ -18,12 +18,12 @@
     {
       "name": "plan-review",
       "type": "checkpoint",
-      "summary": "Plan + plan-quality-review findings ready. User reviews. Resume to dispatch implementation to peers."
+      "summary": "Project plan + plan-quality-review findings ready. User reviews. Resume to dispatch implementation to peers."
     },
     {
       "name": "implement",
       "type": "handoff",
-      "directive": "Implement the plan in artifacts/plan.md. Decompose into independent tasks (per file scope or per implementation step) and dispatch to available peers. Run any tasks yourself if no peers are available.",
+      "directive": "Implement the project plan in artifacts/plan.md. Decompose into independent tasks (per module or per implementation step) and dispatch to available peers. Run any tasks yourself if no peers are available.",
       "consumes": "plan",
       "idempotent": false
     },

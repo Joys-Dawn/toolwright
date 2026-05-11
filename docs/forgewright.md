@@ -1,8 +1,8 @@
 # forgewright
 
-> Multi-agent workflow orchestrator. One Claude Code session is the **leader** that plans, drives audit pipelines, verifies, and talks to you. Other sessions are **peers** that pick up implementation handoffs. `/forgewright:workflow-run feature "..."` strings plan → plan-quality-review → checkpoint → handoff(implement) → verify-plan → audit pipeline → tests into one resumable orchestration.
+> Multi-agent workflow orchestrator. One Claude Code session is the **leader** that plans, drives audit pipelines, verifies, and talks to you. Other sessions are **peers** that pick up implementation handoffs. `/forgewright:workflow-run feature "..."` strings plan → plan-quality-review → checkpoint → handoff(implement) → verify-plan → audit pipeline → tests → update-docs into one resumable orchestration.
 
-**Version**: 0.1.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/forgewright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/forgewright/README.md)
+**Version**: 0.1.1 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/forgewright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/forgewright/README.md)
 
 ## Install
 
@@ -20,7 +20,7 @@
 
 - Node.js ≥ 18
 - agentwright ≥ 2.1.5
-- wrightward ≥ 3.10.4
+- wrightward ≥ 3.11.0
 - One leader Claude Code session, plus zero or more peer sessions in the same repo. With zero peers, the leader executes handoff tasks itself.
 
 > **Plain CLI sessions strongly recommended for the leader AND the peers.** wrightward's bus and Discord bridge work everywhere (CLI and IDE extensions alike). The piece extensions don't deliver is wrightward's between-turn **channel doorbell** — the wake-up ping that lets an idle session notice bus events without a new user prompt. Forgewright relies on it on both sides of a handoff: a leader in an extension falls back to a 15-min `ScheduleWakeup` cadence for idle peer-settle; a peer in an extension only sees a handoff on its next tool call, which means an idle peer effectively won't pick it up until you nudge them. Workflows still complete end-to-end in extensions; they're just not autonomous in the dispatch step. Run leaders and peers from plain CLI terminals for proper event-driven handoffs.
@@ -31,6 +31,8 @@
 /forgewright:workflow-run feature "Add markdown export to the notes feature"
 /forgewright:workflow-run bug-fix "API returns 500 on empty body"
 /forgewright:workflow-run refactor "Split the user-service god class"
+/forgewright:workflow-run idea-exploration "Should we build a weekly retro CLI tool?"
+/forgewright:workflow-run greenfield "Scaffold a CLI for managing weekly retros"
 /forgewright:workflow-resume <workflow-id>                       # past a checkpoint or prompt
 /forgewright:workflow-resume <workflow-id> --bump-reaudit-cycles 1   # grant another re-audit cycle
 /forgewright:workflow-stop <workflow-id>                         # cancel + signal peers to abort
@@ -59,6 +61,15 @@ Walk away mid-workflow at any time — the leader exits cleanly at checkpoints a
 
 After the last declared phase, the leader measures changes since the audit pipeline ran (from the `check-deltas` JSON captured during the pipeline phase). If the change crosses `reaudit.minDeltaPercent` or `reaudit.minDeltaLines`, a fresh audit pipeline runs on `reaudit.loopableStages` with `--diff`. Capped at `reaudit.maxCycles`; when the cap is hit the workflow pauses with a "Reaudit cap reached" reason — resume with `--bump-reaudit-cycles N` to grant N more cycles atomically (no hand-editing `workflow.json`). Set `reaudit.decisionMode: "leader"` to let the leader judge case-by-case via the `reaudit-decision` skill (`clean` / `replay [stages]` / `replay-full` / `escalate`).
 
+## Peer ↔ leader challenge protocol
+
+Peers and the leader are colleagues; neither blindly trusts the other. Cooperative-but-skeptical peer etiquette is injected into every session on startup by wrightward 3.11+. On top of that, forgewright dispatches a formal dispute-resolution contract in every `handoff` phase:
+
+- A peer disagreeing with a leader claim or directive sends `wrightward_send_message` to the leader with a `[CHALLENGE-REQUEST]` body that quotes the claim verbatim and cites concrete evidence (file:line, doc references, test output).
+- The leader resolves it by running the `agentwright:challenge` skill on the disputed claim, then replies with `[CHALLENGE-VERDICT] <upheld|overturned|partial>: <rationale>`. The verdict is final.
+- The reverse path runs the same way — when the leader doubts a peer's claim, the leader runs the challenge themselves and posts the verdict to the peer.
+- The leader also calls out repeated peer mistakes directly — correctness over politeness.
+
 ## User comms
 
 Two channels depending on direction:
@@ -72,11 +83,13 @@ Past the plan-review checkpoint the leader has implementation autonomy, but it s
 
 | Workflow | Phases (in order) |
 |---|---|
-| `feature` | plan → plan-quality-review → **plan-review checkpoint** → handoff(implement) → verify-plan → audit pipeline (default, `--diff`, loopable) → tests |
-| `bug-fix` | systematic-debugging → bug-fix-planning → **fix-plan-review checkpoint** → handoff(implement fix) → verify-plan → audit pipeline (default, `--diff`, loopable) → tests |
-| `refactor` | refactor-planning → plan-quality-review → **refactor-plan-review checkpoint** → `test-coverage` pipeline (writes characterization tests) → pre-refactor-tests → handoff(refactor) → verify-plan → audit pipeline (default, `--diff`, loopable) → post-refactor-tests |
+| `feature` | plan → plan-quality-review → **plan-review checkpoint** → handoff(implement) → verify-plan → audit pipeline (default, `--diff`, loopable) → tests → update-docs |
+| `bug-fix` | systematic-debugging → bug-fix-planning → plan-quality-review → **fix-plan-review checkpoint** → handoff(implement fix) → verify-plan → audit pipeline (default, `--diff`, loopable) → tests |
+| `refactor` | refactor-planning → plan-quality-review → **refactor-plan-review checkpoint** → `test-coverage` pipeline (writes characterization tests) → pre-refactor-tests → handoff(refactor) → verify-plan → audit pipeline (default, `--diff`, loopable) → post-refactor-tests → update-docs |
+| `idea-exploration` | research → project-planning → critique → verify-critique (research consuming the critique) → **decision checkpoint** (no implementation) |
+| `greenfield` | project-planning → plan-quality-review → **plan-review checkpoint** → handoff(implement) → verify-plan → audit pipeline (default, `--diff`, loopable) → tests → update-docs |
 
-`refactor` writes characterization tests **before** the refactor so behavior preservation is enforced — those tests must keep passing through the refactor. `feature`'s audit pipeline includes `test-coverage`, so the leader writes any missing tests in-line via the audit-run decision loop — no separate test-writing handoff phase is needed.
+`refactor` writes characterization tests **before** the refactor so behavior preservation is enforced — those tests must keep passing through the refactor. `feature`'s audit pipeline includes `test-coverage`, so the leader writes any missing tests in-line via the audit-run decision loop — no separate test-writing handoff phase is needed. `feature`, `refactor`, and `greenfield` finish with `agentwright:update-docs` so README / architecture / setup / docstring drift is closed before the workflow exits. `idea-exploration` is the go/no-go evaluation that precedes `greenfield`: research → tentative plan → adversarial critique → research-to-verify-critique, then a terminal checkpoint where the user decides to build (run `greenfield`/`feature`) or shelve (run `workflow-stop`). The second research phase scores each critique VALID / PARTIAL / INVALID with citations so the user isn't trusting the critic on its own authority.
 
 Define your own under `workflows.<name>` in `.claude/forgewright.json` — see [`forgewright.example.json`](https://github.com/Joys-Dawn/toolwright/blob/master/forgewright/forgewright.example.json). All five phase types are available. Every phase needs a `name` (identifier-safe `[A-Za-z][A-Za-z0-9_-]*`, unique within the workflow) — it shows up in status, logs, and peer `task_ref` strings.
 
@@ -102,7 +115,7 @@ Forgewright exposes everything as skills (invoke via `/forgewright:<name>` or vi
 
 ## Config
 
-`.claude/forgewright.json` (all fields optional). Run `/forgewright:config-init` to drop a fully-defaulted example into your repo; see [`forgewright.example.json`](https://github.com/Joys-Dawn/toolwright/blob/master/forgewright/forgewright.example.json).
+`.claude/forgewright.json` (all fields optional). Run `/forgewright:config-init` to drop a fully-defaulted file into your repo — see [`forgewright.default.json`](https://github.com/Joys-Dawn/toolwright/blob/master/forgewright/forgewright.default.json) for what gets written, and [`forgewright.example.json`](https://github.com/Joys-Dawn/toolwright/blob/master/forgewright/forgewright.example.json) for a copyable example of custom workflows.
 
 ```json
 {

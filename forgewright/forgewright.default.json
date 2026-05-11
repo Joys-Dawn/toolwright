@@ -1,0 +1,21 @@
+{
+  "_comment": "Default forgewright config. Built-in workflows (feature, bug-fix, refactor, idea-exploration, greenfield) live in forgewright/workflows/*.json and run as-is when not overridden under \"workflows\" below. Define a workflow under a NEW name to add one; redefining a built-in name (e.g. \"feature\") overrides the built-in entirely — be intentional about that. See forgewright.example.json for a copyable example of custom workflows with reaudit overrides, tests overrides, and multi-output command phases. Every phase requires a `name` field — non-empty, identifier-safe ([A-Za-z][A-Za-z0-9_-]*), unique within the workflow.",
+  "workflows": {},
+  "reaudit": {
+    "maxCycles": 1,
+    "minDeltaPercent": 5,
+    "minDeltaLines": 0,
+    "decisionMode": "deterministic",
+    "loopableStages": ["correctness", "behavior", "security"]
+  },
+  "agentwright": {
+    "path": null
+  },
+  "tests": {
+    "command": null
+  },
+  "retention": {
+    "keepCompletedWorkflows": 2,
+    "maxWorkflowAgeDays": 7
+  }
+}
