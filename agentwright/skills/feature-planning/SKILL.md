@@ -129,7 +129,21 @@ Produce a plan that covers each of the following sections. Skip a section only i
 - Identify which steps can be done in parallel.
 - **Include test steps** — writing tests is not a separate phase; test steps should be interleaved with the implementation steps they verify.
 
-### 5. Identify Risks
+### 5. Verify External Contracts (mandatory)
+
+If the design depends on any external contract — third-party API, SDK call, public library function, network protocol, file format, or anything outside this repository — verify current correct usage before finalizing the plan. Training knowledge is not sufficient: APIs and library surfaces change, and incorrect usage becomes a correctness or security flaw baked into the plan rather than something the implementer can catch later.
+
+For each external contract the design references, use the most authoritative source available, in this priority order:
+
+1. **`mcp__context7__`** for library / framework docs (React, Prisma, Tailwind, Vitest, etc.) — fastest path to current API surface.
+2. **Service-specific MCP** if one exists for the service (Supabase, Vercel, etc.).
+3. **`WebFetch`** on the official documentation URL — best for things context7 doesn't have, or for version-specific notes / migration guides.
+4. **`agentwright:research`** (via the Skill tool) when the question requires synthesis or comparison across multiple sources (e.g., "which option handles X correctly").
+5. **`WebSearch`** as a last resort for ad-hoc lookups.
+
+Bake the verified usage into the plan: exact function signatures, parameter names, response shapes, version constraints, error semantics. Cite the source (URL or MCP tool name) alongside each verified claim so the implementer can re-check. If verification is impossible (offline, ambiguous docs, contradictory sources), flag the item as an open question in Risks — never guess.
+
+### 6. Identify Risks
 
 Evaluate the design against the quality dimensions below. **Only surface actual risks** — do not write a section for a dimension that has no findings. See [REFERENCE.md](REFERENCE.md) for detailed checklists and anti-patterns.
 

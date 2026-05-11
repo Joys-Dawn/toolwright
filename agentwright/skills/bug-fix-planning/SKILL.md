@@ -66,7 +66,21 @@ Produce a minimal, targeted fix. The fix should change as little as possible whi
   - Minimal patch vs. small refactor that prevents the class of bug
 - **What NOT to change**: Explicitly state anything in the affected area that you are intentionally leaving alone. This prevents scope creep during implementation.
 
-### 5. Plan Tests
+### 5. Verify External Contracts (mandatory)
+
+If the fix depends on any external contract — third-party API, SDK call, public library function, network protocol, file format, or anything outside this repository — verify current correct usage before finalizing the fix. Training knowledge is not sufficient: a "fix" that misuses an external contract is still broken, just in a different way.
+
+For each external contract the fix references, use the most authoritative source available, in this priority order:
+
+1. **`mcp__context7__`** for library / framework docs.
+2. **Service-specific MCP** if one exists (Supabase, Vercel, etc.).
+3. **`WebFetch`** on the official documentation URL.
+4. **`agentwright:research`** (via the Skill tool) for synthesis questions.
+5. **`WebSearch`** as a last resort.
+
+Bake verified usage into the fix design: exact function signatures, parameter names, response shapes, version constraints, error semantics. Cite the source alongside each verified claim. If verification is impossible, flag the item in Risks — never guess.
+
+### 6. Plan Tests
 
 Every bug fix needs tests — both to verify the fix works and to cover any gaps the bug exposed.
 
@@ -80,7 +94,7 @@ Delegate test writing to the appropriate skill (invoke via the Skill tool with t
 - **`agentwright:write-tests-pgtap`**: Database migrations, RLS policies, SQL logic
 - **`agentwright:write-tests`**: Everything else (general-purpose, any language/framework)
 
-### 6. Identify Risks
+### 7. Identify Risks
 
 Flag anything that could go wrong with the fix:
 

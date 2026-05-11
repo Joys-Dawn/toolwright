@@ -100,7 +100,21 @@ Choose a styling approach and component library on day 1 for any web project wit
 
 See [REFERENCE.md](REFERENCE.md) for detailed comparison of all options.
 
-### 4. Design the Directory Structure
+### 4. Verify External Contracts (mandatory)
+
+Every stack choice depends on external contracts — framework APIs, ORM query shapes, auth provider endpoints, hosting provider configurations, third-party SDKs. Verify each before locking the stack into the plan. Training knowledge is not sufficient: framework features change between versions, packages get deprecated, hosting providers add and remove constraints.
+
+For each external contract the stack depends on, use the most authoritative source available, in this priority order:
+
+1. **`mcp__context7__`** for library / framework docs (React, Next.js, Prisma, Tailwind, etc.).
+2. **Service-specific MCP** if one exists (Supabase, Vercel, etc.).
+3. **`WebFetch`** on the official documentation URL — especially for the latest version, breaking changes, and migration notes.
+4. **`agentwright:research`** (via the Skill tool) when comparing options ("Auth.js vs Clerk for X", "Drizzle vs Prisma for serverless Y").
+5. **`WebSearch`** as a last resort.
+
+Bake verified usage into the stack table and any embedded ADRs: exact package names, version constraints, configuration snippets, response shapes. Cite the source alongside each verified claim so the implementer can re-check. If verification is impossible (offline, ambiguous docs, contradictory sources), flag the item in Risks & Open Questions — never guess. Deprecated packages and renamed APIs are the #1 source of broken `create-*` scaffolds; this step catches them before the user installs the wrong thing.
+
+### 5. Design the Directory Structure
 
 Design a directory structure based on the project category. Follow **feature-based organization** for anything beyond trivial size. See [REFERENCE.md](REFERENCE.md) for category-specific layouts.
 
@@ -114,45 +128,45 @@ Principles:
 
 Output: The full directory tree with comments explaining the purpose of each top-level directory.
 
-### 5. Plan Tooling & Configuration
+### 6. Plan Tooling & Configuration
 
 Specify the exact config files and tooling the project needs on day 1.
 
-#### 5a. Package Manager (JS/TS projects)
+#### 6a. Package Manager (JS/TS projects)
 - **pnpm** for team/professional projects (strict deps, disk-efficient, good monorepo support)
 - **npm** when maximum compatibility matters or zero-setup friction is the priority
 - **Bun** for experimental projects where you control the entire runtime
 
-#### 5b. Linting & Formatting
+#### 6b. Linting & Formatting
 - **JS/TS**: Biome (single tool, fast) or ESLint flat config + Prettier (mature plugin ecosystem). Specify which.
 - **Python**: Ruff (replaces Flake8, Black, isort). Configure in `pyproject.toml`.
 - **Go**: `gofmt` + `golangci-lint`
 - **Rust**: `rustfmt` + `clippy`
 
-#### 5c. Testing
+#### 6c. Testing
 - **JS/TS**: Vitest for Vite-based projects, Jest for React Native or legacy. Add Playwright for E2E when stable user flows exist (not day 1).
 - **Python**: pytest. Configure in `pyproject.toml`.
 - **Go**: built-in `go test`
 - **Rust**: built-in `cargo test`
 
-#### 5d. TypeScript Configuration (if applicable)
+#### 6d. TypeScript Configuration (if applicable)
 - `strict: true` always
 - `noUncheckedIndexedAccess: true`
 - `moduleResolution: "bundler"` for Vite/webpack, `"nodenext"` for pure Node
 - Separate tsconfigs for different environments when needed
 
-#### 5e. Pre-commit Hooks
+#### 6e. Pre-commit Hooks
 - **JS/TS**: Husky + lint-staged (format + lint staged files only)
 - **Python**: `pre-commit` framework with Ruff
 
-#### 5f. Environment Variables
+#### 6f. Environment Variables
 - **JS/TS**: Use Node.js built-in `--env-file=.env` (Node 20.6+). Add T3 Env (`@t3-oss/env-core` or `@t3-oss/env-nextjs`) for type-safe validation with Zod in TypeScript projects. Do not add `dotenv` to new projects.
 - **Python**: Use `pydantic-settings` (`BaseSettings`) for validated, typed config. `python-dotenv` only for trivial scripts.
 - **Always create `.env.example`** with placeholder values — this is the documentation for your env vars.
 - **Framework prefixes**: Next.js uses `NEXT_PUBLIC_`, Vite uses `VITE_`, SvelteKit uses `PUBLIC_`. Non-prefixed vars are server-only.
 - **Secrets management**: .env files are fine early on. Upgrade to Doppler, Infisical, or cloud-native secrets (AWS SSM, etc.) when you have multiple developers, environments, or compliance needs. See [REFERENCE.md](REFERENCE.md) for details.
 
-#### 5g. Docker / Containerization
+#### 6g. Docker / Containerization
 - **Add Docker Compose on day 1 if** the project has a database or external service dependency (Postgres, Redis, etc.). It eliminates "install X locally" friction.
 - **Defer Docker if** building a library, CLI tool, or static site with no service dependencies.
 - Use **multi-stage builds** for production images. Copy lockfiles before source code for layer caching.
@@ -161,7 +175,7 @@ Specify the exact config files and tooling the project needs on day 1.
 - Omit the `version:` field in compose files — it is obsolete.
 - See [REFERENCE.md](REFERENCE.md) for language-specific Dockerfile patterns.
 
-#### 5h. Monitoring & Error Tracking
+#### 6h. Monitoring & Error Tracking
 - **Day 1**: Add Sentry (has a free tier) and structured logging (pino/winston for JS, Python logging). This takes under 15 minutes and catches crashes immediately.
 - **Day 1 (optional)**: Install OpenTelemetry SDK with auto-instrumentation. Even sending to console during dev means you can point it at any backend later without code changes.
 - **First deploy**: Add uptime monitoring (UptimeRobot, free: 50 monitors).
@@ -169,13 +183,13 @@ Specify the exact config files and tooling the project needs on day 1.
 - **Defer Datadog** until you have infra complexity (multiple services, K8s). It is overkill and expensive for small projects.
 - See [REFERENCE.md](REFERENCE.md) for provider comparison and full timeline.
 
-#### 5i. CI/CD
+#### 6i. CI/CD
 - Minimum day-1 pipeline: lint + test on every PR
 - Cache dependencies (single biggest CI speedup)
 - Pin third-party actions to SHA (supply chain security)
 - Defer deployment pipelines until there's something to deploy
 
-### 6. Plan Scaffolding Steps
+### 7. Plan Scaffolding Steps
 
 Provide the exact sequence of commands to initialize the project. Each step should be copy-pasteable.
 
@@ -194,7 +208,7 @@ Provide the exact sequence of commands to initialize the project. Each step shou
 
 Note which scaffold commands create which files (so the user knows what's auto-generated vs. manual).
 
-### 7. Identify Risks & Open Questions
+### 8. Identify Risks & Open Questions
 
 Flag anything that could go wrong or that you're uncertain about:
 - Technology choices that depend on unconfirmed requirements

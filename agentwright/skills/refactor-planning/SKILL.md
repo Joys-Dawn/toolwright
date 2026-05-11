@@ -60,7 +60,21 @@ Classify each as:
 - **Should verify** — might be affected, needs checking
 - **Safe** — unaffected
 
-### 4. Sequence the Transformations
+### 4. Verify External Contracts (mandatory)
+
+If the target state changes how this code interacts with any external contract — third-party API, SDK call, public library function, network protocol, file format, or anything outside this repository — verify current correct usage before sequencing the refactor. Training knowledge is not sufficient: a refactor that "modernizes" usage of an external contract incorrectly produces a regression dressed up as cleanup.
+
+For each external contract the new structure interacts with, use the most authoritative source available, in this priority order:
+
+1. **`mcp__context7__`** for library / framework docs.
+2. **Service-specific MCP** if one exists (Supabase, Vercel, etc.).
+3. **`WebFetch`** on the official documentation URL.
+4. **`agentwright:research`** (via the Skill tool) for synthesis questions.
+5. **`WebSearch`** as a last resort.
+
+Bake verified usage into the target state: exact function signatures, parameter names, response shapes, version constraints, error semantics. Cite the source alongside each verified claim. If verification is impossible, flag the item in Risks — never guess. This is especially important for refactors that change library versions or migrate from one API to another (callback → async, REST → GraphQL, etc.) — the migration target's contract must be verified, not assumed.
+
+### 5. Sequence the Transformations
 
 Order changes so the code **stays working after every step**. Each step should be independently committable and testable.
 
@@ -73,7 +87,7 @@ Prefer this ordering:
 
 If a step can't be done without temporarily breaking something, note exactly what breaks and for how long.
 
-### 5. Define Verification
+### 6. Define Verification
 
 For each step, specify how to confirm behavior is preserved:
 
