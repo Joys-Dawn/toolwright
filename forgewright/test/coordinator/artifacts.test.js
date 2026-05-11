@@ -3,7 +3,7 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { parseProduces, consumesStem } = require('../../coordinator/artifacts');
+const { parseProduces, consumesStem, consumesStems } = require('../../coordinator/artifacts');
 
 describe('artifacts.parseProduces', () => {
   test('returns null for missing or empty input', () => {
@@ -100,5 +100,50 @@ describe('artifacts.consumesStem', () => {
 
   test('returns null for non-string input (no map shape on consumes)', () => {
     assert.equal(consumesStem({ plan: 'plan.md' }), null);
+  });
+});
+
+describe('artifacts.consumesStems', () => {
+  // The shared array-aware helper that every phase type now uses. Tests cover
+  // the three accepted shapes and the throw paths config-validation relies on.
+  test('null / undefined input → []', () => {
+    assert.deepEqual(consumesStems(null), []);
+    assert.deepEqual(consumesStems(undefined), []);
+  });
+
+  test('single string yields a one-element stems array', () => {
+    assert.deepEqual(consumesStems('plan'), ['plan']);
+    assert.deepEqual(consumesStems('plan.md'), ['plan']);
+  });
+
+  test('empty string yields []', () => {
+    assert.deepEqual(consumesStems(''), []);
+  });
+
+  test('array of strings preserves order and strips extensions', () => {
+    assert.deepEqual(
+      consumesStems(['research', 'plan.md', 'metrics.json']),
+      ['research', 'plan', 'metrics']
+    );
+  });
+
+  test('array preserves duplicate stems — callers decide whether to de-dupe', () => {
+    // Future use case: a phase that wants to read two artifacts with the same
+    // stem but different paths (unlikely but legal). De-duping here would hide
+    // a config bug; leave that judgment to the caller.
+    assert.deepEqual(consumesStems(['plan', 'plan.md']), ['plan', 'plan']);
+  });
+
+  test('throws on array entries that are not non-empty strings', () => {
+    assert.throws(() => consumesStems(['plan', 42]), /array entry must be a non-empty string/);
+    assert.throws(() => consumesStems(['plan', '']), /array entry must be a non-empty string/);
+    assert.throws(() => consumesStems(['plan', null]), /array entry must be a non-empty string/);
+  });
+
+  test('throws on unsupported top-level shapes (object map, number)', () => {
+    // Object maps are valid for `produces` but not for `consumes` — keep them
+    // out so authors don't get half-working multi-consume mixed with stem-map.
+    assert.throws(() => consumesStems({ plan: 'plan.md' }), /must be a string or an array/);
+    assert.throws(() => consumesStems(42), /must be a string or an array/);
   });
 });

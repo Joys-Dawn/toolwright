@@ -66,8 +66,8 @@ function parseProduces(produces) {
 }
 
 /**
- * Stem of a `consumes` value. Consumes is always a string (no map form yet —
- * downstream phases reach for one named entry from the registry).
+ * Stem of a single `consumes` value (string form only). Returns null for any
+ * non-string / empty input. Use `consumesStems` for the array-aware form.
  */
 function consumesStem(consumes) {
   if (typeof consumes !== 'string' || !consumes) return null;
@@ -76,4 +76,35 @@ function consumesStem(consumes) {
   return parsed.entries[0].stem;
 }
 
-module.exports = { parseProduces, consumesStem };
+/**
+ * Normalizes a `consumes` value to an array of stems. Accepted forms:
+ *   - string ("plan")          → [stem]
+ *   - string with ext ("plan.md") → [stem]
+ *   - array of strings         → one stem per entry, in order, duplicates preserved
+ *   - null / undefined         → []
+ *
+ * Throws if the input shape is unsupported (number, object map, array with
+ * non-string entries) so callers fail loudly at config-load / descriptor-build
+ * time instead of silently dropping entries.
+ */
+function consumesStems(consumes) {
+  if (consumes == null) return [];
+  if (typeof consumes === 'string') {
+    const stem = consumesStem(consumes);
+    return stem ? [stem] : [];
+  }
+  if (Array.isArray(consumes)) {
+    const stems = [];
+    for (const entry of consumes) {
+      if (typeof entry !== 'string' || !entry) {
+        throw new Error('Every "consumes" array entry must be a non-empty string.');
+      }
+      const stem = consumesStem(entry);
+      if (stem) stems.push(stem);
+    }
+    return stems;
+  }
+  throw new Error('"consumes" must be a string or an array of strings.');
+}
+
+module.exports = { parseProduces, consumesStem, consumesStems };

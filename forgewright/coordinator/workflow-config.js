@@ -118,25 +118,30 @@ function validateWorkflowDefinition(name, def) {
     if (phase.type === 'pipeline' && typeof phase.pipelineName !== 'string') {
       throw new Error(`Workflow "${name}" phase ${i} (pipeline) requires a "pipelineName".`);
     }
-    if (phase.type === 'command') {
-      if (typeof phase.command !== 'string') {
-        throw new Error(`Workflow "${name}" phase ${i} (command) requires a "command".`);
-      }
-      if (phase.consumes != null) {
-        const isString = typeof phase.consumes === 'string' && phase.consumes.length > 0;
-        const isArrayOfStrings = Array.isArray(phase.consumes)
-          && phase.consumes.length > 0
-          && phase.consumes.every(s => typeof s === 'string' && s.length > 0);
-        if (!isString && !isArrayOfStrings) {
-          throw new Error(
-            `Workflow "${name}" phase ${i} (command) "consumes" must be a non-empty string or an array of non-empty strings.`
-          );
-        }
+    if (phase.type === 'command' && typeof phase.command !== 'string') {
+      throw new Error(`Workflow "${name}" phase ${i} (command) requires a "command".`);
+    }
+    // Universal consumes shape: non-empty string OR array of non-empty strings.
+    // All phase types that read upstream artifacts (skill, command, handoff)
+    // share the same accepted forms — a single stem or a list of stems to look
+    // up in the artifact registry.
+    if (phase.consumes != null) {
+      const isString = typeof phase.consumes === 'string' && phase.consumes.length > 0;
+      const isArrayOfStrings = Array.isArray(phase.consumes)
+        && phase.consumes.length > 0
+        && phase.consumes.every(s => typeof s === 'string' && s.length > 0);
+      if (!isString && !isArrayOfStrings) {
+        throw new Error(
+          `Workflow "${name}" phase ${i} (${phase.type}) "consumes" must be a non-empty string or an array of non-empty strings.`
+        );
       }
     }
     if (phase.type === 'handoff') {
       const hasDirective = typeof phase.directive === 'string' && phase.directive.trim().length > 0;
-      const hasConsumes = typeof phase.consumes === 'string' && phase.consumes.length > 0;
+      const hasConsumes = phase.consumes != null
+        && (typeof phase.consumes === 'string'
+          ? phase.consumes.length > 0
+          : Array.isArray(phase.consumes) && phase.consumes.length > 0);
       if (!hasDirective && !hasConsumes) {
         throw new Error(`Workflow "${name}" phase ${i} (handoff) requires "directive" or "consumes" (or both).`);
       }

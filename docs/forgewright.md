@@ -2,7 +2,7 @@
 
 > Multi-agent workflow orchestrator. One Claude Code session is the **leader** that plans, drives audit pipelines, verifies, and talks to you. Other sessions are **peers** that pick up implementation handoffs. `/forgewright:workflow-run feature "..."` strings plan → plan-quality-review → checkpoint → handoff(implement) → verify-plan → audit pipeline → tests → update-docs into one resumable orchestration.
 
-**Version**: 0.1.1 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/forgewright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/forgewright/README.md)
+**Version**: 0.1.2 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/forgewright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/forgewright/README.md)
 
 ## Install
 

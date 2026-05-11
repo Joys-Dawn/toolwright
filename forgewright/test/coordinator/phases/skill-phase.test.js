@@ -38,6 +38,25 @@ describe('skill-phase', () => {
         /requires a "skillId"/);
     });
 
+    test('forwards array-form consumes through the descriptor', () => {
+      // Multi-consume: a skill phase can declare `consumes: ["research", "peer-opinions"]`
+      // and the descriptor must preserve the raw array. Downstream callers
+      // (workflow-lifecycle's consumeStemsOf, handoff dispatch) read the
+      // array directly — the rendered instruction is LLM-facing docs that
+      // we don't pin via regex, per the prompt-content-not-behavior rule.
+      const phase = {
+        name: 'plan',
+        index: 1,
+        type: 'skill',
+        skillId: 'agentwright:project-planning',
+        consumes: ['research', 'peer-opinions'],
+      };
+      const d = skillPhase.buildDescriptor(phase, SAMPLE_WORKFLOW);
+      assert.deepEqual(d.consumes, ['research', 'peer-opinions']);
+      assert.equal(typeof d.instruction, 'string');
+      assert.ok(d.instruction.length > 0);
+    });
+
     test('forwards produces and consumes through the descriptor (consumed by downstream phases)', () => {
       // The descriptor fields ARE the contract — workflow-lifecycle, handoff
       // dispatch, and validateResult all read `produces`/`consumes` directly,

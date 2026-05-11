@@ -246,6 +246,57 @@ describe('workflow-config', () => {
       }), /requires "directive" or "consumes"/);
     });
 
+    test('accepts handoff phase with consumes as an array of stems', () => {
+      // Multi-consume parity with command — the same shapes are valid every
+      // phase type that reads upstream artifacts. Catches authors who write
+      // `consumes: ["research", "peer-opinions"]` on a handoff and previously
+      // got a config-load rejection because handoff hardcoded "string-only".
+      assert.doesNotThrow(() => validateWorkflowDefinition('w', {
+        phases: [{
+          name: 'p',
+          type: 'handoff',
+          directive: 'do it',
+          consumes: ['research', 'peer-opinions'],
+        }],
+      }));
+    });
+
+    test('rejects handoff phase with empty consumes array and no directive', () => {
+      // [] is the same as "no consumes" for the directive-or-consumes check;
+      // without a directive there's literally nothing for the handoff to do.
+      assert.throws(() => validateWorkflowDefinition('w', {
+        phases: [{ name: 'p', type: 'handoff', consumes: [] }],
+      }), /"consumes" must be a non-empty string or an array of non-empty strings/);
+    });
+
+    test('accepts skill phase with consumes as an array of stems', () => {
+      // The actual driving use case (idea-exploration's plan phase consumes
+      // both "research" and "peer-opinions"). Was previously dropped silently
+      // because skill phases had no consumes shape validation at all.
+      assert.doesNotThrow(() => validateWorkflowDefinition('w', {
+        phases: [{
+          name: 'plan',
+          type: 'skill',
+          skillId: 'agentwright:project-planning',
+          consumes: ['research', 'peer-opinions'],
+        }],
+      }));
+    });
+
+    test('rejects skill phase whose consumes is an object map', () => {
+      // Object map is valid for produces (per-stem filenames) but not for
+      // consumes — there's no per-stem extra info to carry, and accepting
+      // the shape would create two ways to do the same thing.
+      assert.throws(() => validateWorkflowDefinition('w', {
+        phases: [{
+          name: 'plan',
+          type: 'skill',
+          skillId: 'agentwright:project-planning',
+          consumes: { plan: 'plan.md' },
+        }],
+      }), /"consumes" must be a non-empty string or an array of non-empty strings/);
+    });
+
     test('rejects fanout phase type (removed)', () => {
       assert.throws(() => validateWorkflowDefinition('w', {
         phases: [{ name: 'p', type: 'fanout', consumes: 'tasks' }],

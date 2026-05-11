@@ -137,6 +137,104 @@ describe('handoff-phase', () => {
     });
   });
 
+  describe('buildDescriptor — array-form consumes', () => {
+    test('accepts an array of stems and presetItemCount stays null (leader decomposes)', () => {
+      // Multi-consume on handoff: when a phase declares consumes as an array,
+      // the leader is presented every upstream artifact and decomposes the
+      // directive itself. There is no single "items list" to preset because
+      // it's no longer obvious which artifact would supply items.
+      const cwd = tmpDir();
+      try {
+        const wf = SAMPLE_WORKFLOW({
+          research: 'artifacts/research.md',
+          'peer-opinions': 'artifacts/peer-opinions.md',
+        });
+        const wfDir = path.join(cwd, '.claude', 'forgewright', 'workflows', wf.workflowId, 'artifacts');
+        fs.mkdirSync(wfDir, { recursive: true });
+        fs.writeFileSync(path.join(wfDir, 'research.md'), '# Research', 'utf8');
+        fs.writeFileSync(path.join(wfDir, 'peer-opinions.md'), '# Opinions', 'utf8');
+        const d = handoffPhase.buildDescriptor(
+          {
+            name: 'multi-consume',
+            index: 4,
+            type: 'handoff',
+            directive: 'inform the dispatch with both upstream artifacts',
+            consumes: ['research', 'peer-opinions'],
+          },
+          wf,
+          { cwd },
+        );
+        assert.deepEqual(d.consumes, ['research', 'peer-opinions']);
+        assert.equal(d.presetItemCount, null);
+      } finally {
+        fs.rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
+    test('throws when one of the array entries names an unregistered artifact', () => {
+      // Same upstream-contract-break enforcement the single-string path
+      // already has — every named stem must have an artifact registered AND
+      // present on disk. Surface loudly so the leader doesn't dispatch with
+      // a phantom upstream.
+      const cwd = tmpDir();
+      try {
+        const wf = SAMPLE_WORKFLOW({ research: 'artifacts/research.md' });
+        const wfDir = path.join(cwd, '.claude', 'forgewright', 'workflows', wf.workflowId, 'artifacts');
+        fs.mkdirSync(wfDir, { recursive: true });
+        fs.writeFileSync(path.join(wfDir, 'research.md'), '# Research', 'utf8');
+        // "peer-opinions" is NOT in artifacts — should throw.
+        assert.throws(
+          () => handoffPhase.buildDescriptor(
+            { name: 'multi-consume', index: 4, type: 'handoff', directive: 'd', consumes: ['research', 'peer-opinions'] },
+            wf,
+            { cwd },
+          ),
+          /artifact "peer-opinions" was never recorded/,
+        );
+      } finally {
+        fs.rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
+    test('throws when one array entry is registered but the file is missing on disk', () => {
+      const cwd = tmpDir();
+      try {
+        const wf = SAMPLE_WORKFLOW({
+          research: 'artifacts/research.md',
+          'peer-opinions': 'artifacts/peer-opinions.md',
+        });
+        const wfDir = path.join(cwd, '.claude', 'forgewright', 'workflows', wf.workflowId, 'artifacts');
+        fs.mkdirSync(wfDir, { recursive: true });
+        fs.writeFileSync(path.join(wfDir, 'research.md'), '# Research', 'utf8');
+        // peer-opinions.md is missing on disk.
+        assert.throws(
+          () => handoffPhase.buildDescriptor(
+            { name: 'multi-consume', index: 4, type: 'handoff', directive: 'd', consumes: ['research', 'peer-opinions'] },
+            wf,
+            { cwd },
+          ),
+          /the file is missing on disk/,
+        );
+      } finally {
+        fs.rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
+    test('directive-only handoff with empty consumes array is rejected', () => {
+      // [] should not satisfy the "directive or consumes" requirement — empty
+      // means "no consumes" and we'd want the workflow author to either drop
+      // the field or list real stems.
+      assert.throws(
+        () => handoffPhase.buildDescriptor(
+          { name: 'h', index: 0, type: 'handoff', consumes: [] },
+          SAMPLE_WORKFLOW(),
+          { cwd: tmpDir() }
+        ),
+        /requires "directive" or "consumes"/,
+      );
+    });
+  });
+
   describe('buildInstruction — challenge protocol', () => {
     // The leader instruction must carry both sides of the peer-↔-leader
     // challenge contract. Peers learn how to formally request a challenge

@@ -12,7 +12,7 @@ const {
   handleReauditDecision,
   buildReplayPipelinePhase,
 } = require('./reaudit-applier');
-const { parseProduces, consumesStem } = require('./artifacts');
+const { parseProduces, consumesStems } = require('./artifacts');
 
 const PHASE_HANDLERS = {
   [skillPhase.TYPE]: skillPhase,
@@ -308,22 +308,21 @@ async function resetPhaseForRerun(cwd, workflowId, phaseIndex) {
 }
 
 /**
- * Returns the artifact stems a phase consumes. Handles both string (skill,
- * handoff) and array-of-strings (command) shapes. Returns [] when there is
- * no consumes, or when no entry resolves to a valid stem.
+ * Returns the artifact stems a phase consumes. Delegates to the shared
+ * `consumesStems` helper so every phase type (skill, handoff, command)
+ * uses the same string-or-array normalization. Returns [] when consumes
+ * is absent or unparseable.
  */
 function consumeStemsOf(phase) {
   if (!phase || !phase.consumes) return [];
-  if (typeof phase.consumes === 'string') {
-    const stem = consumesStem(phase.consumes);
-    return stem ? [stem] : [];
+  try {
+    return consumesStems(phase.consumes);
+  } catch {
+    // Defensive: config validation has already rejected malformed consumes
+    // by the time we get here, so the throw is only reachable via direct
+    // calls from outside the lifecycle path. Treat as "no recognizable stems".
+    return [];
   }
-  if (Array.isArray(phase.consumes)) {
-    return phase.consumes
-      .map(item => (typeof item === 'string' ? consumesStem(item) : null))
-      .filter(Boolean);
-  }
-  return [];
 }
 
 /**

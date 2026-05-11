@@ -1,6 +1,6 @@
 'use strict';
 
-const { parseProduces } = require('../artifacts');
+const { parseProduces, consumesStems } = require('../artifacts');
 
 const TYPE = 'skill';
 
@@ -40,12 +40,32 @@ function defaultInstruction(phase) {
     `Invoke the "${phase.skillId}" skill via the Skill tool.`,
   ];
   if (phase.consumes) {
-    const parsedConsumes = parseProduces(phase.consumes);
-    const consumeEntry = parsedConsumes && parsedConsumes.kind === 'single' ? parsedConsumes.entries[0] : null;
-    const consumeFilename = consumeEntry && consumeEntry.hasExtension
-      ? `artifacts/${consumeEntry.filename}`
-      : `artifacts/${phase.consumes}.{md,json}`;
-    lines.push(`This phase consumes the "${consumeEntry ? consumeEntry.stem : phase.consumes}" artifact — read it from ${consumeFilename} under the workflow directory before invoking the skill.`);
+    // Multi-consume support: skill phases can declare consumes as either a
+    // single string ("plan") or an array of stems (["research", "peer-opinions"]).
+    // For the single-string case we keep the existing wording so the legacy
+    // tests / instructions are stable; for arrays we emit one bullet per stem.
+    const isArray = Array.isArray(phase.consumes);
+    const stems = consumesStems(phase.consumes);
+    if (!isArray) {
+      // phase.consumes is a string here; preserve the original phrasing.
+      const parsedConsumes = parseProduces(phase.consumes);
+      const consumeEntry = parsedConsumes && parsedConsumes.kind === 'single' ? parsedConsumes.entries[0] : null;
+      const consumeFilename = consumeEntry && consumeEntry.hasExtension
+        ? `artifacts/${consumeEntry.filename}`
+        : `artifacts/${phase.consumes}.{md,json}`;
+      lines.push(`This phase consumes the "${consumeEntry ? consumeEntry.stem : phase.consumes}" artifact — read it from ${consumeFilename} under the workflow directory before invoking the skill.`);
+    } else {
+      const fileBullets = phase.consumes.map((entry) => {
+        const parsed = parseProduces(entry);
+        const entryEntry = parsed && parsed.kind === 'single' ? parsed.entries[0] : null;
+        const filename = entryEntry && entryEntry.hasExtension
+          ? `artifacts/${entryEntry.filename}`
+          : `artifacts/${entry}.{md,json}`;
+        const stem = entryEntry ? entryEntry.stem : entry;
+        return `  - "${stem}" → ${filename}`;
+      }).join('\n');
+      lines.push(`This phase consumes ${stems.length} upstream artifacts — read all of them from under the workflow directory before invoking the skill:\n${fileBullets}`);
+    }
   }
   if (phase.produces) {
     const parsedProduces = parseProduces(phase.produces);

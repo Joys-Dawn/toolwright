@@ -381,7 +381,7 @@ describe('command-phase', () => {
           };
           assert.throws(
             () => commandPhase.buildDescriptor(phase, workflow, { cwd }),
-            /every "consumes" entry must be a non-empty string/,
+            /"consumes" array entry must be a non-empty string/i,
           );
         } finally {
           fs.rmSync(cwd, { recursive: true, force: true });

@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { artifactsDir, workflowDir } = require('../paths');
 const { validateCommandResult } = require('../wrightward-contract');
-const { parseProduces } = require('../artifacts');
+const { parseProduces, consumesStems } = require('../artifacts');
 
 const TYPE = 'command';
 const TEST_CMD_PLACEHOLDER = '${TEST_CMD}';
@@ -98,27 +98,17 @@ function resolveArtifactByStem(cwd, workflow, stem, phaseIndex) {
   return path.relative(cwd, abs).split(path.sep).join('/');
 }
 
-function normalizeConsumes(consumes, phaseIndex) {
-  if (consumes == null) return [];
-  if (typeof consumes === 'string') {
-    if (!consumes) return [];
-    return [consumes];
-  }
-  if (Array.isArray(consumes)) {
-    const out = [];
-    for (const item of consumes) {
-      if (typeof item !== 'string' || !item) {
-        throw new Error(`Command phase ${phaseIndex}: every "consumes" entry must be a non-empty string.`);
-      }
-      out.push(item);
-    }
-    return out;
-  }
-  throw new Error(`Command phase ${phaseIndex}: "consumes" must be a string or an array of strings.`);
-}
-
 function resolveConsumedArtifacts(cwd, workflow, phase) {
-  const stems = normalizeConsumes(phase.consumes, phase.index);
+  // consumesStems normalizes "plan", "plan.md", and ["plan", "metrics.json"]
+  // all to the stem array the artifact registry expects. The throw path is
+  // tagged with the phase index so config / descriptor-build errors are easy
+  // to trace back to a specific workflow position.
+  let stems;
+  try {
+    stems = consumesStems(phase.consumes);
+  } catch (err) {
+    throw new Error(`Command phase ${phase.index}: ${err.message}`);
+  }
   return stems.map(stem => ({ stem, path: resolveArtifactByStem(cwd, workflow, stem, phase.index) }));
 }
 
@@ -309,5 +299,4 @@ module.exports = {
   resolveArtifactPaths,
   resolveArtifactByStem,
   resolveConsumedArtifacts,
-  normalizeConsumes,
 };

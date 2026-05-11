@@ -5,7 +5,7 @@ const path = require('path');
 const { appendJsonLine, readJson } = require('../io');
 const { workflowDir } = require('../paths');
 const { validateHandoffBatchResult } = require('../wrightward-contract');
-const { consumesStem } = require('../artifacts');
+const { consumesStem, consumesStems } = require('../artifacts');
 
 const TYPE = 'handoff';
 
@@ -29,6 +29,30 @@ const TYPE = 'handoff';
 function readConsumedItems(cwd, workflow, phase) {
   const consumes = phase.consumes;
   if (!consumes) return null; // null signals "no preset items — leader decomposes"
+  // Multi-consume: when consumes is an array the leader has more than one
+  // upstream artifact to consider, and there's no single "items list" to
+  // preset for dispatch. We still verify every listed artifact exists (so
+  // an upstream contract break fails loudly) but return null so the leader
+  // decomposes the directive itself, the same as the no-consumes path.
+  if (Array.isArray(consumes)) {
+    const wfDir = workflowDir(cwd, workflow.workflowId);
+    for (const entry of consumes) {
+      const stem = consumesStem(entry);
+      const artifactRel = workflow.artifacts ? workflow.artifacts[stem] : null;
+      if (!artifactRel) {
+        throw new Error(
+          `Handoff phase ${phase.index}: artifact "${entry}" was never recorded by an upstream phase.`
+        );
+      }
+      const artifactAbs = path.isAbsolute(artifactRel) ? artifactRel : path.join(wfDir, artifactRel);
+      if (!fs.existsSync(artifactAbs)) {
+        throw new Error(
+          `Handoff phase ${phase.index}: artifact "${entry}" recorded at ${artifactRel} but the file is missing on disk.`
+        );
+      }
+    }
+    return null;
+  }
   // Consumes can be "plan" or "plan.md"; the registry stores by stem.
   const stem = consumesStem(consumes);
   // If consumes is set, the producing phase must have completed and registered
@@ -60,9 +84,16 @@ function readConsumedItems(cwd, workflow, phase) {
 
 function buildHeader(phase, workflow, items) {
   const directive = (phase.directive || '').trim();
-  const consumesLine = phase.consumes
-    ? `Items to dispatch live in the "${phase.consumes}" artifact (under .claude/forgewright/workflows/${workflow.workflowId}/). Each item should already name its scope.`
-    : `No preset item list. You decompose the directive into independent subtasks based on the plan and current state.`;
+  const wfRel = `.claude/forgewright/workflows/${workflow.workflowId}/`;
+  let consumesLine;
+  if (Array.isArray(phase.consumes)) {
+    const stems = consumesStems(phase.consumes);
+    consumesLine = `Upstream artifacts available under ${wfRel}: ${stems.map(s => `"${s}"`).join(', ')}. Read whichever ones inform your decomposition.`;
+  } else if (phase.consumes) {
+    consumesLine = `Items to dispatch live in the "${phase.consumes}" artifact (under ${wfRel}). Each item should already name its scope.`;
+  } else {
+    consumesLine = `No preset item list. You decompose the directive into independent subtasks based on the plan and current state.`;
+  }
   const itemsHint = items === null
     ? '(decomposition is up to you — read the plan, decide whether to split)'
     : `(${items.length} item${items.length === 1 ? '' : 's'} preset by the producing skill)`;
@@ -87,9 +118,15 @@ function buildStep1Survey() {
 }
 
 function buildStep2Decompose(phase) {
-  const decomposeLine = phase.consumes
-    ? `  Read the "${phase.consumes}" artifact. Treat each item as one task. If items don't name a skill or scope, infer from the plan/context.`
-    : `  Read the plan + relevant context. Break the directive into INDEPENDENT subtasks (each with disjoint file scope). If the work is small, leave it as a single task — don't over-decompose.`;
+  let decomposeLine;
+  if (Array.isArray(phase.consumes)) {
+    const stems = consumesStems(phase.consumes);
+    decomposeLine = `  Read every upstream artifact listed above (${stems.map(s => `"${s}"`).join(', ')}). Break the directive into INDEPENDENT subtasks (each with disjoint file scope), informed by all of them. Don't over-decompose small work.`;
+  } else if (phase.consumes) {
+    decomposeLine = `  Read the "${phase.consumes}" artifact. Treat each item as one task. If items don't name a skill or scope, infer from the plan/context.`;
+  } else {
+    decomposeLine = `  Read the plan + relevant context. Break the directive into INDEPENDENT subtasks (each with disjoint file scope). If the work is small, leave it as a single task — don't over-decompose.`;
+  }
   return [
     `Step 2 — decompose`,
     decomposeLine,
@@ -215,7 +252,10 @@ function buildInstruction(phase, workflow, items) {
 
 function buildDescriptor(phase, workflow, ctx = {}) {
   const hasDirective = typeof phase.directive === 'string' && phase.directive.trim().length > 0;
-  const hasConsumes = typeof phase.consumes === 'string' && phase.consumes.length > 0;
+  const hasConsumes = phase.consumes != null
+    && (typeof phase.consumes === 'string'
+      ? phase.consumes.length > 0
+      : Array.isArray(phase.consumes) && phase.consumes.length > 0);
   if (!hasDirective && !hasConsumes) {
     throw new Error(`Handoff phase ${phase.index} requires "directive" or "consumes" (or both).`);
   }
