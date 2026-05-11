@@ -60,7 +60,12 @@ Workflow:
    - `"error"` — a stage audit may have failed. Before treating the run as broken, run `node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js status <runId>` to confirm — a coordinator-level error (wrong cwd, bad args, unknown finding-id) is not the same as a stage audit failure and is usually recoverable by re-running the same command correctly. Only report the run as crashed if `status` confirms a stage is in a failed state.
    - `"done"` — pipeline complete. Proceed to step 4.
 
-4. If any fixes were applied, dispatch the `agentwright:verifier` subagent with a summary of every fix (finding ID, description, files changed, what was done). Tell the verifier to compare against the group-0 snapshot directory (its path is in `group-0-snapshot.json` under the run directory) rather than using `git diff`, so it only sees audit-introduced changes. Do not blindly accept verifier claims — re-read cited code yourself and independently confirm any reported issue is real before acting on it. After the verifier completes, clean up the group-0 snapshot:
+4. If any fixes were applied, dispatch the `agentwright:verifier` subagent. **Do not recap the fixes in your prompt** — a recap is error-prone (you can mislabel findings) and unnecessary (the run directory already has the canonical, structured record of every decision). Pass it only:
+   - The run directory: `<cwd>/.claude/audit-runs/<runId>/`
+   - The snapshot directory path (read from `<run-dir>/group-0-snapshot.json` — the `path` field)
+   - The instruction: read `summary.json` and each `stages/<stage>/decisions.json` from the run directory. Every decision with `action: "fixed"` is a claim — verify each one's `filesChanged` against the snapshot. The structured records are the source of truth; the prompt text is not.
+
+   Do not blindly accept verifier claims — re-read cited code yourself and independently confirm any reported issue is real before acting on it. After the verifier completes, clean up the group-0 snapshot:
 `node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js cleanup-snapshot --run <runId> --group 0`
 
 **Optional — only if the caller asked for delta stats** (e.g., a forgewright pipeline phase deciding whether to re-audit): invoke `/agentwright:check-deltas` **via the Skill tool** with `<runId>` as the argument, BEFORE `cleanup-snapshot`. Going through the Skill tool is what runs the skill's preprocessing block — a bare mid-prompt `/agentwright:check-deltas` reference will NOT auto-execute it. The skill emits a JSON object with `totalAdded`/`totalDeleted`/`totalDiffLines`/`totalLoc`/`ratio`/`changedFiles` (excluding `.gitignore`'d paths and the standard exclude list). The snapshot must still exist on disk when `check-deltas` runs.

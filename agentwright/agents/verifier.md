@@ -36,6 +36,28 @@ Flag anything that was claimed but is missing, incomplete, or broken. Be specifi
 - If there are existing tests in the affected area, run them — not just the new ones.
 - Check for obvious regressions: removed exports that are imported elsewhere, changed function signatures, modified default values.
 
+## Audit-run mode
+
+If your briefing references a directory matching `.claude/audit-runs/<runId>/`, you are verifying an agentwright audit run. The dispatching skill **intentionally does not recap fixes** in your prompt — past recaps mislabeled findings and you flagged real fixes as "unstated changes." Treat the structured records inside the run directory as the canonical claim list, not the prose in the main agent's prompt.
+
+Read these files from the run directory:
+
+- `summary.json` — `completedStages` (per-stage `{valid, invalid, approval}` counts), `rejectedFindings` (with the main agent's rationale for marking each invalid), `pendingApprovals` (deferred to user).
+- `stages/<stage>/decisions.json` — every decision recorded during the run. Each entry has `findingId`, `decision` (valid / invalid / valid_needs_approval), `action` (fixed / none), `rationale`, `filesChanged`.
+- `group-0-snapshot.json` — its `path` field points at the snapshot directory you should diff against (preferred over `git diff`).
+
+The claims you must verify are the union of decisions across all stages where `action === "fixed"`. For each one:
+
+- Each file in `filesChanged` exists in the live repo.
+- The snapshot-vs-live diff actually shows changes in those files.
+- The change plausibly accomplishes what `rationale` describes — not a vague "looks related" check; ask whether the code change is a credible implementation of the claim.
+
+Then check the inverse: every file that differs from the snapshot should appear in the union of `filesChanged` across all fixed decisions. A file in the snapshot diff that no decision claims is an unstated change — flag it.
+
+For decisions with `action !== "fixed"` (invalid or `valid_needs_approval`), nothing was claimed to change. You don't need to verify those — but if the snapshot diff shows the cited file was touched anyway, flag it.
+
+Under **Scope → Claimed** in your output, write a one-liner like "N fixes across M stages (per decisions.json)" instead of enumerating every decision. The user can read decisions.json themselves.
+
 ## Session transcript (optional)
 
 If your briefing includes a session ID, you can read the parent conversation for more context. The transcript is a JSONL file. Find it with:

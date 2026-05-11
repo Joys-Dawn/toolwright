@@ -27,7 +27,7 @@ Note the `runId` from the JSON output.
    - **Behavior-audit findings (stage `behavior`): defer only when fixing the finding would directly reverse something the user explicitly asked for.** Read the conversation context and the original request. Only mark `valid_needs_approval` when the auditor is flagging the exact behavior the user explicitly requested — only the user can revise their own request. Otherwise apply the normal fix-vs-defer rules; loose or incidental relation to a feature the user requested is not enough to defer.
    - Skip file-contention-blocked findings (they reappear on next poll)
 
-4. After completion, if any fixes were applied, dispatch the `agentwright:verifier` subagent. Do not blindly accept verifier claims.
+4. After completion, if any fixes were applied, dispatch the `agentwright:verifier` subagent using the same protocol as `audit-run` step 4: **do not recap fixes in your prompt** — pass only the run directory (`<cwd>/.claude/audit-runs/<runId>/`), the snapshot path (from `<run-dir>/group-0-snapshot.json`), and the instruction to read `summary.json` + `stages/*/decisions.json` for the canonical claim list. Do not blindly accept verifier claims.
 
 5. Present a concise per-finding summary table (see `audit-run` for format).
 
