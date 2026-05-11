@@ -1,4 +1,5 @@
 ---
+name: status
 description: Show ideawright pipeline status and top-ranked ideas
 allowed-tools: Bash(node *)
 ---

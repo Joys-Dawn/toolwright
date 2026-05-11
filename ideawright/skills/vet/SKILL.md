@@ -1,4 +1,5 @@
 ---
+name: vet
 description: Run novelty verification on new ideas
 allowed-tools: Bash(node *)
 ---

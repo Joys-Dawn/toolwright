@@ -1,4 +1,5 @@
 ---
+name: daily
 description: Full pipeline — scan miners, vet novelty, gate feasibility, rank, emit digest
 allowed-tools: Bash(node *)
 ---

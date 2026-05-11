@@ -63,9 +63,9 @@ A daily digest lands in `.claude/ideawright/digests/YYYY-MM-DD.md` listing the t
 
 The deterministic idea `id` is `sha256(lowercase(trim(title)) + "|" + lowercase(trim(target_user)))`, so the same idea synthesized from different sources deduplicates automatically.
 
-## Commands
+## Skills
 
-| Command | What it does |
+| Skill | What it does |
 |---|---|
 | `/ideawright:daily` | Full pipeline: `scan` + `vet` + feasibility gate + ranker + digest. |
 | `/ideawright:scan` | Run the miners only. Each observation is LLM-classified; valid ideas land as `status='new'`. |

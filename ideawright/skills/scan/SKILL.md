@@ -1,4 +1,5 @@
 ---
+name: scan
 description: Run signal miners (Reddit, HN, GitHub + arXiv, bioRxiv, PubMed) to populate new ideas
 allowed-tools: Bash(node *)
 ---
