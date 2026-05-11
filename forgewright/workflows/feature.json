@@ -1,0 +1,52 @@
+{
+  "description": "Feature workflow — leader plans, peers implement, leader verifies. Plan, audit-the-plan, checkpoint, peer-handoff(implement), verify-plan, audit pipeline (includes test-coverage; leader writes missing tests in-line via the decision loop), run tests.",
+  "phases": [
+    {
+      "name": "plan",
+      "type": "skill",
+      "skillId": "agentwright:feature-planning",
+      "produces": "plan.md",
+      "idempotent": false
+    },
+    {
+      "name": "plan-quality-review",
+      "type": "skill",
+      "skillId": "agentwright:plan-quality-review",
+      "consumes": "plan",
+      "idempotent": true
+    },
+    {
+      "name": "plan-review",
+      "type": "checkpoint",
+      "summary": "Plan + plan-quality-review findings ready. User reviews. Resume to dispatch implementation to peers."
+    },
+    {
+      "name": "implement",
+      "type": "handoff",
+      "directive": "Implement the plan in artifacts/plan.md. Decompose into independent tasks (per file scope or per implementation step) and dispatch to available peers. Run any tasks yourself if no peers are available.",
+      "consumes": "plan",
+      "idempotent": false
+    },
+    {
+      "name": "verify",
+      "type": "skill",
+      "skillId": "agentwright:verify-plan",
+      "consumes": "plan",
+      "idempotent": true
+    },
+    {
+      "name": "audit",
+      "type": "pipeline",
+      "pipelineName": "default",
+      "scope": "--diff",
+      "loopable": true,
+      "idempotent": false
+    },
+    {
+      "name": "tests",
+      "type": "command",
+      "command": "${TEST_CMD}",
+      "idempotent": false
+    }
+  ]
+}

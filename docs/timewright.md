@@ -2,7 +2,7 @@
 
 > Single-slot undo for Claude's in-session changes — including Bash-driven mutations (deletions, `sed`/`git` rewrites) that native `/rewind` misses.
 
-**Version**: 1.2.2 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/timewright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/timewright/README.md)
+**Version**: 1.3.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/timewright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/timewright/README.md)
 
 ## Install
 
@@ -15,7 +15,7 @@ Requires Node.js ≥ 18 and a git repository (timewright uses `git worktree add 
 
 ## Using it
 
-Type `/undo` to revert Claude's changes from the last turn.
+Type `/undo` to revert Claude's changes from the last turn, or `/snapshot` to manually capture a snapshot (overwrites the slot — useful when a request comes in via wrightward/Discord and `UserPromptSubmit` never fires).
 
 1. Claude runs `node bin/undo.js --diff` and prints a three-bucket summary:
     - **Modified (will be reverted)** — restored from snapshot.
@@ -40,10 +40,10 @@ Files outside the git repo, global package installs, and side effects of Bash co
 
 ## Snapshot model
 
-- **When**: every `UserPromptSubmit` where a mutating tool fired in the previous turn. Pure Read/Grep/Glob turns skip snapshotting entirely.
+- **When**: every `UserPromptSubmit` where a mutating tool fired in the previous turn. Pure Read/Grep/Glob turns skip snapshotting entirely. The `/snapshot` skill takes an on-demand snapshot for cases where `UserPromptSubmit` doesn't fire (e.g. wrightward/Discord-routed requests arriving between turns).
 - **What**: every tracked file (`git ls-files`) plus every dirty or untracked file in the working tree. Includes uncommitted edits.
 - **Where**: `.claude/timewright/snapshot/` inside the repo root.
-- **Single-slot**: each new prompt replaces the previous snapshot. `/undo` rewinds to the *most recent* snapshot only — no history.
+- **Single-slot**: each new prompt — or each `/snapshot` invocation — replaces the previous snapshot. `/undo` rewinds to the *most recent* snapshot only — no history.
 
 The `UserPromptSubmit` hook recognizes `/undo` and `/timewright:undo` and skips snapshotting on those turns so the existing snapshot stays consumable.
 
@@ -71,14 +71,13 @@ All three hooks fail silently to stderr — they never block a session start, pr
 
 ## CLI
 
-[`bin/undo.js`](https://github.com/Joys-Dawn/toolwright/blob/master/timewright/bin/undo.js):
-
 | Invocation | Behavior |
 |---|---|
 | `node bin/undo.js --diff` | Prints JSON with `modified`, `added`, `removed`, `headDrift`, `counts`, `hasChanges`, `snapshotCreatedAt`. |
 | `node bin/undo.js --apply` | Restores the snapshot. Prints JSON with `ok`, `applied`, and (partial) `errors`. |
+| `node bin/snapshot.js` | Captures a fresh snapshot, overwriting any existing one. Prints JSON with `ok`, `createdAt`, `realRepoHead`, `unbornHead`, `dirtyFileCount`. |
 
-The `/undo` command invokes both via the Bash tool (not `!` preprocessing) so you confirm between `--diff` and `--apply`.
+The `/undo` skill invokes the undo CLI via the Bash tool so the user can confirm between `--diff` and `--apply`. The `/snapshot` skill runs `bin/snapshot.js` directly — no confirmation needed because snapshotting is idempotent.
 
 ## State directory
 

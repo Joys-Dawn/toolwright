@@ -4,3 +4,7 @@ Copyright 2026 Joy's Dawn Solutions LLC
 This product includes the following independently distributable components:
   - agentwright: Automated code auditing plugin for Claude Code
   - wrightward: Multi-agent coordination plugin for Claude Code
+  - timewright: In-session undo plugin for Claude Code
+  - ideawright: Novel product-idea miner plugin for Claude Code
+  - gripewright: Agent-failure capture plugin for Claude Code
+  - forgewright: Multi-agent workflow orchestrator plugin for Claude Code

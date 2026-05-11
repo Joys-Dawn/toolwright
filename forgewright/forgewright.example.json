@@ -1,0 +1,93 @@
+{
+  "_comment": "Example custom workflow shape. Built-in workflows (feature, bug-fix, refactor) live in forgewright/workflows/*.json and are used as-is when not overridden here. Define a workflow under a NEW name to add it; redefining a built-in name (e.g. \"feature\") overrides the built-in entirely — be intentional about that. Every phase requires a `name` field — non-empty, identifier-safe ([A-Za-z][A-Za-z0-9_-]*), unique within the workflow. Names appear in logs, status output, peer task_ref strings, and idempotence prompts; pick something readable.",
+  "workflows": {
+    "solo-feature": {
+      "_comment": "Single-agent variant of the feature workflow — no peer handoffs. Useful when you want forgewright's plan→audit→verify→test loop without dispatching implementation to peers. Per-workflow `reaudit` block overrides the top-level reaudit config — every key is overridable (maxCycles, minDeltaPercent, minDeltaLines, decisionMode, loopableStages); missing keys fall through to the top-level defaults. The merged config is frozen onto the workflow at start time so later edits don't retroactively change a running workflow.",
+      "reaudit": {
+        "decisionMode": "leader",
+        "maxCycles": 2
+      },
+      "phases": [
+        { "name": "plan", "type": "skill", "skillId": "agentwright:feature-planning", "produces": "plan.md", "idempotent": false },
+        { "name": "plan-quality-review", "type": "skill", "skillId": "agentwright:plan-quality-review", "consumes": "plan", "idempotent": true },
+        { "name": "plan-review", "type": "checkpoint", "summary": "Review the plan and audit findings, then implement the plan steps locally. Resume when done." },
+        { "name": "verify", "type": "skill", "skillId": "agentwright:verify-plan", "consumes": "plan", "idempotent": true },
+        { "name": "audit", "type": "pipeline", "pipelineName": "default", "scope": "--diff", "loopable": true, "idempotent": false },
+        { "name": "tests", "type": "command", "command": "${TEST_CMD}", "idempotent": false }
+      ]
+    },
+    "quick-feature": {
+      "_comment": "Lean feature workflow with peer handoffs — plan, dispatch implementation to peers, run tests. Skips plan-quality-review, the audit pipeline, and the test-coverage handoff. Use when you want forgewright's planning + peer dispatch but not the full audit/verification loop. Per-workflow `tests.command` overrides the top-level `tests.command` for ${TEST_CMD} substitution — handy when this workflow needs a different test command than the project default (e.g., a fast smoke suite instead of the full integration run).",
+      "tests": {
+        "command": "npm run test:smoke"
+      },
+      "phases": [
+        { "name": "plan", "type": "skill", "skillId": "agentwright:feature-planning", "produces": "plan.md", "idempotent": false },
+        { "name": "plan-review", "type": "checkpoint", "summary": "Review the plan. Resume to dispatch implementation to peers." },
+        {
+          "name": "implement",
+          "type": "handoff",
+          "directive": "Implement the plan in artifacts/plan.md. Decompose into independent tasks (per file scope or per plan step) and dispatch to available peers. Run any tasks yourself if no peers are available.",
+          "consumes": "plan",
+          "idempotent": false
+        },
+        { "name": "tests", "type": "command", "command": "${TEST_CMD}", "idempotent": false }
+      ]
+    },
+    "model-eval": {
+      "_comment": "Example of a non-test `command` phase using the optional `instruction` field together with multi-output `produces`. The script writes several files (metrics + model + log) directly into the artifacts dir using the filenames declared in `produces` — each entry registers under its stem so downstream phases can `consumes` any of them. ${ARTIFACTS} in the command string substitutes to the workflow's artifacts dir. The decision goes into mcpResult `summary` (free-form string — JSON blob is fine).",
+      "phases": [
+        {
+          "name": "train-and-eval",
+          "type": "command",
+          "command": "python scripts/train_and_eval.py --output-dir ${ARTIFACTS}",
+          "produces": {
+            "metrics": "metrics.json",
+            "model": "model.bin",
+            "log": "train.log"
+          },
+          "instruction": "Read the metrics artifact and compare new_model.sharpe to baseline.sharpe. If new_model wins by >=0.05, advance --result completed with summary='{\"decision\":\"accept\",\"delta\":<n>}'. If it loses or is flat, advance --result completed with summary='{\"decision\":\"reject\",\"delta\":<n>}'. If the metrics file is missing or malformed, advance --result failed.",
+          "idempotent": false
+        }
+      ]
+    },
+    "train-then-backtest": {
+      "_comment": "Two command phases chained via consumes + ${ARTIFACT.<stem>} interpolation. Phase 1 writes model.bin to the artifacts dir; phase 2 reads it via ${ARTIFACT.model}. `consumes` declares the dependency so a missing/renamed upstream artifact fails at descriptor-build time (loudly) rather than mid-command. Add as many ${ARTIFACT.<stem>} tokens as you like — each is resolved against the registered path.",
+      "phases": [
+        {
+          "name": "train",
+          "type": "command",
+          "command": "python scripts/train.py --output-dir ${ARTIFACTS}",
+          "produces": { "model": "model.bin" },
+          "idempotent": false
+        },
+        {
+          "name": "backtest",
+          "type": "command",
+          "command": "python scripts/backtest.py --model ${ARTIFACT.model} --output-dir ${ARTIFACTS}",
+          "consumes": ["model"],
+          "produces": { "backtest": "backtest.json" },
+          "instruction": "Read the backtest artifact and report summary='{\"sharpe\":<n>,\"max_dd\":<n>}'. If backtest.json is missing or malformed, advance --result failed.",
+          "idempotent": false
+        }
+      ]
+    }
+  },
+  "reaudit": {
+    "maxCycles": 1,
+    "minDeltaPercent": 5,
+    "minDeltaLines": 0,
+    "decisionMode": "deterministic",
+    "loopableStages": ["correctness", "behavior", "security"]
+  },
+  "agentwright": {
+    "path": null
+  },
+  "tests": {
+    "command": null
+  },
+  "retention": {
+    "keepCompletedWorkflows": 2,
+    "maxWorkflowAgeDays": 7
+  }
+}

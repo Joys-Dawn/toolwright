@@ -2,7 +2,7 @@
 
 > Chained audit pipelines with a spawned auditor and in-session verification. Run `/audit-run` — a headless `claude -p` subprocess audits a frozen snapshot, the current session independently verifies each finding and applies fixes to the live repo.
 
-**Version**: 1.12.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/agentwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/README.md)
+**Version**: 2.1.5 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/agentwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/README.md)
 
 ## Install
 
@@ -34,7 +34,7 @@ Requires Node.js ≥ 18 and `claude` on `PATH` (the auditor subprocess calls it)
 ## How it runs
 
 1. Frozen snapshot of the codebase (`.gitignore`-aware).
-2. `claude -p` subprocess audits the snapshot using a vendored or custom skill.
+2. `claude -p` subprocess audits the snapshot using a vendored or custom skill. The auditor cannot edit files (Edit/Write/NotebookEdit are blocked), but it can load other skills via the `Skill` tool, run linters via `Bash`, and use `WebFetch` / `WebSearch` / MCP tools (e.g. context7) to verify findings against official docs. The wrightward bus is naturally inert in the auditor: register.js skips snapshot cwds, so the MCP server never binds and every bus tool returns an unbound-session error.
 3. Findings stream back as newline-delimited JSON.
 4. The session verifies each finding against the live repo — auditor claims are never blindly trusted.
 5. Objectively correct fixes apply immediately. Judgment calls are marked `valid_needs_approval` and presented after the run.
@@ -45,7 +45,7 @@ Requires Node.js ≥ 18 and `claude` on `PATH` (the auditor subprocess calls it)
 
 ## Commands
 
-All seven live under the plugin's `/` namespace (they're in `commands/`, not skills).
+All seven live under the plugin's `/` namespace as skills (since Claude Code merged the two concepts).
 
 | Command | Args | Purpose |
 |---|---|---|
@@ -57,9 +57,13 @@ All seven live under the plugin's `/` namespace (they're in `commands/`, not ski
 | `/audit-reset` | `[run-id]` | Guided deletion of a run directory. |
 | `/audit-clean` | `[--logs-only]` | Prune retained artifacts per the retention policy. |
 
-## Skills (24)
+## Skills (33)
 
 Auto-discovered from `agentwright/skills/` and invokable as `/agentwright:<name>` or via the `Skill` tool.
+
+### Audit lifecycle skills
+
+The seven slash commands documented in [Commands](#commands) above are skills under `agentwright/skills/audit-*/SKILL.md`. They drive run lifecycle (start, resume, status, stop, reset, clean) and are not part of the pipeline itself.
 
 ### Audit skills (used by the pipeline)
 
@@ -73,6 +77,7 @@ Auto-discovered from `agentwright/skills/` and invokable as `/agentwright:<name>
 | `/agentwright:ui-audit` | WCAG 2.2, WAI-ARIA patterns, touch target sizing, focus management, React/Tailwind anti-patterns. |
 | `/agentwright:behavior-audit` | User-perspective walkthrough — surprising behavior, hostile defaults, cross-feature breaks. Reasons from first principles, not patterns. |
 | `/agentwright:test-coverage-audit` | Maps source files against tests, produces a risk-prioritized list of gaps. |
+| `/agentwright:test-quality-audit` | Routes existing test files to the matching `write-tests-*` skill (pgTAP / Deno / frontend / generic) and audits them in review mode — flaky patterns, weak assertions, over-mocking, isolation issues. Opt-in via `/audit-step test-quality` or the `full` pipeline; not part of the default pipeline. |
 
 ### Planning
 
@@ -90,6 +95,8 @@ Auto-discovered from `agentwright/skills/` and invokable as `/agentwright:<name>
 | `/agentwright:systematic-debugging` | Reproduce, isolate, hypothesize, verify. |
 
 ### Test writing
+
+These four skills are loaded by `/agentwright:test-quality-audit` (one per test domain) when it audits existing tests, and are invoked by the main agent when writing new tests after `/agentwright:test-coverage-audit` flags a gap.
 
 | Skill | Focus |
 |---|---|
@@ -109,6 +116,7 @@ Thin wrappers that invoke the built-in agents — use `/agentwright:<name>` inst
 | `/agentwright:critique [focus]` | party-pooper |
 | `/agentwright:verify [focus]` | verifier |
 | `/agentwright:verify-plan [--plan-path <path>] [--against <ref>]` | plan-verifier |
+| `/agentwright:plan-quality-review <path>` | plan-quality-reviewer |
 | `/agentwright:challenge [claim]` | detective (×2) |
 
 ### Utilities
@@ -117,7 +125,7 @@ Thin wrappers that invoke the built-in agents — use `/agentwright:<name>` inst
 |---|---|
 | `/agentwright:config-init` | Write `.claude/agentwright.json` with every default populated. Pass `--force` to overwrite. |
 
-## Agents (6)
+## Agents (7)
 
 Invokable as `@agent-agentwright:<name>` or via the shortcut skills above.
 
@@ -125,7 +133,8 @@ Invokable as `@agent-agentwright:<name>` or via the shortcut skills above.
 |---|---|---|
 | **detective** | Investigates a hypothesis — traces logic, reads files, runs tests, reports evidence. Backs `/agentwright:challenge`. | Read-only + research MCPs + Bash for tests |
 | **verifier** | Validates applied fixes — implementations exist, tests pass, no unstated changes. Auto-dispatched after audit fixes. | Read-only + Bash for tests |
-| **plan-verifier** | Validates that an approved plan was implemented faithfully. Anchors on three independent sources — plan, implementer's transcript (assistant turns + user directives + tool-use trace, pre-extracted from the session JSONL), and `git diff` — and emits a six-bucket report (`unreported_skips`, `unreported_additions`, `unreported_out_of_scope`, `unreported_missing_tests`, `fabricated_claims`, `acknowledged_deviations`) with a PASS/PARTIAL/FAIL verdict. Backs `/agentwright:verify-plan`. | Read-only |
+| **plan-verifier** | Validates that an approved plan was implemented faithfully. Anchors on three independent sources — plan, implementer's transcript (assistant turns + user directives + tool-use trace), and `git diff` | Read-only |
+| **plan-quality-reviewer** | Reviews a plan document for completeness and design soundness before code is written — impact analysis, test plan, risk coverage, file-list verifiability, scope clarity, plus design soundness | Read-only + research MCPs + Bash |
 | **deep-research** | Web search and literature review. Uses Exa, Context7, AlphaXiv, Scholar Gateway, Hugging Face, PubMed, bioRxiv in parallel. | Read-only |
 | **party-pooper** | Adversarial critique. Parallel counter-evidence searches across academic, web, and docs sources. | Read-only + research MCPs |
 | **update-docs** | Keeps `.md` files in sync with code. Scoped by [`hooks/md-only-edit.js`](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/hooks/md-only-edit.js) to `.md` files only. | `.md` files only |
@@ -142,7 +151,7 @@ Run `/agentwright:config-init` to drop the full default config into your repo �
 {
   "pipelines": {
     "default": ["implementation", "correctness", "best-practices", "behavior", "test-coverage"],
-    "full": ["implementation", "correctness", "security", ["best-practices", "perf"], ["my-checks", "ui"], "behavior", "test-coverage"],
+    "full": ["implementation", "correctness", "security", ["best-practices", "perf"], ["my-checks", "ui"], "behavior", "test-coverage", "test-quality"],
     "quick": ["audit-bundle"]
   },
   "customStages": {
@@ -177,7 +186,12 @@ Custom stages are referenced by their key inside `pipelines` (e.g., `"perf"` in 
 
 `.claude/audit-runs/<run-id>/` holds each run:
 
-- `findings/` — per-finding JSON as it streams from the auditor
-- `logs/` — per-stage auditor subprocess logs
-- `group-<N>-snapshot.json` — path to the frozen snapshot consumed by the verifier
-- Run metadata for `/audit-status` and `/audit-resume`
+- `run.json` — run metadata: scope, pipeline, group/stage state, worker PIDs. Drives `/audit-status` and `/audit-resume`.
+- `summary.json` — post-completion summary: per-stage `{valid, invalid, approval}` counts, `rejectedFindings` (with the session's rationale for each), and `pendingApprovals` (findings deferred to user).
+- `stages/<stage>/` — one folder per stage:
+    - `findings.jsonl` — every finding the auditor emitted, one JSON object per line.
+    - `decisions.json` — every decision the session recorded (`findingId`, `decision`, `action`, `rationale`, `filesChanged`). This is the canonical claim record the verifier reads.
+    - `meta.json` — stage worker state.
+    - `verifier.json` — output from the verifier agent after the stage's group finishes.
+    - `logs/` — auditor subprocess stdout/stderr.
+- `group-<N>-snapshot.json` — points at the frozen on-disk snapshot for group N; consumed by the verifier and by `/agentwright:check-deltas`.

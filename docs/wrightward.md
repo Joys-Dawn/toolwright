@@ -2,7 +2,7 @@
 
 > Multi-agent coordination for Claude Code. When two or more sessions work in the same repo, wrightward blocks conflicting writes, injects awareness context, and gives sessions a peer-to-peer message bus (eight MCP tools) to hand off tasks, watch files, and wake each other. Ships with an optional Discord bridge.
 
-**Version**: 3.10.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/wrightward) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/README.md)
+**Version**: 3.10.4 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/wrightward) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/README.md)
 
 ## Install
 
@@ -45,7 +45,7 @@ Default-on. No setup. Every Edit/Write is auto-tracked.
 Before every tool call:
 
 - Read/Glob/Grep on another agent's file → awareness context injected (who owns it, what they're doing).
-- Write to another agent's file → **blocked**; the agent sees who owns it.
+- Write to another agent's file → **blocked**. The agent sees who owns it; in the same lock, the guard auto-registers the blocked agent's interest in the file AND auto-emits a `blocker` event to the holder. The holder's next inbox surfaces the blocked agent's handle, the file, and a reply hint — `wrightward_send_message audience="<handle>" with whether/when you can free it (or hand off)`. Both sides coordinate automatically — no manual ping required.
 - Write to an unrelated file → proceeds with awareness of other active agents.
 - Solo agent → everything proceeds silently.
 
@@ -73,7 +73,7 @@ All live under `/wrightward:<name>`.
 
 ## Message bus (v3.0)
 
-Sessions hand off work, watch files, and notify each other through `.claude/collab/bus.jsonl` (append-only, length-bounded, self-compacting). Urgent events inject as `additionalContext` on the next tool call.
+Sessions hand off work, watch files, and notify each other through `.claude/collab/bus.jsonl` (append-only, length-bounded, self-compacting). Urgent events are delivered to the recipient's context via the **channel doorbell** (between turns, when channels are enabled — Path 2 below) or as `additionalContext` injected on the recipient's next tool call (Path 1, always-on fallback). Agents that have a known wait time can also call `ScheduleWakeup` to self-pace instead of relying on either delivery path.
 
 ### MCP tools
 
@@ -90,11 +90,13 @@ Sessions hand off work, watch files, and notify each other through `.claude/coll
 
 ### Event types (15)
 
-Nine urgent (auto-inject on next tool call, capped by `BUS_URGENT_INJECTION_CAP`); six non-urgent (persisted, not auto-surfaced).
+Nine urgent (auto-delivered to recipients via channel doorbell + next-tool-call fallback, capped by `BUS_URGENT_INJECTION_CAP`); six non-urgent (persisted, not auto-surfaced).
 
 **Urgent (9):** `handoff`, `file_freed`, `user_message`, `blocker`, `delivery_failed`, `agent_message`, `ack`, `finding`, `decision`.
 
 **Non-urgent (6):** `note`, `interest`, `session_started`, `session_ended`, `context_updated`, `rate_limited`.
+
+`blocker` is **system-emitted only** — there is no agent-callable `kind="blocker"` on `wrightward_send_note`. The guard hook auto-emits one targeted at the file's holder whenever a Write is blocked, under the same lock as the `interest` write. The holder's inbox renders it with the blocked agent's handle, the file, and a `wrightward_send_message` reply hint. Default mirror policy posts it to the holder's Discord thread with `severity: warn`; set `mirrorPolicy.blocker = { action: "silent" }` to keep the bus-level delivery while suppressing the Discord post.
 
 ### Routing
 
@@ -215,6 +217,15 @@ User overrides merge on top. Demote to `silent` via `mirrorPolicy` if noisy.
 | `context_updated` | Renames the sender's thread to match the new task. |
 | `interest`, `delivery_failed`, `rate_limited` | Never mirrored (hard rail — can't be elevated). |
 
+### Approval & question routing
+
+When the Discord bridge is enabled, the session tracks **where your last input came from** (CLI vs Discord) and routes the model's interactive prompts to that side:
+
+- **`AskUserQuestion`** — the model's native interactive question tool. If your last input was a Discord reply, the local dialog is suppressed and the model is told to ask via `wrightward_send_message(audience="user", ...)` instead. If your last input was a CLI prompt, the native dialog renders.
+- **`ExitPlanMode`** (plan approval) — if you last replied via Discord, the plan is posted to your forum thread and the model waits up to 5 minutes for a reply. Accepted approvals: `approve`, `approved`, `yes`, `y`, `ok`, `okay`, `lgtm`, `ship it`, `go`, `proceed`, `👍` (case-insensitive, trailing `!` / `.` OK). Anything else is treated as feedback and denies the plan with your text. A 5-minute timeout denies with a stop-and-wait message — the model waits silently for you to come back instead of re-presenting. If your last input was a CLI prompt, the native plan-approval dialog renders.
+
+The channel toggles automatically: typing in the CLI flips you back to CLI; replying on Discord flips you back to Discord. There's no manual switch. With the Discord bridge disabled, both prompts always render locally.
+
 ### Security model
 
 - `ALLOWED_SENDERS` gates on Discord user ID, not channel membership. Access to the broadcast channel alone doesn't grant inbound rights.
@@ -233,6 +244,9 @@ User overrides merge on top. Demote to `silent` via `mirrorPolicy` if noisy.
 | [`guard.js`](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/hooks/guard.js) | `PreToolUse` (`Edit\|Write\|Read\|Glob\|Grep`) | Blocks conflicting writes; injects awareness context. |
 | [`bash-allow.js`](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/hooks/bash-allow.js) | `PreToolUse` (`Bash`) | Auto-approves wrightward's own script invocations (workaround for claude-code#11932). |
 | [`plan-exit.js`](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/hooks/plan-exit.js) | `PostToolUse` (`ExitPlanMode`) | Reminds the agent to declare files — only when other agents are active. |
+| [`mark-prompt-cli.js`](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/hooks/mark-prompt-cli.js) | `UserPromptSubmit` | Marks the session's last input channel as CLI so subsequent approval/question prompts render locally. |
+| [`ask-user.js`](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/hooks/ask-user.js) | `PreToolUse` (`AskUserQuestion`) | When the user is on Discord, denies the local dialog and redirects the model to `wrightward_send_message(audience="user")`. |
+| [`plan-approve.js`](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/hooks/plan-approve.js) | `PermissionRequest` (`ExitPlanMode`) | When the user is on Discord, posts the plan to their thread and waits up to 5 min for an approval reply or feedback. |
 | [`cleanup.js`](https://github.com/Joys-Dawn/toolwright/blob/master/wrightward/hooks/cleanup.js) | `SessionEnd` | Deregisters, releases claims, emits `session_ended`. |
 
 ## Config
@@ -251,7 +265,7 @@ Run `/wrightward:config-init` to drop the full default config into your repo —
 | `AUTO_TRACKED_FILE_TIMEOUT_MIN` | 2 | How long auto-tracked files are held (from last touch). |
 | `REMINDER_IDLE_MIN` | 5 | Idle threshold for the release reminder. |
 | `INACTIVE_THRESHOLD_MIN` | 6 | Stale-session threshold. |
-| `SESSION_HARD_SCAVENGE_MIN` | 60 | Hard cleanup for dead sessions. |
+| `SESSION_HARD_SCAVENGE_MIN` | 300 | Hard cleanup for dead sessions. |
 | `AUTO_TRACK` | `true` | Auto-create a context when none has been declared. |
 
 ### Bus
@@ -275,7 +289,7 @@ Run `/wrightward:config-init` to drop the full default config into your repo —
 | `discord.ALLOWED_SENDERS` | `[]` | Discord user IDs permitted to route inbound messages. |
 | `discord.POLL_INTERVAL_MS` | 3000 | How often to poll the broadcast channel and each active thread. |
 | `discord.THREAD_RENAME_ON_CONTEXT_UPDATE` | `true` | Whether `/wrightward:collab-context` task changes rename the thread. |
-| `discord.BOT_USER_AGENT` | `DiscordBot (https://github.com/Joys-Dawn/toolwright, 3.10.0)` | Override only with a reason; must start with the literal `DiscordBot` to avoid Cloudflare blocking. |
+| `discord.BOT_USER_AGENT` | `DiscordBot (https://github.com/Joys-Dawn/toolwright, 3.10.4)` | Override only with a reason; must start with the literal `DiscordBot` to avoid Cloudflare blocking. |
 | `discord.mirrorPolicy` | see above | Per-event-type override. |
 
 ### Disable in a repo

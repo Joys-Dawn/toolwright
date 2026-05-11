@@ -56,6 +56,16 @@
       },
       "category": "developer-tools",
       "tags": ["labeling", "agent-evaluation", "training-data", "feedback"]
+    },
+    {
+      "name": "forgewright",
+      "source": "./forgewright",
+      "description": "Multi-agent workflow orchestrator. Leader session composes phases (skill, pipeline, handoff, command, checkpoint) and dispatches implementation tasks to peers over wrightward",
+      "author": {
+        "name": "Joy's Dawn Solutions LLC"
+      },
+      "category": "developer-tools",
+      "tags": ["workflow", "orchestration", "automation", "plugin"]
     }
   ]
 }

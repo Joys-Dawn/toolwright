@@ -2,7 +2,7 @@
 
 > Daily ranked list of novel, code-only product ideas backed by quoted public evidence. Mines pain-point posts (Reddit / HN / GitHub issues) and newly-published capabilities (arXiv / bioRxiv / PubMed), runs a six-source novelty check, gates on three feasibility constraints, and writes a top-N Markdown digest with build sketches and quoted evidence.
 
-**Version**: 0.9.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/ideawright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/ideawright/README.md)
+**Version**: 0.10.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/ideawright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/ideawright/README.md)
 
 ## Install
 
@@ -95,9 +95,9 @@ new → scored → verified → gated → promoted
 | `promoted` | Digest builder | Made today's top-N digest. |
 | `archived` | Any stage | Filtered out (`crowded` novelty, failed gates, judge rejected). |
 
-## Commands
+## Skills
 
-| Command | What it does |
+| Skill | What it does |
 |---|---|
 | `/ideawright:scan` | Run all enabled miners. Validates each observation via the LLM judge, inserts ideas as `status='new'`. |
 | `/ideawright:vet` | Run the novelty pipeline against `status='new'` rows. |
@@ -123,7 +123,7 @@ new → scored → verified → gated → promoted
 | bioRxiv | `server` = `biorxiv` or `medrxiv`; filters by category — `bioinformatics`, `systems biology`, `synthetic biology`, `genomics`, `genetics`, `neuroscience` | None | None documented |
 | PubMed | E-utilities `esearch` + `esummary`; query strings target software / algorithm / ML papers | `NCBI_API_KEY` raises rate limit | 3 req/s unauth, 10 req/s with key |
 
-Each miner emits observations. The runner routes them to a validator that uses the LLM judge to decide whether a real product idea is present. Validators batch by `novelty.batch_size` (default 10, one `claude -p` per batch) and fall back to per-item calls if the batch response fails to parse — so one bad observation doesn't lose the whole batch.
+Each miner emits observations. The runner persists every observation into `raw_observations` (so a wall during validation doesn't lose the raw signal) and then routes them to a validator that uses the LLM judge to decide whether a real product idea is present. Validators batch by `validate.batch_size` (default 20, one `claude -p` per batch) and fall back to per-item calls if the batch response fails to parse — so one bad observation doesn't lose the whole batch. Per-item failures are logged and counted; if a source's per-item validation produced any errors, its cursor is NOT advanced so the next run can re-mine the same signals once the upstream cap resets.
 
 Per-source cursors persist back to the database, so subsequent scans only see new posts/papers.
 
@@ -157,7 +157,7 @@ Per `status='new'` idea:
 
 `/ideawright:daily` runs after `/vet`:
 
-1. **Feasibility gate** — pulls all `verified` ideas, batches by `novelty.batch_size`, sends to the LLM with the system prompt:
+1. **Feasibility gate** — pulls all `verified` ideas, batches by `feasibility.batch_size` (default 10), sends to the LLM with the system prompt:
 
     > Judge whether a product idea satisfies three hard constraints: `code_only`, `no_capital`, `no_private_data`. Also produce `impl_sketch`, `effort` (`hours`/`days`/`weeks`), `score_0_100`, `verdict` (`go` if all gates true and score ≥ 60; `defer` if all gates true and 30 ≤ score < 60; `reject` otherwise).
 
@@ -227,7 +227,10 @@ Every source has the same shape: an `enabled` flag, plus per-source knobs. Run `
 
 | Key | Default | Description |
 |---|---|---|
-| `novelty.batch_size` | 10 | Ideas per `/vet` batch and judge batch. |
+| `validate.batch_size` | 20 | Observations per single `claude -p` validate call during scan. Real batching — bounded by token budget per call and per-call latency. (The judge pipes the prompt via stdin, so Windows argv size is not the constraint.) |
+| `novelty.max_per_run` | `null` (unlimited) | Optional cap on how many `new` ideas `/vet` processes per invocation. Set a number if you want to spread vetting across multiple runs. |
+| `novelty.concurrency` | `8` | How many ideas are vetted in parallel. Each idea fires its own LLM scoring call (which scales linearly with concurrency). Per-host search limiters (Exa/GitHub/HN/npm/Scholar) are SHARED across the whole pass, so per-host caps stay global regardless of this setting. Set to `1` for serial processing. |
+| `feasibility.batch_size` | 10 | Ideas per single `claude -p` feasibility call. Bounded by token budget and latency, same as `validate.batch_size`. |
 | `novelty.novel_max` | 2 | ≤ this many competitors → `novel`. |
 | `novelty.niche_max` | 5 | ≤ this many → `niche`. > → `crowded`. |
 | `novelty.competitor_overlap` | 0.6 | Minimum overlap (0..1) for a search hit to count as a competitor. |
@@ -253,11 +256,11 @@ Every source has the same shape: an `enabled` flag, plus per-source knobs. Run `
 
 | Path | Contents |
 |---|---|
-| `ideas.db` | SQLite WAL mode. Tables: `ideas` (lifecycle + JSON-stringified novelty/feasibility), `sources` (per-miner cursor + last-run timestamp), `state_log` (every status transition with actor + note). |
+| `ideas.db` | SQLite WAL mode. Tables: `ideas` (lifecycle + JSON-stringified novelty/feasibility), `sources` (per-miner cursor + `last_run_at` heartbeat — recorded on every scan attempt, even when errors prevent advancing the cursor), `state_log` (every status transition with actor + note), `raw_observations` (every mined signal, persisted before validation; `validated_at`/`idea_id` set after the judge runs, so re-mines after a partial failure skip rows that already finished). |
 | `digests/YYYY-MM-DD.md` | One Markdown digest per `/ideawright:daily` run, listing the top-N promoted ideas. |
 
 ## Notes
 
 - On Node 22.5–23 you'll see `ExperimentalWarning: SQLite is an experimental feature` on first DB touch. Suppress with `NODE_NO_WARNINGS=1` or upgrade to Node 24+.
 - The runner doesn't schedule itself. Wire `/ideawright:daily` into a cron, GitHub Actions, or the Claude Code background agents feature.
-- Each judge call spawns a fresh `claude -p` subprocess. Expect the LLM bill to dominate runtime — minimize by tightening source filters, lowering `novelty.batch_size`, or routing capability validation to Haiku via `sources.<name>.llm.model`.
+- Each judge call spawns a fresh `claude -p` subprocess. Expect the LLM bill to dominate runtime — minimize by tightening source filters, lowering `validate.batch_size` / `feasibility.batch_size` (note: each batch is one call, so smaller batches = MORE calls), capping `novelty.max_per_run` to spread vetting across runs, or routing capability validation to Haiku via `sources.<name>.llm.model`.

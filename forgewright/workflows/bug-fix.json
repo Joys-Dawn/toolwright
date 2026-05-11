@@ -1,0 +1,53 @@
+{
+  "description": "Bug-fix workflow — diagnose, plan, implement (peer), verify, narrow audit, run tests.",
+  "phases": [
+    {
+      "name": "diagnose",
+      "type": "skill",
+      "skillId": "agentwright:systematic-debugging",
+      "produces": "diagnosis.md",
+      "idempotent": false
+    },
+    {
+      "name": "plan",
+      "type": "skill",
+      "skillId": "agentwright:bug-fix-planning",
+      "consumes": "diagnosis",
+      "produces": "plan.md",
+      "idempotent": false
+    },
+    {
+      "name": "fix-plan-review",
+      "type": "checkpoint",
+      "summary": "Diagnosis + fix plan ready. User reviews. Resume to dispatch the fix to a peer."
+    },
+    {
+      "name": "implement",
+      "type": "handoff",
+      "directive": "Apply the fix described in artifacts/plan.md. Claim the files the plan names; write the minimal change; do NOT contact the user; ack me when done.",
+      "consumes": "plan",
+      "idempotent": false
+    },
+    {
+      "name": "verify",
+      "type": "skill",
+      "skillId": "agentwright:verify-plan",
+      "consumes": "plan",
+      "idempotent": true
+    },
+    {
+      "name": "audit",
+      "type": "pipeline",
+      "pipelineName": "default",
+      "scope": "--diff",
+      "loopable": true,
+      "idempotent": false
+    },
+    {
+      "name": "tests",
+      "type": "command",
+      "command": "${TEST_CMD}",
+      "idempotent": false
+    }
+  ]
+}

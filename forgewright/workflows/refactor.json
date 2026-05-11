@@ -1,0 +1,65 @@
+{
+  "description": "Refactor workflow — plan, write characterization tests first (via agentwright test-coverage pipeline), refactor (peers), verify behavior unchanged via full audit pipeline.",
+  "phases": [
+    {
+      "name": "plan",
+      "type": "skill",
+      "skillId": "agentwright:refactor-planning",
+      "produces": "plan.md",
+      "idempotent": false
+    },
+    {
+      "name": "plan-quality-review",
+      "type": "skill",
+      "skillId": "agentwright:plan-quality-review",
+      "consumes": "plan",
+      "idempotent": true
+    },
+    {
+      "name": "refactor-plan-review",
+      "type": "checkpoint",
+      "summary": "Refactor plan + plan-quality-review findings ready. User reviews. Resume to write characterization tests then dispatch the refactor to peers."
+    },
+    {
+      "name": "characterization-tests",
+      "type": "pipeline",
+      "pipelineName": "test-coverage",
+      "scope": "--all",
+      "idempotent": false
+    },
+    {
+      "name": "pre-refactor-tests",
+      "type": "command",
+      "command": "${TEST_CMD}",
+      "idempotent": false
+    },
+    {
+      "name": "refactor",
+      "type": "handoff",
+      "directive": "Refactor per artifacts/plan.md. Behavior MUST remain identical — the characterization tests above must continue to pass. Decompose into independent tasks (per module/file scope) and dispatch to peers, or run yourself if none available.",
+      "consumes": "plan",
+      "idempotent": false
+    },
+    {
+      "name": "verify",
+      "type": "skill",
+      "skillId": "agentwright:verify-plan",
+      "consumes": "plan",
+      "idempotent": true
+    },
+    {
+      "name": "audit",
+      "type": "pipeline",
+      "pipelineName": "default",
+      "scope": "--diff",
+      "loopable": true,
+      "idempotent": false
+    },
+    {
+      "name": "post-refactor-tests",
+      "type": "command",
+      "command": "${TEST_CMD}",
+      "idempotent": false
+    }
+  ]
+}
