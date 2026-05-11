@@ -51,7 +51,7 @@ function setupRunForCompletion(tmpDir, stageName, opts = {}) {
   fs.mkdirSync(path.dirname(queuePath), { recursive: true });
   fs.writeFileSync(queuePath, '', 'utf8');
 
-  const snapshotPath = expectedGroupSnapshotPath(runId, 0);
+  const snapshotPath = expectedGroupSnapshotPath(tmpDir, runId, 0);
   fs.mkdirSync(snapshotPath, { recursive: true });
   writeJson(groupSnapshotFile(tmpDir, runId, 0), {
     type: 'temp-copy',

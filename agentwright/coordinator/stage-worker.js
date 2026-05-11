@@ -246,8 +246,8 @@ async function main() {
   if (!snapshot || !snapshot.path) {
     throw new Error(`Missing group snapshot metadata for group ${groupIndex}.`);
   }
-  assertPathWithin(getManagedSnapshotRoot(), snapshot.path, 'Snapshot path');
-  if (path.resolve(snapshot.path) !== path.resolve(expectedGroupSnapshotPath(runId, groupIndex))) {
+  assertPathWithin(getManagedSnapshotRoot(cwd), snapshot.path, 'Snapshot path');
+  if (path.resolve(snapshot.path) !== path.resolve(expectedGroupSnapshotPath(cwd, runId, groupIndex))) {
     throw new Error(`Snapshot path for run ${runId} group ${groupIndex} did not match the expected location.`);
   }
   saveStageMeta({

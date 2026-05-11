@@ -10,6 +10,7 @@ const {
   validateRunId,
   validateStageName,
   assertPathWithin,
+  projectSnapshotKey,
   getManagedSnapshotRoot,
   expectedGroupSnapshotPath,
   ensureAuditBase,
@@ -92,17 +93,61 @@ describe('paths', () => {
     });
   });
 
+  describe('projectSnapshotKey', () => {
+    it('produces a stable key for the same cwd across calls', () => {
+      const a = projectSnapshotKey(tmpDir);
+      const b = projectSnapshotKey(tmpDir);
+      assert.equal(a, b);
+    });
+
+    it('produces different keys for different cwds', () => {
+      const otherDir = fs.mkdtempSync(path.join(os.tmpdir(), 'paths-test-other-'));
+      try {
+        assert.notEqual(projectSnapshotKey(tmpDir), projectSnapshotKey(otherDir));
+      } finally {
+        fs.rmSync(otherDir, { recursive: true, force: true });
+      }
+    });
+
+    it('embeds a basename slug for human readability', () => {
+      const key = projectSnapshotKey(tmpDir);
+      assert.ok(key.startsWith(path.basename(tmpDir).slice(0, 32)));
+    });
+
+    it('falls back to path.resolve for non-existent cwd', () => {
+      const ghost = path.join(os.tmpdir(), 'paths-test-does-not-exist-' + Date.now());
+      const key = projectSnapshotKey(ghost);
+      assert.ok(/^[A-Za-z0-9._-]+-[0-9a-f]{12}$/.test(key));
+    });
+  });
+
   describe('getManagedSnapshotRoot', () => {
-    it('returns a path under os.tmpdir()', () => {
-      const root = getManagedSnapshotRoot();
+    it('returns a path under os.tmpdir() namespaced by cwd', () => {
+      const root = getManagedSnapshotRoot(tmpDir);
       assert.ok(root.startsWith(os.tmpdir()));
       assert.ok(root.includes('agentwright-snapshots'));
+      assert.ok(root.endsWith(projectSnapshotKey(tmpDir)));
+    });
+
+    it('isolates two different cwds into different roots', () => {
+      const otherDir = fs.mkdtempSync(path.join(os.tmpdir(), 'paths-test-other-'));
+      try {
+        assert.notEqual(getManagedSnapshotRoot(tmpDir), getManagedSnapshotRoot(otherDir));
+      } finally {
+        fs.rmSync(otherDir, { recursive: true, force: true });
+      }
+    });
+
+    it('throws when called without a cwd', () => {
+      assert.throws(() => getManagedSnapshotRoot(), /requires a cwd/);
+      assert.throws(() => getManagedSnapshotRoot(null), /requires a cwd/);
     });
   });
 
   describe('expectedGroupSnapshotPath', () => {
-    it('returns path with run ID and group index', () => {
-      const p = expectedGroupSnapshotPath('test-run', 0);
+    it('returns path with run ID and group index under the project root', () => {
+      const p = expectedGroupSnapshotPath(tmpDir, 'test-run', 0);
+      assert.ok(p.startsWith(getManagedSnapshotRoot(tmpDir)));
       assert.ok(p.includes('test-run'));
       assert.ok(p.includes('group-0'));
     });

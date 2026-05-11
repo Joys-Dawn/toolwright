@@ -10,25 +10,7 @@ const {
   groupSnapshotFile
 } = require('./paths');
 const { writeJson } = require('./io');
-
-const EXCLUDED_ROOTS = new Set([
-  '.claude', 'node_modules', '.git',
-  'dist', 'build', '.next', '.nuxt', '.output',
-  '.turbo', '.vercel', '.svelte-kit',
-  'coverage', '__pycache__', '.pytest_cache',
-  '.mypy_cache', '.ruff_cache'
-]);
-
-function shouldExclude(relativePath) {
-  if (!relativePath) {
-    return false;
-  }
-  const parts = relativePath.split(/[\\/]/);
-  const basename = path.basename(relativePath);
-  return parts.some(p => EXCLUDED_ROOTS.has(p))
-    || basename === '.env'
-    || basename.startsWith('.env.');
-}
+const { shouldExclude, EXCLUDED_ROOTS, SECRET_ENV_NAMES } = require('./exclude-rules');
 
 function getGitTrackedFiles(cwd) {
   const result = spawnSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], {
@@ -107,10 +89,10 @@ function isGitRepo(cwd) {
 
 function createGitWorktreeSnapshot(cwd, runId, snapshotLabel) {
   const snapshotDir = path.join(
-    getManagedSnapshotRoot(),
+    getManagedSnapshotRoot(cwd),
     `${runId}-${snapshotLabel}`
   );
-  assertPathWithin(getManagedSnapshotRoot(), snapshotDir, 'Snapshot');
+  assertPathWithin(getManagedSnapshotRoot(cwd), snapshotDir, 'Snapshot');
   fs.rmSync(snapshotDir, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(snapshotDir), { recursive: true });
   const result = runGit(cwd, ['worktree', 'add', '--detach', snapshotDir, 'HEAD']);
@@ -174,10 +156,10 @@ function createGroupSnapshot(cwd, runId, groupIndex) {
   } else {
     // Non-git project: use temp-copy as fallback.
     const snapshotDir = path.join(
-      getManagedSnapshotRoot(),
+      getManagedSnapshotRoot(cwd),
       `${runId}-group-${groupIndex}`
     );
-    assertPathWithin(getManagedSnapshotRoot(), snapshotDir, 'Snapshot');
+    assertPathWithin(getManagedSnapshotRoot(cwd), snapshotDir, 'Snapshot');
     fs.rmSync(snapshotDir, { recursive: true, force: true });
     fs.mkdirSync(path.dirname(snapshotDir), { recursive: true });
     copyWorkspaceToSnapshot(cwd, snapshotDir);
@@ -186,7 +168,7 @@ function createGroupSnapshot(cwd, runId, groupIndex) {
       path: snapshotDir,
       createdAt: new Date().toISOString(),
       sourcePath: cwd,
-      excludedRoots: ['.claude', 'node_modules', '.git', '.env*']
+      excludedRoots: [...EXCLUDED_ROOTS, ...SECRET_ENV_NAMES]
     };
   }
   removeExternalSymlinks(snapshot.path);
@@ -197,11 +179,17 @@ function createGroupSnapshot(cwd, runId, groupIndex) {
 /**
  * Scans the managed snapshot root for directories that are not referenced
  * by any active run. Removes orphans left behind by crashed processes.
+ *
+ * The snapshot root is per-project (see `projectSnapshotKey` in paths.js),
+ * so this sweep only sees this project's snapshots — concurrent audits in
+ * other projects on the same machine are namespaced into sibling subdirs
+ * and remain invisible (and untouched) here.
+ *
  * @param {string} cwd - Project working directory.
  * @param {function} listRuns - Returns [{runId, run}] for all known runs.
  */
 function cleanupOrphanedSnapshots(cwd, listRuns) {
-  const snapshotRoot = getManagedSnapshotRoot();
+  const snapshotRoot = getManagedSnapshotRoot(cwd);
   if (!fs.existsSync(snapshotRoot)) {
     return [];
   }

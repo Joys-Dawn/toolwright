@@ -270,7 +270,7 @@ describe('coordinator CLI', () => {
       fs.mkdirSync(path.dirname(queuePath), { recursive: true });
       fs.writeFileSync(queuePath, '', 'utf8');
       writeJson(stageDecisionsFile(tmpDir, runId, 'correctness'), { stage: 'correctness', decisions: [] });
-      const snapPath = expectedGroupSnapshotPath(runId, 0);
+      const snapPath = expectedGroupSnapshotPath(tmpDir, runId, 0);
       fs.mkdirSync(snapPath, { recursive: true });
       writeJson(groupSnapshotFile(tmpDir, runId, 0), { type: 'temp-copy', path: snapPath });
 

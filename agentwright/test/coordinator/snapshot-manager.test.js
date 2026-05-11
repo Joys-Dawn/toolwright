@@ -22,18 +22,21 @@ describe('snapshot-manager', () => {
   });
 
   afterEach(() => {
+    // Snapshot root is namespaced by cwd — compute it BEFORE removing tmpDir
+    // so realpath in projectSnapshotKey still resolves the same key it did
+    // when the snapshot was created.
+    const root = getManagedSnapshotRoot(tmpDir);
     fs.rmSync(tmpDir, { recursive: true, force: true });
-    // Clean up any snapshots we created
-    const root = getManagedSnapshotRoot();
     if (fs.existsSync(root)) {
       for (const entry of fs.readdirSync(root)) {
         if (entry.startsWith('test-snapshot-')) {
           const entryPath = path.join(root, entry);
-          // Try worktree remove first
-          spawnSync('git', ['worktree', 'remove', '--force', entryPath], { cwd: tmpDir, encoding: 'utf8' });
+          spawnSync('git', ['worktree', 'remove', '--force', entryPath], { cwd: os.tmpdir(), encoding: 'utf8' });
           fs.rmSync(entryPath, { recursive: true, force: true });
         }
       }
+      // Remove the per-project root too — it's a fresh tmpdir per test.
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 

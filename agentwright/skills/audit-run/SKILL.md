@@ -63,6 +63,8 @@ Workflow:
 4. If any fixes were applied, dispatch the `agentwright:verifier` subagent with a summary of every fix (finding ID, description, files changed, what was done). Tell the verifier to compare against the group-0 snapshot directory (its path is in `group-0-snapshot.json` under the run directory) rather than using `git diff`, so it only sees audit-introduced changes. Do not blindly accept verifier claims — re-read cited code yourself and independently confirm any reported issue is real before acting on it. After the verifier completes, clean up the group-0 snapshot:
 `node ${CLAUDE_PLUGIN_ROOT}/coordinator/index.js cleanup-snapshot --run <runId> --group 0`
 
+**Optional — only if the caller asked for delta stats** (e.g., a forgewright pipeline phase deciding whether to re-audit): invoke `/agentwright:check-deltas` **via the Skill tool** with `<runId>` as the argument, BEFORE `cleanup-snapshot`. Going through the Skill tool is what runs the skill's preprocessing block — a bare mid-prompt `/agentwright:check-deltas` reference will NOT auto-execute it. The skill emits a JSON object with `totalAdded`/`totalDeleted`/`totalDiffLines`/`totalLoc`/`ratio`/`changedFiles` (excluding `.gitignore`'d paths and the standard exclude list). The snapshot must still exist on disk when `check-deltas` runs.
+
 5. Present a summary table:
 
 | # | Stage | Finding | File(s) | Decision | Action |

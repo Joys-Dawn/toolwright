@@ -226,8 +226,8 @@ describe('run-ledger', () => {
   // --- Snapshot path helpers ---
 
   describe('getManagedSnapshotRoot', () => {
-    it('returns a path under os.tmpdir', () => {
-      const root = getManagedSnapshotRoot();
+    it('returns a path under os.tmpdir namespaced by cwd', () => {
+      const root = getManagedSnapshotRoot(tmpDir);
       assert.ok(root.startsWith(os.tmpdir()));
       assert.ok(root.includes('agentwright-snapshots'));
     });
@@ -235,12 +235,12 @@ describe('run-ledger', () => {
 
   describe('expectedGroupSnapshotPath', () => {
     it('builds expected path', () => {
-      const result = expectedGroupSnapshotPath('run-1', 0);
+      const result = expectedGroupSnapshotPath(tmpDir, 'run-1', 0);
       assert.ok(result.includes('run-1-group-0'));
     });
 
     it('rejects invalid run ID', () => {
-      assert.throws(() => expectedGroupSnapshotPath('.bad', 0));
+      assert.throws(() => expectedGroupSnapshotPath(tmpDir, '.bad', 0));
     });
   });
 

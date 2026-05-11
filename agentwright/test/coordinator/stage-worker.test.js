@@ -83,7 +83,7 @@ describe('stage-worker', () => {
     });
     updateStageStatus(tmpDir, run.runId, 'fakestage', 'auditing');
 
-    const snapshotPath = expectedGroupSnapshotPath(run.runId, 0);
+    const snapshotPath = expectedGroupSnapshotPath(tmpDir, run.runId, 0);
     fs.mkdirSync(snapshotPath, { recursive: true });
     writeJson(groupSnapshotFile(tmpDir, run.runId, 0), {
       type: 'temp-copy',
@@ -130,7 +130,7 @@ describe('stage-worker', () => {
     });
     updateStageStatus(tmpDir, run.runId, 'pathstage', 'auditing');
 
-    const snapshotPath = expectedGroupSnapshotPath(run.runId, 0);
+    const snapshotPath = expectedGroupSnapshotPath(tmpDir, run.runId, 0);
     fs.mkdirSync(snapshotPath, { recursive: true });
     writeJson(groupSnapshotFile(tmpDir, run.runId, 0), {
       type: 'temp-copy',
@@ -408,7 +408,7 @@ describe('stage-worker', () => {
         scope: '--diff'
       });
 
-      const snapshotPath = expectedGroupSnapshotPath(run.runId, 0);
+      const snapshotPath = expectedGroupSnapshotPath(tmpDir, run.runId, 0);
       fs.mkdirSync(snapshotPath, { recursive: true });
       writeJson(groupSnapshotFile(tmpDir, run.runId, 0), {
         type: 'temp-copy',

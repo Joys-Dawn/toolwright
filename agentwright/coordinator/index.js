@@ -26,6 +26,7 @@ const {
 const { markDeadStageWorkers } = require('./health-check');
 const { launchCurrentGroup, completeStage, nextStage, stopRun } = require('./lifecycle');
 const { cleanupOrphanedSnapshots } = require('./snapshot-manager');
+const { computeDeltas, loadSnapshotMeta } = require('./snapshot-deltas');
 const { removePath } = require('./io');
 const { nextFinding, recordDecision, requireFlag } = require('./verification');
 
@@ -43,6 +44,7 @@ function printHelp() {
       '  node coordinator/index.js record-decision --run <runId> --stage <name> --finding <id> --decision <valid|invalid|valid_needs_approval> [--action fixed|none] [--rationale "..."] [--files-changed "a.js,b.js"] [--evidence "..."]',
       '  node coordinator/index.js stop --run <runId>',
       '  node coordinator/index.js cleanup-snapshot --run <runId> --group <index>',
+      '  node coordinator/index.js check-deltas --run <runId> [--group <index>]',
       '  node coordinator/index.js clean [--logs-only]',
       '  node coordinator/index.js --help'
     ].join('\n') + '\n'
@@ -283,6 +285,30 @@ async function main() {
     }
     removeGroupSnapshot(cwd, runId, groupIndex);
     process.stdout.write(JSON.stringify({ ok: true, runId, groupIndex, removed: true }, null, 2) + '\n');
+    return;
+  }
+  if (command === 'check-deltas') {
+    const runId = validateRunId(requireFlag(flags, 'run'));
+    const groupIndex = flags.group !== undefined ? Number(flags.group) : 0;
+    if (!Number.isInteger(groupIndex) || groupIndex < 0) {
+      throw new Error('--group must be a non-negative integer.');
+    }
+    const cwd = process.cwd();
+    const meta = loadSnapshotMeta(cwd, runId, groupIndex);
+    if (!meta || !meta.path) {
+      throw new Error(
+        `No snapshot found for run ${runId} group ${groupIndex}. ` +
+        `The snapshot must still exist on disk — call check-deltas BEFORE cleanup-snapshot.`
+      );
+    }
+    const deltas = computeDeltas(cwd, meta.path);
+    process.stdout.write(JSON.stringify({
+      ok: true,
+      runId,
+      groupIndex,
+      snapshotPath: meta.path,
+      ...deltas,
+    }, null, 2) + '\n');
     return;
   }
   if (command === 'clean') {

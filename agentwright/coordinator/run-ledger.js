@@ -117,11 +117,11 @@ function mutateRun(cwd, runId, callback) {
 
 function removeSnapshotFromFile(cwd, snapshotFilePath) {
   const snapshot = readJson(snapshotFilePath);
-  const managedRoot = getManagedSnapshotRoot();
+  const managedRoot = getManagedSnapshotRoot(cwd);
   const snapshotFileName = path.basename(snapshotFilePath);
   const groupMatch = /^group-(\d+)-snapshot\.json$/.exec(snapshotFileName);
   const runId = path.basename(path.dirname(snapshotFilePath));
-  const expectedPath = groupMatch ? expectedGroupSnapshotPath(runId, Number(groupMatch[1])) : null;
+  const expectedPath = groupMatch ? expectedGroupSnapshotPath(cwd, runId, Number(groupMatch[1])) : null;
   if (snapshot?.type === 'git-worktree' && snapshot.path) {
     assertPathWithin(managedRoot, snapshot.path, 'Snapshot path');
     if (expectedPath && path.resolve(snapshot.path) !== path.resolve(expectedPath)) {

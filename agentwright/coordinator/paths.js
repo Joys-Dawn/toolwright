@@ -3,9 +3,11 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 
 const RUN_ID_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.-]*$/;
 const STAGE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const SNAPSHOT_ROOT_NAME = 'agentwright-snapshots';
 
 function validateRunId(runId) {
   if (typeof runId !== 'string' || !RUN_ID_PATTERN.test(runId)) {
@@ -31,12 +33,38 @@ function assertPathWithin(basePath, targetPath, label) {
   return resolvedTarget;
 }
 
-function getManagedSnapshotRoot() {
-  return path.join(os.tmpdir(), 'agentwright-snapshots');
+// Stable per-project key used to namespace the managed snapshot root.
+// Concurrent audits in different projects share `os.tmpdir()/agentwright-snapshots/`
+// — without per-project scoping, `cleanupOrphanedSnapshots` would only see the
+// current cwd's runs and would treat every other project's in-flight snapshot
+// as an orphan to delete. The slug is for human-readability when poking
+// around the tmpdir; correctness comes from the sha256 of realpath(cwd).
+// realpath collapses symlinked aliases so the same project always hashes to
+// the same key. On Windows paths are case-insensitive, so we lowercase
+// before hashing — otherwise `C:\Users\...` and `c:\users\...` would
+// namespace independently.
+function projectSnapshotKey(cwd) {
+  let resolved;
+  try {
+    resolved = fs.realpathSync(cwd);
+  } catch (_) {
+    resolved = path.resolve(cwd);
+  }
+  const normForHash = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  const hash = crypto.createHash('sha256').update(normForHash).digest('hex').slice(0, 12);
+  const slug = path.basename(resolved).replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 32) || 'project';
+  return `${slug}-${hash}`;
 }
 
-function expectedGroupSnapshotPath(runId, groupIndex) {
-  return path.join(getManagedSnapshotRoot(), `${validateRunId(runId)}-group-${groupIndex}`);
+function getManagedSnapshotRoot(cwd) {
+  if (cwd === undefined || cwd === null) {
+    throw new Error('getManagedSnapshotRoot requires a cwd argument.');
+  }
+  return path.join(os.tmpdir(), SNAPSHOT_ROOT_NAME, projectSnapshotKey(cwd));
+}
+
+function expectedGroupSnapshotPath(cwd, runId, groupIndex) {
+  return path.join(getManagedSnapshotRoot(cwd), `${validateRunId(runId)}-group-${groupIndex}`);
 }
 
 function ensureAuditBase(cwd) {
@@ -88,9 +116,11 @@ function stageLogsDir(cwd, runId, stageName) {
 
 module.exports = {
   RUN_ID_PATTERN,
+  SNAPSHOT_ROOT_NAME,
   validateRunId,
   validateStageName,
   assertPathWithin,
+  projectSnapshotKey,
   getManagedSnapshotRoot,
   expectedGroupSnapshotPath,
   ensureAuditBase,

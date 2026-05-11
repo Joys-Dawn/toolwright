@@ -97,7 +97,7 @@ function setupRunWithFindings(tmpDir, stageName, findingCount, opts = {}) {
   updateGroupStatus(tmpDir, runId, 0, 'auditing');
   setupStageFiles(tmpDir, runId, stageName, findingCount, opts);
 
-  const snapshotPath = expectedGroupSnapshotPath(runId, 0);
+  const snapshotPath = expectedGroupSnapshotPath(tmpDir, runId, 0);
   fs.mkdirSync(snapshotPath, { recursive: true });
   writeJson(groupSnapshotFile(tmpDir, runId, 0), {
     type: 'temp-copy',
