@@ -41,9 +41,10 @@ Extract `workflowId` and `descriptor` from the output JSON.
 Read the descriptor's `instruction` every iteration and follow it. The actions per kind:
 
 ### `phase` type=skill
-Invoke the named skill via the Skill tool. If `produces` is set, write the artifact under `.claude/forgewright/workflows/<workflowId>/artifacts/`:
-- **`produces: "plan.md"` (extension form)**: write to `artifacts/plan.md`. The descriptor's instruction names the canonical filename; forgewright auto-registers it.
-- **`produces: "plan"` (bare form)**: pick the right extension and write to `artifacts/plan.<ext>`. Pass the chosen path on advance via `--artifact-path artifacts/plan.<ext>`.
+Invoke the named skill via the Skill tool. The descriptor's `instruction` is authoritative — follow it. Quick reference for the artifact-writing question:
+- **Planning skills (`agentwright:feature-planning` / `bug-fix-planning` / `refactor-planning`)**: the plan is produced inside plan mode. (1) Invoke the skill. (2) Call `EnterPlanMode` per the skill's first instruction — mandatory. (3) Work in plan mode; call `ExitPlanMode` with the plan; user approves. (4) Write the result of ExitPlanMode to `artifacts/plan.md`. (5) Advance with `--artifact-path artifacts/plan.md`.
+- **Non-planning skills with `produces: "<name>.md"` (extension form)**: write the skill's output to `artifacts/<name>.md`. Forgewright auto-registers it from the produces config — `--artifact-path` not required.
+- **Non-planning skills with `produces: "<name>"` (bare form)**: pick the right extension and write to `artifacts/<name>.<ext>`. Pass `--artifact-path artifacts/<name>.<ext>` on advance.
 
 Then advance:
 

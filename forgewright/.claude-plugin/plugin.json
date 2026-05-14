@@ -1,6 +1,6 @@
 {
   "name": "forgewright",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Multi-agent workflow orchestrator. Leader Claude session composes phases (skill, pipeline, handoff, command, checkpoint) and dispatches implementation tasks to peer sessions over wrightward. Requires agentwright >= 2.1.5 and wrightward >= 3.11.0.",
   "author": {
     "name": "Joy's Dawn Solutions LLC"

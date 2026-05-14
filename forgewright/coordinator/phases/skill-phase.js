@@ -1,6 +1,8 @@
 'use strict';
 
+const path = require('path');
 const { parseProduces, consumesStems } = require('../artifacts');
+const { artifactsDir } = require('../paths');
 
 const TYPE = 'skill';
 
@@ -35,10 +37,21 @@ function verifyPlanFollowupBlock() {
   ].join('\n');
 }
 
-function defaultInstruction(phase) {
-  const lines = [
-    `Invoke the "${phase.skillId}" skill via the Skill tool.`,
-  ];
+function defaultInstruction(phase, { cwd, workflowId } = {}) {
+  const isPlanning = PLANNING_SKILLS.has(phase.skillId);
+  const isVerifyPlan = phase.skillId === VERIFY_PLAN_SKILL;
+  const consumedStems = phase.consumes != null ? consumesStems(phase.consumes) : [];
+  const verifyPlanNeedsPath = isVerifyPlan && consumedStems.includes('plan') && cwd && workflowId;
+
+  let invokeLine;
+  if (verifyPlanNeedsPath) {
+    const planPath = path.join(artifactsDir(cwd, workflowId), 'plan.md');
+    invokeLine = `Invoke the "${phase.skillId}" skill via the Skill tool with \`args: "--plan-path ${planPath}"\`. The \`--plan-path\` flag pins verify-plan to this workflow's plan via the skill's Tier-1 precedence; without it, verify-plan falls back to a session-wide JSONL heuristic that can latch onto a plan from a different workflow in the same session.`;
+  } else {
+    invokeLine = `Invoke the "${phase.skillId}" skill via the Skill tool.`;
+  }
+  const lines = [invokeLine];
+
   if (phase.consumes) {
     // Multi-consume support: skill phases can declare consumes as either a
     // single string ("plan") or an array of stems (["research", "peer-opinions"]).
@@ -67,7 +80,13 @@ function defaultInstruction(phase) {
       lines.push(`This phase consumes ${stems.length} upstream artifacts — read all of them from under the workflow directory before invoking the skill:\n${fileBullets}`);
     }
   }
-  if (phase.produces) {
+  if (isPlanning) {
+    // Planning skills produce their plan inside plan mode. The descriptor must
+    // name EnterPlanMode/ExitPlanMode explicitly so the agent can't read the
+    // "produce the artifact" framing as license to skip plan mode (real failure
+    // mode in workflow 2026-05-13T18-19-49-186Z-feature-2b9d915f).
+    lines.push(`This phase produces the "plan" artifact via plan mode. Call \`EnterPlanMode\` per the skill's first instruction — this is mandatory under forgewright, not advisory. Produce the plan inside plan mode, then call \`ExitPlanMode\`; the user approves. Write the result of ExitPlanMode (the approved plan content) to artifacts/plan.md and advance with \`workflow-advance --result completed --artifact-path artifacts/plan.md\`.`);
+  } else if (phase.produces) {
     const parsedProduces = parseProduces(phase.produces);
     // Skills are single-output for now; if a workflow author put a multi map
     // on a skill, we just narrate the first entry and trust the skill.
@@ -78,18 +97,20 @@ function defaultInstruction(phase) {
       lines.push(`This phase produces the "${phase.produces}" artifact — write the skill's output to artifacts/${phase.produces}.{md,json} (pick the right extension) and report the path back via \`workflow-advance --artifact-path <path>\`.`);
     }
   }
-  lines.push('When the skill finishes, call workflow-advance --result completed.');
+  if (!isPlanning) {
+    lines.push('When the skill finishes, call workflow-advance --result completed.');
+  }
   let body = lines.join(' ');
-  if (PLANNING_SKILLS.has(phase.skillId)) {
+  if (isPlanning) {
     body += '\n' + planningClarificationBlock();
   }
-  if (phase.skillId === VERIFY_PLAN_SKILL) {
+  if (isVerifyPlan) {
     body += '\n' + verifyPlanFollowupBlock();
   }
   return body;
 }
 
-function buildDescriptor(phase, workflow) {
+function buildDescriptor(phase, workflow, { cwd } = {}) {
   if (!phase.skillId || typeof phase.skillId !== 'string') {
     throw new Error(`Skill phase ${phase.index} requires a "skillId".`);
   }
@@ -102,7 +123,7 @@ function buildDescriptor(phase, workflow) {
     phaseName: phase.name,
     produces: phase.produces || null,
     consumes: phase.consumes || null,
-    instruction: phase.instruction || defaultInstruction(phase),
+    instruction: phase.instruction || defaultInstruction(phase, { cwd, workflowId: workflow.workflowId }),
   };
 }
 

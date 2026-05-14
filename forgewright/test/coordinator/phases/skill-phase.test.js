@@ -1,10 +1,13 @@
 'use strict';
 
+const path = require('node:path');
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const skillPhase = require('../../../coordinator/phases/skill-phase');
+const { artifactsDir } = require('../../../coordinator/paths');
 
 const SAMPLE_WORKFLOW = { workflowId: 'wf-1' };
+const TEST_CWD = process.platform === 'win32' ? 'C:\\test-cwd' : '/test-cwd';
 
 describe('skill-phase', () => {
   test('TYPE constant exposed', () => {
@@ -117,6 +120,87 @@ describe('skill-phase', () => {
     test('rejects non-object result', () => {
       const phase = { name: 'verify', index: 0, type: 'skill', skillId: 'agentwright:verify-plan' };
       assert.throws(() => skillPhase.validateResult(null, phase), /must be an object/);
+    });
+  });
+
+  describe('planning-mode regression guard', () => {
+    // These checks pin literal tool names (EnterPlanMode / ExitPlanMode) because
+    // those tokens ARE the behavioral contract — the agent needs to see the
+    // exact tool name to call it. Workflow 2026-05-13T18-19-49-186Z-feature-2b9d915f
+    // failed precisely because the descriptor didn't name EnterPlanMode and the
+    // agent treated the SKILL.md cue as advisory.
+    test('feature-planning instruction names EnterPlanMode, ExitPlanMode, and artifacts/plan.md', () => {
+      const phase = { name: 'plan', index: 0, type: 'skill', skillId: 'agentwright:feature-planning', produces: 'plan.md' };
+      const instr = skillPhase.defaultInstruction(phase);
+      assert.ok(instr.includes('EnterPlanMode'), 'planning instruction must name EnterPlanMode');
+      assert.ok(instr.includes('ExitPlanMode'), 'planning instruction must name ExitPlanMode');
+      assert.ok(instr.includes('artifacts/plan.md'), 'planning instruction must reference artifacts/plan.md');
+    });
+
+    test('bug-fix-planning instruction names EnterPlanMode', () => {
+      const phase = { name: 'plan', index: 0, type: 'skill', skillId: 'agentwright:bug-fix-planning', produces: 'plan.md' };
+      const instr = skillPhase.defaultInstruction(phase);
+      assert.ok(instr.includes('EnterPlanMode'));
+    });
+
+    test('refactor-planning instruction names EnterPlanMode', () => {
+      const phase = { name: 'plan', index: 0, type: 'skill', skillId: 'agentwright:refactor-planning', produces: 'plan.md' };
+      const instr = skillPhase.defaultInstruction(phase);
+      assert.ok(instr.includes('EnterPlanMode'));
+    });
+
+    test('non-planning skill (research) does not mention EnterPlanMode', () => {
+      // Plan-mode directive must be scoped to planning skills. Non-planning
+      // skills write their output directly; emitting EnterPlanMode here would
+      // be a regression.
+      const phase = { name: 'research', index: 0, type: 'skill', skillId: 'agentwright:research', produces: 'research.md' };
+      const instr = skillPhase.defaultInstruction(phase);
+      assert.ok(!instr.includes('EnterPlanMode'), 'non-planning instruction must not mention EnterPlanMode');
+      assert.ok(instr.includes('artifacts/research.md'), 'non-planning produces line must still reference the produced filename');
+    });
+  });
+
+  describe('verify-plan --plan-path injection', () => {
+    test('verify-plan with consumes:"plan" embeds the absolute artifacts/plan.md path', () => {
+      // Production code computes the absolute path via artifactsDir(cwd, workflowId).
+      // The instruction must embed that exact absolute path so the agent can pass
+      // it through to extract-plan-context.js as Tier-1 input — bypassing the
+      // session-wide JSONL heuristic that latched onto the wrong workflow's plan
+      // in the original failure.
+      const phase = { name: 'verify', index: 0, type: 'skill', skillId: 'agentwright:verify-plan', consumes: 'plan' };
+      const instr = skillPhase.defaultInstruction(phase, { cwd: TEST_CWD, workflowId: 'wf-1' });
+      const expectedPath = path.join(artifactsDir(TEST_CWD, 'wf-1'), 'plan.md');
+      assert.ok(path.isAbsolute(expectedPath), 'test setup must yield an absolute expected path');
+      assert.ok(instr.includes('--plan-path'), 'instruction must reference --plan-path');
+      assert.ok(instr.includes(expectedPath), `instruction must embed the absolute path: ${expectedPath}`);
+    });
+
+    test('buildDescriptor threads cwd from opts into the verify-plan --plan-path argument', () => {
+      // The third opts arg is the only path by which cwd reaches defaultInstruction;
+      // a refactor that drops it (the bug we're guarding against) would silently
+      // disable --plan-path injection.
+      const phase = { name: 'verify', index: 0, type: 'skill', skillId: 'agentwright:verify-plan', consumes: 'plan' };
+      const d = skillPhase.buildDescriptor(phase, { workflowId: 'wf-99' }, { cwd: TEST_CWD });
+      const expectedPath = path.join(artifactsDir(TEST_CWD, 'wf-99'), 'plan.md');
+      assert.ok(d.instruction.includes(expectedPath), `descriptor instruction must embed the absolute path for wf-99: ${expectedPath}`);
+    });
+
+    test('verify-plan without cwd does not inject --plan-path (legacy / backward-compat)', () => {
+      // If a caller doesn't pass cwd, the agent falls back to the pre-fix JSONL
+      // heuristic — strictly no worse than legacy. Asserting absence here
+      // guards against a refactor that injects a relative/empty path.
+      const phase = { name: 'verify', index: 0, type: 'skill', skillId: 'agentwright:verify-plan', consumes: 'plan' };
+      const instr = skillPhase.defaultInstruction(phase);
+      assert.ok(!instr.includes('--plan-path'));
+    });
+
+    test('verify-plan with consumes as array including "plan" still injects --plan-path', () => {
+      // Array-form consumes is a supported shape; the plan-path injection must
+      // detect "plan" in array entries as well as in the single-string form.
+      const phase = { name: 'verify', index: 0, type: 'skill', skillId: 'agentwright:verify-plan', consumes: ['plan', 'research'] };
+      const instr = skillPhase.defaultInstruction(phase, { cwd: TEST_CWD, workflowId: 'wf-1' });
+      const expectedPath = path.join(artifactsDir(TEST_CWD, 'wf-1'), 'plan.md');
+      assert.ok(instr.includes(expectedPath));
     });
   });
 });
