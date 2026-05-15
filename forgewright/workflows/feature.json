@@ -1,10 +1,23 @@
 {
-  "description": "Feature workflow — leader plans, peers implement, leader verifies, docs updated. Plan, audit-the-plan, checkpoint, peer-handoff(implement), verify-plan, audit pipeline (includes test-coverage; leader writes missing tests in-line via the decision loop), run tests, update docs.",
+  "description": "Feature workflow — leader designs the WHAT (behavior), then plans the HOW; peers implement; leader verifies; docs updated. Behavioral-design, design-review checkpoint, plan, plan-quality-review, plan-review checkpoint, peer-handoff(implement), verify-plan, audit pipeline (includes test-coverage; leader writes missing tests in-line via the decision loop), run tests, update docs. Wire in agentwright:ui-design via a custom workflow if the feature has a UI surface.",
   "phases": [
+    {
+      "name": "behavioral-design",
+      "type": "skill",
+      "skillId": "agentwright:behavioral-design",
+      "produces": "behavioral-design.md",
+      "idempotent": false
+    },
+    {
+      "name": "design-review",
+      "type": "checkpoint",
+      "summary": "Design ready — behavioral-design.md (what happens, when, with what edges). User reviews. Resume to start HOW-level planning."
+    },
     {
       "name": "plan",
       "type": "skill",
       "skillId": "agentwright:feature-planning",
+      "consumes": "behavioral-design",
       "produces": "plan.md",
       "idempotent": false
     },

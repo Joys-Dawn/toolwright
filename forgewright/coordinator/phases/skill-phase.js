@@ -10,6 +10,8 @@ const PLANNING_SKILLS = new Set([
   'agentwright:feature-planning',
   'agentwright:bug-fix-planning',
   'agentwright:refactor-planning',
+  'agentwright:behavioral-design',
+  'agentwright:ui-design',
 ]);
 
 const VERIFY_PLAN_SKILL = 'agentwright:verify-plan';

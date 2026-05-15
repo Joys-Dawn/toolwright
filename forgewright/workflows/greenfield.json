@@ -1,10 +1,23 @@
 {
-  "description": "Greenfield workflow — build a project or major subsystem from scratch when the idea is already validated. project-planning sets the design, plan-quality-review tightens it, then standard implementation / audit / test / docs. Run idea-exploration first if you haven't decided whether to build the idea.",
+  "description": "Greenfield workflow — build a project or major subsystem from scratch when the idea is already validated. Behavioral-design specifies the WHAT (Jobs + scenarios + edges), project-planning sets the HOW, plan-quality-review tightens it, then standard implementation / audit / test / docs. Run idea-exploration first if you haven't decided whether to build the idea. Wire in agentwright:ui-design via a custom workflow if the project has UI surfaces to design upstream.",
   "phases": [
+    {
+      "name": "behavioral-design",
+      "type": "skill",
+      "skillId": "agentwright:behavioral-design",
+      "produces": "behavioral-design.md",
+      "idempotent": false
+    },
+    {
+      "name": "design-review",
+      "type": "checkpoint",
+      "summary": "Design ready — behavioral-design.md (Jobs, scenarios, edges). User reviews. Resume to start HOW-level project planning."
+    },
     {
       "name": "plan",
       "type": "skill",
       "skillId": "agentwright:project-planning",
+      "consumes": "behavioral-design",
       "produces": "plan.md",
       "idempotent": false
     },
