@@ -2,7 +2,7 @@
 
 > Daily ranked list of novel, code-only product ideas backed by quoted public evidence. Mines pain-point posts (Reddit / HN / GitHub issues) and newly-published capabilities (arXiv / bioRxiv / PubMed), runs a six-source novelty check, gates on three feasibility constraints, and writes a top-N Markdown digest with build sketches and quoted evidence.
 
-**Version**: 1.0.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/ideawright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/ideawright/README.md)
+**Version**: 1.0.1 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/ideawright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/ideawright/README.md)
 
 ## Install
 

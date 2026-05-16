@@ -36,6 +36,12 @@ function getJudgeCwd() {
   return dir;
 }
 
+// Collapse whitespace and bound a captured stream so a multi-line stack trace
+// (e.g. a spawned-session hook crash) becomes one readable, length-capped line.
+function clip(s, max) {
+  return String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
 export async function callJudge({
   system,
   user,
@@ -75,10 +81,19 @@ export async function callJudge({
     child.stdout.on('data', d => { stdout += d.toString(); });
     child.stderr.on('data', d => { stderr += d.toString(); });
     child.on('error', err => { clearTimeout(timer); reject(err); });
-    child.on('close', code => {
+    child.on('close', (code, signal) => {
       clearTimeout(timer);
       if (code !== 0) {
-        reject(new Error(`claude exited ${code}: ${stderr.slice(0, 500)}`));
+        // `claude --output-format json` writes its real failure to STDOUT, and
+        // a kill shows up as a signal with code=null. The old message reported
+        // only stderr — empty for the common failure — losing the actual
+        // reason. Surface code+signal+stderr+stdout, whitespace-collapsed and
+        // bounded so it fits the raw_observations.last_error cap.
+        reject(new Error(
+          `claude exited code=${code} signal=${signal ?? 'null'}`
+          + ` | stderr: ${clip(stderr, 500) || '<empty>'}`
+          + ` | stdout: ${clip(stdout, 400) || '<empty>'}`,
+        ));
         return;
       }
       try {

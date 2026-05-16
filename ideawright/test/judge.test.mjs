@@ -122,14 +122,23 @@ test('callJudge falls back to raw stdout when neither result nor response is pre
   assert.deepEqual(await p, { from: 'stdout' });
 });
 
-test('callJudge rejects with stderr context on a non-zero exit code', async () => {
+test('callJudge surfaces code, signal, stderr, and stdout on a non-zero exit', async () => {
   const h = spawnHarness();
   const p = callJudge({ system: 's', user: 'u', _spawn: h._spawn });
 
   h.child().stderr.emit('data', Buffer.from('model overloaded'));
-  h.child().emit('close', 1);
+  h.child().stdout.emit('data', Buffer.from('{"reason":"real cause on stdout"}'));
+  h.child().emit('close', 1, 'SIGTERM');
 
-  await assert.rejects(p, /claude exited 1: model overloaded/);
+  // Regression: stdout was previously discarded on non-zero exit, so a
+  // `claude exited 1` with empty stderr lost the real reason — which
+  // `claude --output-format json` writes to stdout, not stderr.
+  await assert.rejects(p, (err) => {
+    assert.match(err.message, /claude exited code=1 signal=SIGTERM/);
+    assert.match(err.message, /stderr: model overloaded/);
+    assert.match(err.message, /stdout: .*real cause on stdout/);
+    return true;
+  });
 });
 
 test('callJudge rejects with a parse error when stdout is not JSON', async () => {
