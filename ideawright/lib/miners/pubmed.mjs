@@ -30,6 +30,21 @@ function rateSleepMs() {
   return process.env.NCBI_API_KEY ? 110 : 350;
 }
 
+// undici wraps the real transport failure in err.cause (sometimes nested)
+// while err.message is just "terminated". Walk the chain, depth-bounded, so
+// the log names the actual cause (e.g. UND_ERR_BODY_TIMEOUT vs a socket reset)
+// — the prerequisite for choosing the right efetch fix instead of guessing.
+function describeFetchError(err) {
+  const parts = [];
+  let e = err;
+  for (let depth = 0; e && depth < 4; depth += 1) {
+    const code = e.code ? ` (${e.code})` : '';
+    parts.push(`${e.name ?? 'Error'}: ${e.message ?? String(e)}${code}`);
+    e = e.cause;
+  }
+  return parts.join(' <- ');
+}
+
 function ymdSlash(d) {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, '0');
@@ -166,7 +181,7 @@ export async function mine({
     try {
       pmids = await esearch(term, fromDate, toDate, effectiveMaxPerQuery);
     } catch (err) {
-      logger.warn(`[pubmed] esearch failed (${term.slice(0, 40)}…): ${err.message}`);
+      logger.warn(`[pubmed] esearch failed (${term.slice(0, 40)}…): ${describeFetchError(err)}`);
       continue;
     }
 
@@ -183,7 +198,7 @@ export async function mine({
     try {
       articles = await efetch(fresh);
     } catch (err) {
-      logger.warn(`[pubmed] efetch failed: ${err.message}`);
+      logger.warn(`[pubmed] efetch failed: ${describeFetchError(err)}`);
       await sleep(rateSleepMs());
       continue;
     }

@@ -65,9 +65,24 @@ export async function mine({
   const cursorKey = `${server}:last_doi_date`;
   const today = now();
   const lookback = effectiveLookbackDays * 86400000;
-  const fromDate = ymd(new Date(today.getTime() - lookback));
+  const coldStartFrom = ymd(new Date(today.getTime() - lookback));
   const toDate = ymd(today);
-  const sinceDate = cursors[cursorKey] ?? fromDate;
+  // The cursor IS the resume point, and it must drive the API window's `from`
+  // bound. bioRxiv's /details feed is offset-paginated and strictly
+  // date-ascending, so a date watermark used only as a client-side skip filter
+  // (the old behavior) makes every run re-page the *entire* lookback from
+  // offset 0, discarding everything older than the watermark. With a 90-day
+  // lookback that is ~2700 papers (~90 sequential pages) before the first
+  // emittable record — and bioRxiv 503s long before that — so newestDate never
+  // advances, the same cursor is rewritten forever, and obs stays 0
+  // permanently. Anchoring `from` at the cursor means each warm run pages only
+  // genuinely new content (small window, no 503), and partial progress — even
+  // a 503 mid-run — is banked via newestDate so the next run resumes forward.
+  // Cold start (no cursor) still spans the full lookback but with
+  // sinceDate === fromDate nothing is skipped, so newestDate advances and the
+  // window self-heals run over run instead of trapping.
+  const sinceDate = cursors[cursorKey] ?? coldStartFrom;
+  const fromDate = sinceDate <= toDate ? sinceDate : toDate;
 
   const observations = [];
   const updatedCursors = { ...cursors };
