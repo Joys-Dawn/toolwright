@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-05-13T01:00:00.000Z","message":{"role":"user","content":"<channel source=\"wrightward-bus\" source=\"wrightward-bus\" pending_count=\"1\">\nYou have 1 new wrightward bus event.\n</channel>"},"origin":{"kind":"channel","server":"wrightward-bus"}}
+{"type":"assistant","timestamp":"2026-05-13T01:00:01.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"A doorbell arrived — orphan thinking, no exchange opener."}]}}

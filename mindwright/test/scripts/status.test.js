@@ -1,0 +1,219 @@
+// Coverage for scripts/status.js: the no-db short-circuit, the populated
+// branch reading live store counts, and the dual stderr/stdout output
+// shape that /mindwright:status downstream pipes parse.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import {
+  mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PLUGIN_ROOT = resolve(__dirname, '..', '..');
+const SCRIPT = join(PLUGIN_ROOT, 'scripts', 'status.js');
+
+function withFreshRoots(fn) {
+  const projectDir = mkdtempSync(join(tmpdir(), 'mindwright-status-proj-'));
+  const homeDir = mkdtempSync(join(tmpdir(), 'mindwright-status-home-'));
+  const cleanup = () => {
+    try { rmSync(projectDir, { recursive: true, force: true }); } catch { /* tmp */ }
+    try { rmSync(homeDir, { recursive: true, force: true }); } catch { /* tmp */ }
+  };
+  let result;
+  try {
+    result = fn({ projectDir, homeDir });
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
+  // Async-aware: if the inner body returned a Promise, defer cleanup until
+  // it settles so we don't rm the tmp dirs while the test is still using
+  // them. Sync bodies hit the immediate-cleanup branch.
+  if (result && typeof result.then === 'function') {
+    return result.then(
+      (v) => { cleanup(); return v; },
+      (err) => { cleanup(); throw err; },
+    );
+  }
+  cleanup();
+  return result;
+}
+
+function runStatus(projectDir, homeDir) {
+  return spawnSync(process.execPath, [SCRIPT], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      MINDWRIGHT_PROJECT_ROOT: projectDir,
+      // Redirect Node's homedir() in the child so hfCacheDir() lands under
+      // a tmp we control. HOME (POSIX) + USERPROFILE (Windows) covers both.
+      HOME: homeDir,
+      USERPROFILE: homeDir,
+    },
+  });
+}
+
+function plantModelCache(homeDir, names) {
+  const hub = join(homeDir, '.cache', 'huggingface', 'hub');
+  mkdirSync(hub, { recursive: true });
+  for (const name of names) {
+    mkdirSync(join(hub, name), { recursive: true });
+  }
+}
+
+test('no-db short-circuit emits db_exists=false, zero counts, and a note', () => {
+  withFreshRoots(({ projectDir, homeDir }) => {
+    const res = runStatus(projectDir, homeDir);
+    assert.equal(res.status, 0, `expected exit 0; got ${res.status}. stderr=${res.stderr}`);
+    const out = JSON.parse(res.stdout.trim().split('\n').pop());
+    assert.equal(out.db_exists, false, 'db_exists should be false on a fresh project');
+    assert.equal(out.short_count, 0);
+    assert.equal(out.long_count, 0);
+    assert.deepEqual(out.by_category, {});
+    assert.equal(out.last_consolidation, null);
+    assert.equal(out.pending_embeds, 0);
+    assert.equal(out.oldest_preference_at, null, 'no preferences yet on a fresh project');
+    assert.deepEqual(out.consolidators, [], 'no spawned consolidators on a fresh project');
+    assert.ok(typeof out.note === 'string' && out.note.length > 0, 'note should be set explaining DB absence');
+    // Sanity: the openStore() call must NOT have been made — if it had, the
+    // db would now exist on disk because openStore runs migrations.
+    assert.equal(
+      existsSync(join(projectDir, '.claude', 'mindwright', 'mindwright.db')),
+      false,
+      'no-db branch must not call openStore (which would create the file)',
+    );
+  });
+});
+
+test('populated branch reads short/long counts and by_category from live store', async () => {
+  await withFreshRoots(async ({ projectDir, homeDir }) => {
+    // Plant a real DB so the script takes the populated path. We hit
+    // openStore from the test process (it's pure Node + better-sqlite3),
+    // insert a few rows, then close — leaving a DB on disk for the
+    // script's spawn to read.
+    const { openStore } = await import('../../lib/store.js');
+    process.env.MINDWRIGHT_PROJECT_ROOT = projectDir;
+    const store = openStore();
+    try {
+      store.insertEntry({
+        tier: 'short', kind: 'cli_prompt',
+        content: 'observation A', sessionId: 'sess-a', sourceRef: null,
+      });
+      store.insertEntry({
+        tier: 'short', kind: 'thinking',
+        content: 'observation B', sessionId: 'sess-a', sourceRef: null,
+      });
+      store.insertEntry({
+        tier: 'long', category: 'fact', scope: 'project', kind: 'fact',
+        content: 'fact one', sessionId: 'sess-a', sourceRef: null,
+      });
+      store.insertEntry({
+        tier: 'long', category: 'fact', scope: 'user', kind: 'fact',
+        content: 'fact two', sessionId: 'sess-a', sourceRef: null,
+        confidence: 0.8,
+      });
+    } finally {
+      store.close();
+      delete process.env.MINDWRIGHT_PROJECT_ROOT;
+    }
+
+    const res = runStatus(projectDir, homeDir);
+    assert.equal(res.status, 0, `expected exit 0; got ${res.status}. stderr=${res.stderr}`);
+    const out = JSON.parse(res.stdout.trim().split('\n').pop());
+    assert.equal(out.db_exists, true);
+    assert.equal(out.short_count, 2, 'short_count must reflect live store contents');
+    assert.equal(out.long_count, 2, 'long_count must reflect live store contents');
+    assert.equal(out.by_category['fact'], 2);
+    assert.equal(out.by_category_scope['fact/project'], 1);
+    assert.equal(out.by_category_scope['fact/user'], 1);
+    assert.equal(out.last_consolidation, null, 'no consolidation ran');
+    assert.equal(out.pending_embeds, 4, '4 rows were inserted without embeddings');
+    assert.ok(out.oldest_preference_at,
+      'a user-scope fact was planted — oldest_preference_at must be set');
+    assert.deepEqual(out.consolidators, [], 'no consolidator records planted');
+    assert.equal(out.note, undefined, 'populated branch should not set note');
+  });
+});
+
+test('consolidators array surfaces every consolidator_for:* meta record', async () => {
+  await withFreshRoots(async ({ projectDir, homeDir }) => {
+    const { openStore } = await import('../../lib/store.js');
+    process.env.MINDWRIGHT_PROJECT_ROOT = projectDir;
+    const store = openStore();
+    try {
+      store.setConsolidatorFor('handle-a', {
+        session_id: '00000000-0000-0000-0000-000000000001',
+        first_seen: '2026-05-01T00:00:00.000Z',
+        last_spawn: '2026-05-10T00:00:00.000Z',
+      });
+      store.setConsolidatorFor('handle-b', {
+        session_id: '00000000-0000-0000-0000-000000000002',
+        first_seen: '2026-05-02T00:00:00.000Z',
+      });
+    } finally {
+      store.close();
+      delete process.env.MINDWRIGHT_PROJECT_ROOT;
+    }
+
+    const res = runStatus(projectDir, homeDir);
+    assert.equal(res.status, 0, `expected exit 0; got ${res.status}. stderr=${res.stderr}`);
+    const out = JSON.parse(res.stdout.trim().split('\n').pop());
+    assert.equal(out.consolidators.length, 2, 'both planted records must surface');
+    const handles = out.consolidators.map((c) => c.requester_handle).sort();
+    assert.deepEqual(handles, ['handle-a', 'handle-b']);
+    const a = out.consolidators.find((c) => c.requester_handle === 'handle-a');
+    assert.equal(a.session_id, '00000000-0000-0000-0000-000000000001');
+    assert.equal(a.last_spawn, '2026-05-10T00:00:00.000Z');
+    // The stderr line should also surface the consolidator handles so a
+    // user scanning the terminal output can spot them.
+    assert.match(res.stderr, /consolidators:/);
+    assert.match(res.stderr, /handle-a/);
+    assert.match(res.stderr, /handle-b/);
+  });
+});
+
+test('stdout JSON parses and matches the stderr-rendered values', () => {
+  withFreshRoots(({ projectDir, homeDir }) => {
+    const res = runStatus(projectDir, homeDir);
+    assert.equal(res.status, 0);
+    const out = JSON.parse(res.stdout.trim().split('\n').pop());
+    // stderr is the human-readable form — assert that every keyed value the
+    // user reads in the terminal corresponds to the JSON, so a downstream
+    // pipe consumer that JSON-parses stdout sees identical state.
+    assert.match(res.stderr, new RegExp(`db exists:\\s+${out.db_exists}`));
+    assert.match(res.stderr, new RegExp(`short_count:\\s+${out.short_count}`));
+    assert.match(res.stderr, new RegExp(`long_count:\\s+${out.long_count}`));
+    assert.match(res.stderr, new RegExp(`daemon alive:\\s+${out.daemon_alive}`));
+    assert.match(res.stderr, new RegExp(`embedder cached:\\s+${out.model_cached}`));
+    assert.match(res.stderr, new RegExp(`reranker cached:\\s+${out.reranker_cached}`));
+  });
+});
+
+test('model_cached / reranker_cached reflect hfCacheDir contents', () => {
+  withFreshRoots(({ projectDir, homeDir }) => {
+    // First: no model dirs → both false.
+    let res = runStatus(projectDir, homeDir);
+    let out = JSON.parse(res.stdout.trim().split('\n').pop());
+    assert.equal(out.model_cached, false, 'no embedder dir → model_cached=false');
+    assert.equal(out.reranker_cached, false, 'no reranker dir → reranker_cached=false');
+
+    // Plant only the embedder cache dir.
+    plantModelCache(homeDir, ['models--Xenova--bge-m3']);
+    res = runStatus(projectDir, homeDir);
+    out = JSON.parse(res.stdout.trim().split('\n').pop());
+    assert.equal(out.model_cached, true, 'embedder dir present → model_cached=true');
+    assert.equal(out.reranker_cached, false, 'reranker still missing → reranker_cached=false');
+
+    // Plant the reranker too.
+    plantModelCache(homeDir, ['models--onnx-community--bge-reranker-v2-m3-ONNX']);
+    res = runStatus(projectDir, homeDir);
+    out = JSON.parse(res.stdout.trim().split('\n').pop());
+    assert.equal(out.model_cached, true);
+    assert.equal(out.reranker_cached, true, 'reranker dir present → reranker_cached=true');
+  });
+});

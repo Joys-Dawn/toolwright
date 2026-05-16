@@ -1,5 +1,5 @@
 site_name: toolwright
-site_description: Claude Code plugins — agentwright, wrightward, timewright, ideawright, gripewright
+site_description: Claude Code plugins — agentwright, wrightward, timewright, ideawright, gripewright, forgewright, mindwright
 site_url: https://joys-dawn.github.io/toolwright/
 repo_url: https://github.com/Joys-Dawn/toolwright
 repo_name: Joys-Dawn/toolwright
@@ -50,6 +50,8 @@ nav:
   - timewright: timewright.md
   - ideawright: ideawright.md
   - gripewright: gripewright.md
+  - forgewright: forgewright.md
+  - mindwright: mindwright.md
 
 markdown_extensions:
   - abbr

@@ -1,6 +1,6 @@
 # toolwright — Claude Code plugins
 
-Six zero-config [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugins, shipped from one marketplace. Install any subset.
+Seven zero-config [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugins, shipped from one marketplace. Install any subset.
 
 | Plugin | What it does |
 |---|---|
@@ -10,6 +10,7 @@ Six zero-config [Claude Code](https://docs.anthropic.com/en/docs/claude-code) pl
 | [ideawright](ideawright.md) | Daily ranked list of novel, code-only product ideas backed by quoted public evidence. Mines pain signals (Reddit/HN/GitHub) and new capabilities (arXiv/bioRxiv/PubMed), checks novelty, gates on feasibility. Run `/ideawright:daily`. |
 | [gripewright](gripewright.md) | Capture user complaints about agent behavior into a labeled NDJSON corpus you can mine for patterns or use as a training signal. Type `/gripewright:wtf` when the agent goes wrong. |
 | [forgewright](forgewright.md) | Multi-agent workflow orchestrator on agentwright + wrightward. One Claude session is the leader (plans, drives audit pipelines, verifies, talks to you on Discord); peers receive implementation handoffs (or — zero peers — the leader does it). `/forgewright:workflow-run feature "..."` strings plan → plan-quality-review → checkpoint → handoff(implement) → verify-plan → audit pipeline → tests into one resumable, stateful orchestration. |
+| [mindwright](mindwright.md) | Per-agent memory + cross-session learning. Each session quietly accumulates short-term observations; a background (or on-demand `/mindwright:dream`) consolidator distills them into long-term facts that auto-inject into future prompts by relevance — nothing dumped at session start, nothing irrelevant injected. Run `/mindwright:setup` once, then it's automatic. |
 
 ## Install
 
@@ -21,15 +22,17 @@ Six zero-config [Claude Code](https://docs.anthropic.com/en/docs/claude-code) pl
 /plugin install ideawright@Joys-Dawn/toolwright
 /plugin install gripewright@Joys-Dawn/toolwright
 /plugin install forgewright@Joys-Dawn/toolwright
+/plugin install mindwright@Joys-Dawn/toolwright
 ```
 
 Or run `/plugin` and browse the **Discover** tab.
 
 ### Requirements
 
-- Node.js ≥ 18 for agentwright / wrightward / timewright / gripewright; **≥ 22.5 for ideawright** (uses the built-in `node:sqlite`).
-- Git (timewright uses git plumbing for snapshots; wrightward expects a git repo).
-- `claude` on `PATH` (agentwright's headless auditor and ideawright's LLM judge both spawn it).
+- Node.js ≥ 18 for agentwright / wrightward / timewright; **≥ 20 for gripewright / mindwright**; **≥ 22.5 for ideawright** (uses the built-in `node:sqlite`).
+- Git — only timewright needs it (uses `git worktree`/plumbing for snapshots). The other plugins work in any directory; wrightward simply adds its state dir to an existing `.gitignore` when one is present and never creates one.
+- `claude` on `PATH` (agentwright's headless auditor and ideawright's LLM judge both spawn it; mindwright's auto-spawned consolidator uses it too, falling back to a manual nudge if absent).
+- mindwright ships native npm dependencies (better-sqlite3, sqlite-vec, `@huggingface/transformers`, MCP SDK) and pulls a one-time ~5 GB local model set via `/mindwright:setup` before memory features activate. The other six are dependency-free and work the moment they're installed.
 - A Discord bot token — only for wrightward's optional Discord bridge.
 
 ## Using them together

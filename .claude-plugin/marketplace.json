@@ -66,6 +66,16 @@
       },
       "category": "developer-tools",
       "tags": ["workflow", "orchestration", "automation", "plugin"]
+    },
+    {
+      "name": "mindwright",
+      "source": "./mindwright",
+      "description": "Per-agent memory and cross-session learning — distills short-term observations into relevance-ranked long-term facts",
+      "author": {
+        "name": "Joy's Dawn Solutions LLC"
+      },
+      "category": "developer-tools",
+      "tags": ["memory", "learning", "retrieval", "multi-agent"]
     }
   ]
 }

@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-05-13T01:00:00.000Z","message":{"role":"user","content":"reply to the user on Discord"}}
+{"type":"assistant","timestamp":"2026-05-13T01:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_OUT1","name":"mcp__plugin_wrightward_wrightward-bus__wrightward_send_message","input":{"audience":"user","body":"hi from the agent"}}]}}

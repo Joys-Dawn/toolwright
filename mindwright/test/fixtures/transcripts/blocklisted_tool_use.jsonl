@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-05-13T01:00:00.000Z","message":{"role":"user","content":"please edit the file"}}
+{"type":"assistant","timestamp":"2026-05-13T01:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_EDIT1","name":"Edit","input":{"file_path":"/tmp/x","old_string":"a","new_string":"b"}},{"type":"tool_use","id":"toolu_BASH1","name":"Bash","input":{"command":"ls"}}]}}
