@@ -38,7 +38,7 @@ Set "idea": null if any of these are false:
 
 NEVER wrap the JSON in prose or markdown code fences. Return ONLY the object.`;
 
-export async function validateSignal(observation, { timeoutMs, model } = {}) {
+export async function validateSignal(observation, { timeoutMs, model, _callJudge } = {}) {
   const user = JSON.stringify(
     {
       source: observation.source,
@@ -54,7 +54,8 @@ export async function validateSignal(observation, { timeoutMs, model } = {}) {
   const opts = { system: SYSTEM, user };
   if (timeoutMs) opts.timeoutMs = timeoutMs;
   if (model) opts.model = model;
-  const result = await callJudge(opts);
+  const judge = _callJudge ?? callJudge;
+  const result = await judge(opts);
   return normalizeVerdict(result);
 }
 

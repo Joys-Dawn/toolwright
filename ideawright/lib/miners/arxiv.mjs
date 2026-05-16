@@ -111,6 +111,7 @@ export async function mine({
   config = {},
   maxPerQuery,
   _sleepMs,
+  _sleep,
 } = {}) {
   const observations = [];
   const updatedCursors = { ...cursors };
@@ -121,6 +122,7 @@ export async function mine({
   const lookbackDays = Number(config.lookback_days) > 0 ? Number(config.lookback_days) : 14;
   const effectiveMaxPerQuery = maxPerQuery ?? config.max_per_query ?? 50;
   const interCategorySleepMs = _sleepMs ?? 8000;
+  const sleepFn = _sleep ?? sleep;
 
   for (let i = 0; i < cats.length; i++) {
     const cat = cats[i];
@@ -162,7 +164,7 @@ export async function mine({
     }
     // Politeness gap between categories per arXiv's 1 req / 3s API policy.
     // Skip after the last category — no point sleeping before returning.
-    if (i < cats.length - 1) await sleep(interCategorySleepMs);
+    if (i < cats.length - 1) await sleepFn(interCategorySleepMs);
   }
 
   return { observations, cursors: updatedCursors };

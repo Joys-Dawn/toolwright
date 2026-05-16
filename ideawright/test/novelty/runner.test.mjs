@@ -30,6 +30,20 @@ function mockPipelineFor(verdictByTitle) {
   };
 }
 
+// Deterministic concurrency gate (precedent: test/miners/runner-batch.test.mjs).
+// A manually-settled promise lets us wedge the worker pool against a barrier,
+// drain microtask turns until it is at steady state, then assert the EXACT
+// peak — no setTimeout, no wall-clock, no scheduler-timing dependence.
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+async function drainMicrotasks(n = 60) {
+  for (let i = 0; i < n; i++) await Promise.resolve();
+}
+
 test("runNoveltyPass advances novel/niche to verified, archives crowded", async () => {
   const db = setupDb();
   try {
@@ -94,25 +108,32 @@ test("runNoveltyPass honors maxPerRun cap", async () => {
 });
 
 test("runNoveltyPass runs ideas in parallel up to concurrency cap", async () => {
-  // Pin the concurrency contract: with concurrency=4 and 8 ideas, at any
-  // given moment up to 4 pipelines should be in-flight. Without parallelism,
-  // peakInFlight would be 1.
+  // Pin the concurrency contract: with concurrency=4 and 8 ideas, exactly 4
+  // pipelines are in-flight while the gate is closed (a 5th cannot start —
+  // every worker is blocked). Without parallelism, peak would be 1.
   const db = setupDb();
   try {
     for (let i = 0; i < 8; i++) seedIdea(db, { title: `T${i}`, target_user: `u${i}` });
     let inFlight = 0;
-    let peakInFlight = 0;
+    let peak = 0;
+    const gate = deferred();
     const pipeline = async (idea) => {
       inFlight++;
-      if (inFlight > peakInFlight) peakInFlight = inFlight;
-      // Force overlap: each idea waits 30ms, so concurrent starts overlap.
-      await new Promise((r) => setTimeout(r, 30));
+      peak = Math.max(peak, inFlight);
+      await gate.promise;
       inFlight--;
       return mockPipelineFor({ [idea.title]: "novel" })(idea);
     };
-    const summary = await runNoveltyPass({ db, pipeline, concurrency: 4 });
+
+    const p = runNoveltyPass({ db, pipeline, concurrency: 4 });
+    await drainMicrotasks();
+    assert.equal(peak, 4, 'exactly concurrency workers reach the gate');
+    assert.equal(inFlight, 4, 'all 4 are blocked, none completed past the gate');
+
+    gate.resolve();
+    const summary = await p;
     assert.equal(summary.processed, 8);
-    assert.equal(peakInFlight, 4, 'should reach but not exceed concurrency cap');
+    assert.equal(peak, 4, 'cap held through completion — never exceeded 4');
   } finally { db.close(); }
 });
 
@@ -121,16 +142,25 @@ test("runNoveltyPass concurrency=1 is serial (no overlap)", async () => {
   try {
     for (let i = 0; i < 5; i++) seedIdea(db, { title: `T${i}`, target_user: `u${i}` });
     let inFlight = 0;
-    let peakInFlight = 0;
+    let peak = 0;
+    const gate = deferred();
     const pipeline = async (idea) => {
       inFlight++;
-      if (inFlight > peakInFlight) peakInFlight = inFlight;
-      await new Promise((r) => setTimeout(r, 10));
+      peak = Math.max(peak, inFlight);
+      await gate.promise;
       inFlight--;
       return mockPipelineFor({ [idea.title]: "novel" })(idea);
     };
-    await runNoveltyPass({ db, pipeline, concurrency: 1 });
-    assert.equal(peakInFlight, 1, 'concurrency=1 must process strictly one at a time');
+
+    const p = runNoveltyPass({ db, pipeline, concurrency: 1 });
+    await drainMicrotasks();
+    assert.equal(peak, 1, 'concurrency=1 admits exactly one pipeline at a time');
+    assert.equal(inFlight, 1, 'the single worker is blocked on the gate');
+
+    gate.resolve();
+    const summary = await p;
+    assert.equal(summary.processed, 5);
+    assert.equal(peak, 1, 'strictly serial through completion');
   } finally { db.close(); }
 });
 

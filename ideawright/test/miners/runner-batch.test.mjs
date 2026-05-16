@@ -558,3 +558,389 @@ test('runMiners respects batchSize chunking', async () => {
     cleanup({ db, dir });
   }
 });
+
+// -- Concurrency / fan-out regression tests ----------------------------------
+//
+// These pin the parallel-runner + shared-limiter behavior. They use the
+// deferred-promise / peak-counter pattern from test/novelty/limiter.test.mjs
+// (NO setTimeout / wall-clock timing) so scheduling is fully deterministic:
+// kick off runMiners WITHOUT awaiting it, drain microtask turns until the
+// system is wedged against the gate, assert the invariant, then release.
+
+// Manually-controlled promise the test settles to drive scheduling.
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+// Yield enough microtask turns for runMiners' fan-out + limiter to reach
+// steady state against a blocking gate.
+async function drainMicrotasks(n = 60) {
+  for (let i = 0; i < n; i++) await Promise.resolve();
+}
+
+// Save/restore an arbitrary set of MINERS entries.
+function swapMiners(map) {
+  const saved = {};
+  for (const [id, impl] of Object.entries(map)) {
+    saved[id] = MINERS[id];
+    MINERS[id] = impl;
+  }
+  return () => { for (const id of Object.keys(map)) MINERS[id] = saved[id]; };
+}
+
+test('runMiners fans miners out concurrently (mine() calls overlap, not serialized)', async () => {
+  // 3 miners whose mine() blocks on a shared gate. If the runner were still
+  // the old sequential `for (const id of activeIds)` loop, only ONE mine()
+  // could be in-flight at a time (peak=1). Parallel fan-out → peak=3.
+  const { db, dir } = freshDb();
+  let active = 0;
+  let peak = 0;
+  const gate = deferred();
+  const blockingMiner = () => ({
+    mine: async () => {
+      active++;
+      peak = Math.max(peak, active);
+      await gate.promise;
+      active--;
+      return { observations: [], cursors: {} };
+    },
+  });
+
+  const restore = swapMiners({
+    reddit: blockingMiner(),
+    hn: blockingMiner(),
+    github: blockingMiner(),
+  });
+
+  try {
+    const p = runMiners({
+      db,
+      repoRoot: dir,
+      sources: ['reddit', 'hn', 'github'],
+      logger: silentLogger,
+    });
+
+    await drainMicrotasks();
+    assert.equal(peak, 3, 'all 3 miners must be in-flight simultaneously (parallel fan-out)');
+
+    gate.resolve();
+    const summary = await p;
+    assert.equal(active, 0, 'every miner must drain');
+    assert.ok(summary.sources.reddit && summary.sources.hn && summary.sources.github);
+  } finally {
+    restore();
+    cleanup({ db, dir });
+  }
+});
+
+test('runMiners bounds concurrent batch-validate calls across all sources to validate.concurrency', async () => {
+  // 5 sources each fire ONE batch-validate call. They run concurrently via
+  // the parallel fan-out, but every batch call schedules through the single
+  // shared limiter, so no more than validate.concurrency may be in-flight at
+  // once. concurrency is supplied via config.validate.concurrency (proves the
+  // config knob is wired, mirroring the validate.batch_size test above).
+  const { db, dir } = freshDb();
+  let active = 0;
+  let peak = 0;
+  const release = deferred();
+  const recordingBatch = async (observations) => {
+    active++;
+    peak = Math.max(peak, active);
+    await release.promise;
+    active--;
+    return observations.map((_, i) => passingVerdict(i + 1));
+  };
+
+  const fakeMiner = () => ({
+    mine: async () => ({ observations: [makeObs(1), makeObs(2)], cursors: {} }),
+  });
+  const restore = swapMiners({
+    reddit: fakeMiner(),
+    hn: fakeMiner(),
+    github: fakeMiner(),
+    arxiv: fakeMiner(),
+    biorxiv: fakeMiner(),
+  });
+
+  try {
+    mkdirSync(join(dir, '.claude'), { recursive: true });
+    writeFileSync(
+      join(dir, '.claude', 'ideawright.json'),
+      JSON.stringify({ validate: { concurrency: 2 } }),
+    );
+
+    const p = runMiners({
+      db,
+      repoRoot: dir,
+      sources: ['reddit', 'hn', 'github', 'arxiv', 'biorxiv'],
+      logger: silentLogger,
+      _batchValidate: recordingBatch,
+    });
+
+    await drainMicrotasks();
+    assert.ok(peak <= 2, `concurrent batch calls must be capped at 2, saw ${peak}`);
+    assert.equal(peak, 2, 'the cap must actually be reached (5 sources, 2 slots)');
+
+    release.resolve();
+    const summary = await p;
+    assert.ok(peak <= 2, 'cap must hold through drain');
+    assert.equal(summary.observations, 10, 'all 5 sources validated (2 obs each)');
+  } finally {
+    restore();
+    cleanup({ db, dir });
+  }
+});
+
+test('runMiners bounds concurrent PER-ITEM fallback validate calls across all sources', async () => {
+  // The Critical fix this pins: when the batch validator throws (the 5-hour
+  // usage-cap condition this whole change targets), each source falls back to
+  // per-item `validate`. With 5 sources × 3 obs that is 15 `claude`-spawning
+  // per-item calls. If only the batch call were limiter-wrapped, all 15 would
+  // run at once (each source Promise.all's its 3, ×5 sources). Wrapping the
+  // per-item call in the SAME shared limiter caps it at validate.concurrency.
+  const { db, dir } = freshDb();
+  let active = 0;
+  let peak = 0;
+  const release = deferred();
+  const recordingValidate = async () => {
+    active++;
+    peak = Math.max(peak, active);
+    await release.promise;
+    active--;
+    return passingVerdict(1);
+  };
+  const throwingBatch = () => { throw new Error('batch down: usage cap'); };
+
+  const fallbackMiner = () => ({
+    mine: async () => ({
+      observations: [makeObs(1), makeObs(2), makeObs(3)],
+      cursors: {},
+    }),
+    validator: recordingValidate,
+  });
+  const restore = swapMiners({
+    reddit: fallbackMiner(),
+    hn: fallbackMiner(),
+    github: fallbackMiner(),
+    arxiv: fallbackMiner(),
+    biorxiv: fallbackMiner(),
+  });
+
+  try {
+    const p = runMiners({
+      db,
+      repoRoot: dir,
+      sources: ['reddit', 'hn', 'github', 'arxiv', 'biorxiv'],
+      validationConcurrency: 2,
+      logger: silentLogger,
+      _batchValidate: throwingBatch,
+    });
+
+    await drainMicrotasks(120);
+    assert.ok(peak <= 2, `per-item fallback must be capped at 2 across all sources, saw ${peak}`);
+    assert.equal(peak, 2, 'the cap must actually be reached (15 per-item calls, 2 slots)');
+
+    release.resolve();
+    const summary = await p;
+    assert.ok(peak <= 2, 'cap must hold through drain');
+    // Fallback still produces ideas — bounding must not drop work.
+    assert.equal(summary.validated, 15, 'all 15 per-item validations succeed');
+    assert.equal(summary.sources.reddit.errored, 0, 'no per-item errors');
+    const ideas = listByStatus(db, 'new');
+    assert.ok(ideas.length >= 1, 'bounded fallback still inserts ideas');
+  } finally {
+    restore();
+    cleanup({ db, dir });
+  }
+});
+
+test('runMiners isolates a failing miner: others still validate+insert (allSettled)', async () => {
+  // One miner throwing must not reject the whole batch nor block the others.
+  const { db, dir } = freshDb();
+  const restore = swapMiners({
+    reddit: { mine: async () => { throw new Error('boom'); } },
+    hn: { mine: async () => ({ observations: [makeObs(1), makeObs(2)], cursors: {} }) },
+    github: { mine: async () => ({ observations: [makeObs(3), makeObs(4)], cursors: {} }) },
+  });
+
+  try {
+    const summary = await runMiners({
+      db,
+      repoRoot: dir,
+      sources: ['reddit', 'hn', 'github'],
+      logger: silentLogger,
+      _batchValidate: fakeBatchPass,
+    });
+
+    assert.deepEqual(summary.sources.reddit, { error: 'boom' }, 'thrower yields only an error entry');
+    assert.equal(summary.sources.hn.error, undefined, 'hn must be unaffected');
+    assert.equal(summary.sources.hn.validated, 2);
+    assert.equal(summary.sources.github.validated, 2);
+    assert.equal(summary.observations, 4, 'only the two healthy sources contribute observations');
+    const ideas = listByStatus(db, 'new');
+    assert.ok(ideas.length > 0, 'healthy sources still insert ideas despite the failure');
+  } finally {
+    restore();
+    cleanup({ db, dir });
+  }
+});
+
+test('runMiners surfaces a pre-mine (getSourceCursor) failure via the allSettled rejected branch', async () => {
+  // runSource() catches miner.mine() errors itself, so the ONLY way it can
+  // reject (hitting runMiners' settled.status==='rejected' branch) is a throw
+  // BEFORE its try block — e.g. getSourceCursor(). A db whose prepare() throws
+  // makes getSourceCursor throw synchronously; this proves that branch turns a
+  // rejected runSource into summary.sources[id]={error} and never calls mine().
+  const dir = mkdtempSync(join(tmpdir(), 'ideawright-test-'));
+  const errors = [];
+  const errLogger = { ...silentLogger, error: (m) => errors.push(m) };
+  let mineCalled = false;
+  const restore = swapMiners({
+    reddit: { mine: async () => { mineCalled = true; return { observations: [], cursors: {} }; } },
+  });
+  const brokenDb = { prepare() { throw new Error('db unavailable'); } };
+
+  try {
+    const summary = await runMiners({
+      db: brokenDb,
+      repoRoot: dir,
+      sources: ['reddit'],
+      logger: errLogger,
+    });
+
+    assert.deepEqual(summary.sources.reddit, { error: 'db unavailable' },
+      'rejected runSource is surfaced as an {error} entry');
+    assert.equal(mineCalled, false,
+      'failure occurred before miner.mine — proving the rejected branch, not the in-try catch');
+    assert.ok(
+      errors.some((m) => m.includes('[scan:reddit] miner failed') && m.includes('db unavailable')),
+      'rejected branch logs the failure',
+    );
+    assert.equal(summary.observations, 0);
+    assert.equal(summary.inserted, 0);
+  } finally {
+    restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runMiners with config validate.concurrency=0 does not hang (falls back to a working limiter)', async () => {
+  // Regression for audit correctness-2: 0 is not nullish, so the old
+  // `?? validationConcurrency` passed 0 straight to makeLimiter, whose pump
+  // never enters (`active < 0` is false) → every `await limit(...)` hangs
+  // forever. The fix coerces any non-finite / < 1 config value back to the
+  // param default. Pre-fix this test wedges (suite stalls on the hang);
+  // post-fix it completes and validation still runs under the fallback.
+  const { db, dir } = freshDb();
+  const fakeMiner = {
+    mine: async () => ({ observations: [makeObs(1), makeObs(2)], cursors: {} }),
+  };
+  const restore = swapMiners({ reddit: fakeMiner });
+
+  try {
+    mkdirSync(join(dir, '.claude'), { recursive: true });
+    writeFileSync(
+      join(dir, '.claude', 'ideawright.json'),
+      JSON.stringify({ validate: { concurrency: 0 } }),
+    );
+
+    const summary = await runMiners({
+      db,
+      repoRoot: dir,
+      sources: ['reddit'],
+      logger: silentLogger,
+      _batchValidate: fakeBatchPass,
+    });
+
+    assert.equal(summary.observations, 2, 'run completed instead of hanging');
+    const ideas = listByStatus(db, 'new');
+    assert.equal(ideas.length, 2, 'validation still ran (limiter pumped) under the fallback concurrency');
+  } finally {
+    restore();
+    cleanup({ db, dir });
+  }
+});
+
+test('runMiners with config validate.batch_size=0 does not hang (falls back to default batching)', async () => {
+  // Regression for audit correctness-3: 0 is not nullish, so the old `?? 20`
+  // fed 0 into `for (i=0; i<pending.length; i += batchSize)`, which never
+  // advances → infinite loop, silent hang. The fix coerces any non-finite /
+  // < 1 value back to the default 20. Pre-fix this wedges; post-fix it
+  // completes with the 3 obs validated in a single fallback-sized batch.
+  const { db, dir } = freshDb();
+  const fakeMiner = {
+    mine: async () => ({ observations: [makeObs(1), makeObs(2), makeObs(3)], cursors: {} }),
+  };
+  const restore = swapMiners({ reddit: fakeMiner });
+
+  try {
+    mkdirSync(join(dir, '.claude'), { recursive: true });
+    writeFileSync(
+      join(dir, '.claude', 'ideawright.json'),
+      JSON.stringify({ validate: { batch_size: 0 } }),
+    );
+
+    let batchCalls = 0;
+    const countingBatch = (obs) => { batchCalls++; return obs.map((_, i) => passingVerdict(i + 1)); };
+
+    const summary = await runMiners({
+      db,
+      repoRoot: dir,
+      sources: ['reddit'],
+      logger: silentLogger,
+      _batchValidate: countingBatch,
+    });
+
+    assert.equal(summary.observations, 3, 'run completed instead of hanging');
+    assert.equal(batchCalls, 1, '3 obs fit in one batch under the fallback batch_size (20)');
+    const ideas = listByStatus(db, 'new');
+    assert.equal(ideas.length, 3, 'all observations validated and inserted');
+  } finally {
+    restore();
+    cleanup({ db, dir });
+  }
+});
+
+test('runMiners warns (does not silently swallow) when .claude/ideawright.json is malformed, then falls back to defaults', async () => {
+  // Regression for audit best-practices-4: loadConfig caught the JSON parse
+  // error with an unused `err` and no log, so a single typo in the
+  // user-authored config silently reverted EVERY tunable (rate limits,
+  // validate.concurrency/batch_size, enabled sources, model) to defaults with
+  // zero operator feedback. The fix threads the logger in and warns loudly
+  // before falling back. Assert both facets of that contract: the failure is
+  // surfaced AND the run still completes on defaults.
+  const { db, dir } = freshDb();
+  const fakeMiner = {
+    mine: async () => ({ observations: [makeObs(1), makeObs(2)], cursors: {} }),
+  };
+  const restore = swapMiners({ reddit: fakeMiner });
+  const warnings = [];
+  const capturingLogger = { ...silentLogger, warn: (m) => warnings.push(m) };
+
+  try {
+    mkdirSync(join(dir, '.claude'), { recursive: true });
+    writeFileSync(join(dir, '.claude', 'ideawright.json'), '{ "validate": { not valid json');
+
+    const summary = await runMiners({
+      db,
+      repoRoot: dir,
+      sources: ['reddit'],
+      logger: capturingLogger,
+      _batchValidate: fakeBatchPass,
+    });
+
+    const warned = warnings.find((m) => m.includes('ideawright.json'));
+    assert.ok(
+      warned,
+      `the malformed-config parse failure must be surfaced, not swallowed; saw ${JSON.stringify(warnings)}`,
+    );
+    assert.ok(warned.includes('using defaults'), 'the warning tells the operator defaults are in effect');
+    assert.equal(summary.observations, 2, 'run still completes on default config (graceful fallback preserved)');
+    assert.equal(listByStatus(db, 'new').length, 2, 'observations validated+inserted under defaults');
+  } finally {
+    restore();
+    cleanup({ db, dir });
+  }
+});

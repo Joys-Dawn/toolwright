@@ -3,6 +3,19 @@ import assert from "node:assert/strict";
 import { runSearchBattery } from "../../lib/novelty/search/index.mjs";
 import { routeMock } from "./_fetch-mock.mjs";
 
+// Deterministic concurrency gate (precedent: test/miners/runner-batch.test.mjs).
+// A manually-settled promise wedges in-flight fetches at a barrier so the EXACT
+// peak can be asserted without setTimeout / wall-clock timing.
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+async function drainMicrotasks(n = 200) {
+  for (let i = 0; i < n; i++) await Promise.resolve();
+}
+
 test("runSearchBattery dedups identical URLs across sources", async () => {
   const restore = routeMock([
     {
@@ -98,22 +111,36 @@ test("runSearchBattery captures per-source errors without crashing", async () =>
 });
 
 test("runSearchBattery respects per-host concurrency cap", async () => {
+  // Wedge every HN fetch against a manual gate, drain microtasks until the
+  // limiter is at steady state, then assert the peak BOTH ways: never exceeds
+  // the cap AND actually reaches it. A one-sided `<= 2` would also pass if a
+  // broken limiter admitted 0 or 1 — the two-sided check (precedent:
+  // runner-batch.test.mjs:683-684) pins that the cap is real, not absent.
   let activeHN = 0, peakHN = 0;
+  const gate = deferred();
   const orig = globalThis.fetch;
   globalThis.fetch = async (url) => {
     const u = String(url);
     if (/hn\.algolia\.com/.test(u)) {
       activeHN++;
       peakHN = Math.max(peakHN, activeHN);
-      await new Promise(r => setTimeout(r, 5));
+      await gate.promise;
       activeHN--;
     }
     return { ok: true, status: 200, headers: { get: () => null }, async json(){return{items:[],hits:[],objects:[]};}, async text(){return"";} };
   };
   try {
     const variants = Array.from({ length: 10 }, (_, i) => ({ query: `q${i}`, strategy: "exact" }));
-    await runSearchBattery(variants, { hostCaps: { hn: 2, exa: 10, github: 10, npm: 10, scholar: 10 }, sources: { exa: { enabled: false }, scholar: { enabled: false } } });
+    const p = runSearchBattery(variants, { hostCaps: { hn: 2, exa: 10, github: 10, npm: 10, scholar: 10 }, sources: { exa: { enabled: false }, scholar: { enabled: false } } });
+
+    await drainMicrotasks();
     assert.ok(peakHN <= 2, `HN concurrency cap=2 violated, peak=${peakHN}`);
+    assert.equal(peakHN, 2, 'the HN cap must actually be reached (10 distinct HN queries, 2 slots)');
+
+    gate.resolve();
+    await p;
+    assert.ok(peakHN <= 2, 'cap held through drain to completion');
+    assert.equal(peakHN, 2);
   } finally { globalThis.fetch = orig; }
 });
 

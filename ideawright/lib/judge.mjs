@@ -42,8 +42,10 @@ export async function callJudge({
   model = DEFAULT_MODEL,
   cwd,
   timeoutMs = 180_000,
+  _spawn,
 } = {}) {
   if (!system || !user) throw new Error('callJudge: system and user are required');
+  const spawnFn = _spawn ?? spawn;
   const spawnCwd = cwd ?? getJudgeCwd();
   return new Promise((resolve, reject) => {
     // Prompt goes via stdin (-p with no inline arg), not argv. Long
@@ -58,7 +60,7 @@ export async function callJudge({
       '--model', model,
       '--permission-mode', 'dontAsk',
     ];
-    const child = spawn('claude', args, { cwd: spawnCwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawnFn('claude', args, { cwd: spawnCwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => {
@@ -90,7 +92,7 @@ export async function callJudge({
   });
 }
 
-function extractJson(text) {
+export function extractJson(text) {
   if (typeof text !== 'string') return text;
   try { return JSON.parse(text); } catch {}
   const stripped = text.replace(/```(?:json)?\s*/gi, '').replace(/```\s*/g, '').trim();

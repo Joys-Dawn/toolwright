@@ -168,7 +168,11 @@ test('mine config.max_per_query overrides the function default', async (t) => {
   assert.match(capturedUrl, /max_results=7/);
 });
 
-test('mine sleeps between categories but skips after the last one', async (t) => {
+test('mine sleeps between categories but NOT after the last one', async (t) => {
+  // Deterministic: spy the injected _sleep seam and assert the exact number
+  // of inter-category gaps (cats.length - 1). No wall clock, no real timers —
+  // the old Date.now()/elapsed<100 heuristic was timing-dependent and could
+  // flake on a slow/loaded CI box.
   const originalFetch = globalThis.fetch;
   let fetchCalls = 0;
   globalThis.fetch = async () => {
@@ -177,22 +181,36 @@ test('mine sleeps between categories but skips after the last one', async (t) =>
   };
   t.after(() => { globalThis.fetch = originalFetch; });
 
-  const sleeps = [];
-  // Mock sleep by using _sleepMs and tracking how long it would have slept
-  // across iterations. With _sleepMs=10 and 3 categories, we expect 2 sleeps
-  // (between cat 1→2 and cat 2→3, none after the final).
-  const t0 = Date.now();
+  const cats = ['cs.AI', 'cs.LG', 'cs.CL'];
+  const sleepCalls = [];
+  const spySleep = async (ms) => { sleepCalls.push(ms); };
+
   await mine({
     cursors: {},
-    config: { categories: ['cs.AI', 'cs.LG', 'cs.CL'] },
+    config: { categories: cats },
     logger: SILENT,
-    _sleepMs: 10,
+    _sleepMs: 7,
+    _sleep: spySleep,
   });
-  const elapsed = Date.now() - t0;
 
-  assert.equal(fetchCalls, 3, 'one fetch per category');
-  // 2 inter-category sleeps × 10ms = ~20ms; allow generous tolerance for CI
-  // jitter but still confirm we did NOT sleep after the last category (which
-  // would push elapsed past ~30ms).
-  assert.ok(elapsed < 100, `elapsed=${elapsed}ms suggests sleep after last category`);
+  assert.equal(fetchCalls, cats.length, 'one fetch per category');
+  assert.equal(sleepCalls.length, cats.length - 1,
+    'exactly one inter-category sleep per adjacent pair, none after the final category');
+  assert.deepEqual(sleepCalls, [7, 7], 'each gap waits the configured inter-category delay');
+});
+
+test('mine performs zero inter-category sleeps for a single category', async (t) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, async text() { return '<feed></feed>'; } });
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  const sleepCalls = [];
+  await mine({
+    cursors: {},
+    config: { categories: ['cs.AI'] },
+    logger: SILENT,
+    _sleep: async (ms) => { sleepCalls.push(ms); },
+  });
+
+  assert.deepEqual(sleepCalls, [], 'a lone category needs no politeness gap');
 });

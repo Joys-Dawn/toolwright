@@ -67,3 +67,13 @@ CREATE TABLE IF NOT EXISTS raw_observations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_raw_obs_unvalidated ON raw_observations(source, validated_at);
+
+-- SQLite treats every NULL as DISTINCT in a UNIQUE constraint, so the inline
+-- UNIQUE(source, source_url) above does NOT collide two source_url-less
+-- observations from the same source: each re-mine would insert — and re-judge,
+-- burning LLM budget — a fresh row, and never reach insertRawObservation's
+-- recovery SELECT. This expression index normalizes NULL → '' so a url-less
+-- signal dedupes like any other. Additive + IF NOT EXISTS, and verified to
+-- build cleanly over pre-fix data (no existing row violates it).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_obs_source_url
+  ON raw_observations(source, COALESCE(source_url, ''));

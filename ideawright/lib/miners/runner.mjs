@@ -3,12 +3,15 @@
 //
 // Flow:
 //   1. Load config from <repoRoot>/.claude/ideawright.json (if present).
-//   2. For each enabled source: load per-source cursor, run miner, get
-//      back raw pain-signal observations.
+//   2. For each enabled source (concurrently): load per-source cursor, run
+//      miner, get back raw pain-signal observations.
 //   3. Validate each observation via Haiku (judge.mjs). Valid signals
-//      become candidate ideas.
+//      become candidate ideas. The `claude -p` calls (batch AND per-item
+//      fallback) across ALL sources are bounded by a single shared limiter
+//      so parallel sources can't blow the 5-hour usage cap.
 //   4. Insert via db.insertIdea (status='new').
-//   5. Persist cursors back to the sources table.
+//   5. Persist cursors back to the sources table (per source, only when that
+//      source had zero per-item validate errors).
 
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,6 +23,7 @@ import * as arxiv from './arxiv.mjs';
 import * as biorxiv from './biorxiv.mjs';
 import * as pubmed from './pubmed.mjs';
 import { validateSignal, validateSignalBatch } from './validator.mjs';
+import { makeLimiter } from '../novelty/limiter.mjs';
 import {
   computeId,
   getSourceCursor,
@@ -60,10 +64,11 @@ export async function runMiners({
 } = {}) {
   if (!db) throw new Error('runMiners: db is required');
 
-  const config = loadConfig(repoRoot);
+  const config = loadConfig(repoRoot, logger);
   const defaultModel = config.llm?.model ?? null;
-  const activeIds = (sources ?? enabledSources(config)).filter((id) => MINERS[id]);
-  const skipped = (sources ?? enabledSources(config)).filter((id) => !MINERS[id]);
+  const requested = sources ?? enabledSources(config);
+  const activeIds = requested.filter((id) => MINERS[id]);
+  const skipped = requested.filter((id) => !MINERS[id]);
   for (const id of skipped) logger.warn(`[scan] no miner implemented for "${id}", skipping`);
 
   const summary = {
@@ -74,7 +79,31 @@ export async function runMiners({
     inserted: 0,
   };
 
-  for (const id of activeIds) {
+  // Real batching: how many observations are concatenated into one
+  // `claude -p` validate call. The judge pipes the prompt via stdin
+  // (see lib/judge.mjs) so this is bounded by token budget / latency,
+  // not by Windows' CLI arg limit. coercePositiveInt guards the
+  // silent-hang case (batch_size 0 → the `i += batchSize` loop never advances).
+  const batchSize = coercePositiveInt(config.validate?.batch_size, 20);
+
+  // ONE shared limiter for the whole run. Every `claude -p`-spawning call —
+  // the batch validate AND each per-item fallback call (see
+  // validateAndInsertBatch) — schedules through this, so total concurrent
+  // `claude` processes ≤ validationConcurrency regardless of how many sources
+  // are validating in parallel. Config-tunable (mirrors validate.batch_size);
+  // the runMiners param is the fallback so a caller can still override.
+  // coercePositiveInt guards the silent-hang case (concurrency 0 → the
+  // limiter's pump never enters and the whole pipeline stalls with no log).
+  const vc = coercePositiveInt(config.validate?.concurrency, validationConcurrency);
+  const limit = makeLimiter(vc);
+
+  // One source end-to-end: mine → validate+insert → cursor pin/advance.
+  // miner.mine() failures are caught and returned as { id, error } so one bad
+  // source can't reject the Promise.allSettled batch. NOTE: the pre-try reads
+  // below (getSourceCursor / parseJson) run BEFORE the catch, so a broken db
+  // CAN still reject this promise — runMiners handles that via its settled
+  // `status === 'rejected'` branch (do not delete that branch as dead code).
+  async function runSource(id) {
     const miner = MINERS[id];
     const cursorRow = getSourceCursor(db, id);
     const cursorsIn = parseJson(cursorRow?.notes) ?? {};
@@ -91,35 +120,26 @@ export async function runMiners({
       result = await miner.mine(opts);
     } catch (err) {
       logger.error(`[scan:${id}] miner failed: ${err.message}`);
-      summary.sources[id] = { error: err.message };
-      continue;
+      return { id, error: err.message };
     }
 
     const obs = result.observations ?? [];
-    summary.observations += obs.length;
 
     // Each miner may export its own `validator` (e.g. capability-validator
     // for arxiv/biorxiv/pubmed). Fall back to the pain-signal validator.
     const validate = miner.validator ?? validateSignal;
     const model = perSourceCfg.llm?.model ?? defaultModel ?? null;
     const sourceModule = SUPPLY_PIPELINE.has(id) ? 'A-tech' : 'A';
-
-    // Real batching: how many observations are concatenated into one
-    // `claude -p` validate call. The judge pipes the prompt via stdin
-    // (see lib/judge.mjs) so this is bounded by token budget / latency,
-    // not by Windows' CLI arg limit.
-    const batchSize = config.validate?.batch_size ?? 20;
     const batchValidate = _batchValidate ?? miner.batchValidator ?? validateSignalBatch;
+
     const { validated, inserted, errored, skipped: skippedAlreadyValidated } = await validateAndInsertBatch(
       db,
       obs,
       batchSize,
       logger,
       validate,
-      { model, sourceModule, batchValidate },
+      { model, sourceModule, batchValidate, limit },
     );
-    summary.validated += validated;
-    summary.inserted += inserted;
 
     // Cursor advancement policy: only advance when this source had ZERO
     // per-item validation errors. If even one signal failed (likely the
@@ -141,14 +161,50 @@ export async function runMiners({
       });
     }
 
-    summary.sources[id] = {
+    logger.info(`[scan:${id}] obs=${obs.length} validated=${validated} inserted=${inserted} errored=${errored} skipped=${skippedAlreadyValidated}`);
+    return {
+      id,
       observations: obs.length,
       validated,
       inserted,
       errored,
       skipped_already_validated: skippedAlreadyValidated,
     };
-    logger.info(`[scan:${id}] obs=${obs.length} validated=${validated} inserted=${inserted} errored=${errored} skipped=${skippedAlreadyValidated}`);
+  }
+
+  // Fan out all miners concurrently — independent hosts, independent rate
+  // limits. allSettled keeps order aligned with activeIds and isolates a
+  // single source's failure from the rest.
+  const settled = await Promise.allSettled(activeIds.map((id) => runSource(id)));
+
+  // Deterministic assembly in declared source order — no shared-counter
+  // mutation during the concurrent phase.
+  for (let i = 0; i < activeIds.length; i++) {
+    const id = activeIds[i];
+    const s = settled[i];
+    if (s.status === 'rejected') {
+      // runSource catches miner errors itself, so this is an unexpected
+      // internal fault; surface it the same way as a miner failure.
+      const msg = s.reason?.message ?? String(s.reason);
+      logger.error(`[scan:${id}] miner failed: ${msg}`);
+      summary.sources[id] = { error: msg };
+      continue;
+    }
+    const r = s.value;
+    if (r.error) {
+      summary.sources[id] = { error: r.error };
+      continue;
+    }
+    summary.observations += r.observations;
+    summary.validated += r.validated;
+    summary.inserted += r.inserted;
+    summary.sources[id] = {
+      observations: r.observations,
+      validated: r.validated,
+      inserted: r.inserted,
+      errored: r.errored,
+      skipped_already_validated: r.skipped_already_validated,
+    };
   }
 
   summary.finished_at = new Date().toISOString();
@@ -158,12 +214,30 @@ export async function runMiners({
   return summary;
 }
 
-function loadConfig(repoRoot) {
+// Coerce an untrusted-config number to a usable positive integer. config is
+// raw JSON.parse output (loadConfig, no schema), so a missing, non-numeric,
+// zero, or negative value must not reach makeLimiter or the `i += batchSize`
+// loop in validateAndInsertBatch — either would silently hang runMiners with
+// no error or log (a limiter whose pump never enters, or a loop that never
+// advances). Any non-finite or < 1 value falls back to `fallback`.
+function coercePositiveInt(raw, fallback) {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : fallback;
+}
+
+function loadConfig(repoRoot, logger = console) {
   const path = join(repoRoot, '.claude', 'ideawright.json');
   if (!existsSync(path)) return DEFAULT_CONFIG;
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
   } catch (err) {
+    // Never silently swallow this: a JSON typo here reverts EVERY tunable
+    // (rate limits, validate.concurrency/batch_size, enabled sources, model)
+    // to defaults — the operator would see only default behavior with no
+    // clue why. Warn loudly, then fall back.
+    logger.warn(
+      `[scan] ignoring malformed .claude/ideawright.json (${err.message}); using defaults`,
+    );
     return DEFAULT_CONFIG;
   }
 }
@@ -179,6 +253,10 @@ function enabledSources(config) {
 async function validateAndInsertBatch(db, observations, batchSize, logger, validate, opts = {}) {
   const state = { validated: 0, inserted: 0, errored: 0, skipped: 0 };
   const batchFn = opts.batchValidate ?? validateSignalBatch;
+  // Shared concurrency gate for every `claude -p`-spawning call. Defaults to
+  // an identity pass-through so a direct caller without a limiter is
+  // unaffected; runMiners always supplies the real shared limiter.
+  const limit = opts.limit ?? ((fn) => fn());
 
   // Persist every raw observation BEFORE validation. If validation later
   // fails (e.g., usage cap) the signal is still recoverable. Existing rows
@@ -201,14 +279,21 @@ async function validateAndInsertBatch(db, observations, batchSize, logger, valid
     const batch = pending.slice(i, i + batchSize);
     let verdicts;
     try {
-      // Use batch validator (single claude -p call for the whole batch)
-      verdicts = await batchFn(batch.map((b) => b.obs), { model: opts.model });
+      // Batch validator (single claude -p call for the whole batch), gated
+      // by the shared limiter. On rejection the limiter frees the slot
+      // BEFORE this throws (see limiter.mjs), so the per-item fallback below
+      // schedules fresh limiter tasks — non-nested, no deadlock.
+      verdicts = await limit(() => batchFn(batch.map((b) => b.obs), { model: opts.model }));
     } catch (err) {
       logger.warn(`[validate] batch ${i}-${i + batch.length} failed: ${err.message}, falling back to per-item`);
-      // Fallback: validate individually so one bad item doesn't lose the whole batch
+      // Fallback: validate individually so one bad item doesn't lose the
+      // whole batch. Each per-item call ALSO spawns `claude` (via
+      // validate→callJudge), so it must go through the SAME shared limiter —
+      // otherwise the fallback (which fires on the usage-cap condition)
+      // fans out batchSize×sources concurrent processes.
       verdicts = await Promise.all(
         batch.map(async ({ obs }) => {
-          try { return await validate(obs, { model: opts.model }); }
+          try { return await limit(() => validate(obs, { model: opts.model })); }
           catch (e) {
             logger.warn(`[validate] per-item ${obs.source}/${obs.source_url ?? '<no-url>'} failed: ${e.message}`);
             return { idea: null, _error: e.message };

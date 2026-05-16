@@ -46,7 +46,7 @@ or if no concrete product is plausible.
 
 NEVER wrap the JSON in prose or markdown code fences. Return ONLY the object.`;
 
-export async function validateCapability(observation, { model, timeoutMs } = {}) {
+export async function validateCapability(observation, { model, timeoutMs, _callJudge } = {}) {
   const user = JSON.stringify(
     {
       source: observation.source,
@@ -65,7 +65,8 @@ export async function validateCapability(observation, { model, timeoutMs } = {})
   const opts = { system: SYSTEM, user };
   if (model) opts.model = model;
   if (timeoutMs) opts.timeoutMs = timeoutMs;
-  const result = await callJudge(opts);
+  const judge = _callJudge ?? callJudge;
+  const result = await judge(opts);
   return normalizeVerdict(result);
 }
 
