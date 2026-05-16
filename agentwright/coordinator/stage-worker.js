@@ -106,6 +106,24 @@ function buildScopeInstruction(scope, scopeMode) {
 }
 
 const SHARED_OUTPUT_INTRO = 'You are auditing a frozen stage snapshot. Output newline-delimited JSON only.';
+// The coordinator's parser (process-manager.js) reads findings ONLY from the
+// auditor's assistant message text (stream_event text_delta / assistant text
+// blocks). It never reads tool_result content. An auditor that "emits" via
+// Bash `echo` produces zero findings even though every echo succeeds, and the
+// failure is silent (emittedCount:0, stage marked audit_failed). This rule
+// pins the transport explicitly. See the best-practices stage-failure
+// post-mortem.
+const SHARED_CHANNEL_RULE = 'EMISSION CHANNEL: write every finding line and the final done line as plain text directly in your assistant response — the message you return. The coordinator parses ONLY your assistant message text; output produced by any tool (Bash, echo, printf, cat, tee, a file write, the Skill tool, or any other) is discarded. Tools are for investigation only. Never use a tool to emit a finding or the done marker — the emission channel is always, only, your assistant message text.';
+// Git is foundational for an audit (diff scoping, blame, history). The auditor
+// runs under a locked-down permission mode in which exactly one Bash form is
+// always blocked: a `cd <dir> && git ...` compound (verified against the
+// Claude Code permissions doc — "Combining `cd` with `git` in one compound
+// command always prompts, regardless of the target directory"; a prompt under
+// this mode is a hard deny). Plain read-only git from the working directory is
+// always allowed. The best-practices auditor failed only because it used the
+// `cd mindwright && git diff` form; this rule makes the supported invocation
+// explicit so git works instead of being denied.
+const SHARED_GIT_RULE = 'GIT IS AVAILABLE AND FOUNDATIONAL TO THIS AUDIT. Your working directory is a git worktree of the repository: HEAD with the under-review changes overlaid. Run git directly from the working directory — `git diff HEAD`, `git diff HEAD -- <path>`, `git log`, `git status`, `git ls-files` are read-only and always permitted. Do NOT prefix git with a directory change: `cd <subdir> && git ...` is the single Bash form that is always blocked under the auditor permission mode and will fail. To scope to a subdirectory, use a pathspec (`git diff HEAD -- <subdir>/`) or `git -C <subdir> ...` — a single git command, never a cd-and-git chain.';
 const SHARED_EMIT_RULE = 'Emit one compact JSON object per line as soon as a finding is ready. Do not wait until you have reviewed all files — emit each finding immediately after identifying it so the verifier can work in parallel.';
 const SHARED_FORMAT_RULE = 'Do not emit markdown, prose paragraphs, bullet lists, or code fences.';
 const SHARED_GROUNDING_RULE = 'Every finding must be grounded enough that the verifier can re-check only the cited file and local context in the live repo.';
@@ -118,6 +136,8 @@ function buildSingleSkillPrompt({ stageName, scopeInstruction, skill }) {
     scopeInstruction,
     '',
     SHARED_OUTPUT_INTRO,
+    SHARED_CHANNEL_RULE,
+    SHARED_GIT_RULE,
     SHARED_EMIT_RULE,
     'Finding line format:',
     `{"type":"finding","finding":{"id":"${stageName}-1","severity":"low|medium|high|critical","title":"...","file":"relative/path","lines":"optional","problem":"...","fix":"...","evidence":"...","snippet":"optional"}}`,
@@ -146,6 +166,8 @@ function buildFusedSkillPrompt({ stageName, scopeInstruction, skills }) {
     scopeInstruction,
     '',
     SHARED_OUTPUT_INTRO,
+    SHARED_CHANNEL_RULE,
+    SHARED_GIT_RULE,
     `This is a FUSED stage running ${skills.length} audit types in one pass. Apply every bundled skill below as a separate lens — do not skip any. Tag each finding with an "auditType" field whose value is exactly one of: ${allowedAuditTypes}.`,
     SHARED_EMIT_RULE,
     'Finding line format:',

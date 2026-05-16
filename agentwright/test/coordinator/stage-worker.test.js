@@ -198,6 +198,53 @@ describe('stage-worker', () => {
       assert.ok(prompt.includes(`{"type":"done","auditType":"audit-bundle"`));
     });
 
+    // Regression guard for the best-practices silent-failure post-mortem.
+    // Two distinct root causes, two distinct rules every prompt must carry:
+    //  (1) EMISSION CHANNEL — the auditor emitted via Bash `echo`, but the
+    //      coordinator only parses assistant message text, so tool output is
+    //      discarded → emittedCount:0.
+    //  (2) GIT RULE — the auditor's `cd mindwright && git diff` was denied
+    //      because a cd+git compound always prompts under the locked-down
+    //      permission mode; git is foundational and must work, so the
+    //      supported invocation is stated explicitly.
+    // These assert the load-bearing clauses, not the exact prose.
+    for (const [label, stageDef] of [
+      ['single-skill', { type: 'skill', skillId: 'correctness-audit' }],
+      ['fused', { type: 'skill', skillIds: ['correctness-audit', 'security-audit', 'best-practices-audit'] }]
+    ]) {
+      it(`${label} prompt pins the emission channel to assistant text`, () => {
+        const prompt = buildAuditorPrompt({
+          pluginRoot: PLUGIN_ROOT,
+          cwd: tmpDir,
+          stageName: label === 'fused' ? 'audit-bundle' : 'correctness',
+          stageDef,
+          scope: '--diff',
+          scopeMode: 'diff'
+        });
+        assert.ok(prompt.includes('EMISSION CHANNEL:'), 'channel rule must be present');
+        assert.ok(prompt.includes('assistant message text'), 'must name the transport');
+        assert.ok(/output produced by any tool[^.]*is discarded/.test(prompt), 'must say tool output is discarded');
+        assert.ok(/Never use a tool to emit/.test(prompt), 'must forbid tool-based emission');
+        // The removed defensive clause must NOT come back.
+        assert.ok(!/NEVER means you should switch to echo/.test(prompt), 'old denial-coping clause must stay removed');
+      });
+
+      it(`${label} prompt makes git foundational and forbids the cd+git form`, () => {
+        const prompt = buildAuditorPrompt({
+          pluginRoot: PLUGIN_ROOT,
+          cwd: tmpDir,
+          stageName: label === 'fused' ? 'audit-bundle' : 'correctness',
+          stageDef,
+          scope: '--diff',
+          scopeMode: 'diff'
+        });
+        assert.ok(prompt.includes('GIT IS AVAILABLE'), 'git rule must be present');
+        assert.ok(prompt.includes('git worktree'), 'must explain the worktree so plain git diff works');
+        assert.ok(prompt.includes('cd <subdir> && git'), 'must explicitly forbid the cd+git compound form');
+        assert.ok(prompt.includes('git -C <subdir>'), 'must offer the supported subdir-scoping alternative');
+      });
+    }
+
     it('resolveSkillPaths returns one entry for single-skill stages', () => {
       const skills = resolveSkillPaths({
         pluginRoot: PLUGIN_ROOT,
