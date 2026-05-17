@@ -7,7 +7,15 @@ description: Inverse of /mindwright:forget — flip a soft-archived long-term fa
 
 Usage: `/mindwright:restore <fact_id>`.
 
-Call `mindwright_restore` with:
+Run:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" restore --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+{"fact_id": 123}
+MINDWRIGHT_ARGS
+```
+
+JSON args (stdin):
 - `fact_id`: the id of the long-term row to restore.
 
 The handler flips `active=1` on the row and regenerates the markdown mirrors. Soft-archive never deletes anything, so the row + embedding + entity links are all intact — the restore is just the inverse flip.

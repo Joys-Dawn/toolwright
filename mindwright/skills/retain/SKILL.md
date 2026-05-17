@@ -5,7 +5,15 @@ description: Explicitly save a fact to memory. Bypasses the consolidator — use
 
 # /mindwright:retain
 
-Call `mindwright_retain` with:
+Run:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" retain --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+{"content": "...", "kind": "fact", "tier": "long"}
+MINDWRIGHT_ARGS
+```
+
+JSON args (stdin):
 - `content` (required): the fact text.
 - `kind` (required): a short label like `fact`, `note`, `preference`. Avoid `decision`, `handoff`, `finding`, `blocker` — those are reserved for peer-broadcast bus events and would classify your retain as peer-origin instead of self.
 - `tier` (required): `short` or `long`.

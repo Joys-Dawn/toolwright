@@ -7,7 +7,15 @@ description: Explicit retrieval against the memory store. Useful when the automa
 
 Usage: `/mindwright:recall <query>` (the argument becomes the retrieval query).
 
-Call the MCP tool `mindwright_recall` with:
+Run:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" recall --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+{"query": "...", "scope": "all", "k": 8, "bypass_session_dedup": true}
+MINDWRIGHT_ARGS
+```
+
+JSON args (stdin):
 - `query`: the text to retrieve against.
 - `scope`: optional TIER filter — `short` / `long` / `all` (default `all`). The memory-row scope (`user` / `project` / `role:<role>`) is filtered implicitly via the calling session's role-set.
 - `k`: optional top-K (default 8).
