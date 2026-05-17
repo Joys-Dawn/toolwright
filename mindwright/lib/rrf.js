@@ -1,12 +1,6 @@
-// Reciprocal Rank Fusion. Standard k=60.
-//
-// Given N ranked lists, produces one fused ranking where item id gets:
-//   score(id) = Σ_l 1 / (k + rank_l(id))
-// rank is 1-based (best=1). Items absent from a list contribute 0 for that list.
-//
-// The single source of truth for k is RRF_K in constants.js. Use that for
-// "what k value does mindwright use" — this default just keeps rrfFuse
-// callable without callers having to wire it through.
+// Reciprocal Rank Fusion. score(id) = Σ_l 1 / (k + rank_l(id)); rank is
+// 1-based, absent items contribute 0. k's source of truth is RRF_K in
+// constants.js; the default just keeps rrfFuse callable.
 
 import { RRF_K } from './constants.js';
 

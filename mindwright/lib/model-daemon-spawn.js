@@ -1,15 +1,8 @@
-// Client-side lazy spawn for the machine-wide model daemon.
-//
-// Hooks and skill scripts call ensureModelDaemon() when an embed/rerank RPC
-// finds the socket down. The spawn is detached + fire-and-forget: we never
-// block the caller on a multi-second ONNX cold-load. THIS call still degrades
-// (the pipe-client returns null → NULL-embedding write + later sweep); the
-// daemon comes up in the background so the NEXT call connects.
-//
-// Single-flight is owned by the daemon's own O_EXCL lock election
-// (mcp/model-daemon.mjs#acquireSingleton): racing spawns from many sessions
-// are harmless — exactly one wins, the rest exit 0. The in-process throttle
-// here only avoids re-spawning on every hook firing within one process.
+// Client-side lazy spawn for the machine-wide model daemon. Detached +
+// fire-and-forget so the caller never blocks on the ONNX cold-load: THIS call
+// still degrades (pipe-client null → NULL-embedding write), the daemon comes
+// up so the NEXT call connects. Single-flight is the daemon's own O_EXCL lock
+// election; the in-process throttle here only dedupes per-process re-spawns.
 
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
@@ -17,9 +10,8 @@ import { openSync, closeSync } from 'node:fs';
 import { PLUGIN_ROOT, modelDaemonLogPath } from './paths.js';
 import { logHookError } from './hook-log.js';
 
-// Don't re-fire the detached spawn more than once per this window per process.
-// The daemon takes a few seconds to bind + warm; spamming spawns in that gap
-// just burns processes that all lose the lock election.
+// One detached spawn per this window per process: the daemon takes seconds to
+// bind+warm, spamming in that gap just burns lock-losing processes.
 const SPAWN_THROTTLE_MS = 10_000;
 let lastSpawnAt = 0;
 

@@ -1,19 +1,10 @@
 // Read-only consumer of wrightward's `.claude/collab/agents.json` roster.
-//
-// Why a file-shape consumer and not a runtime require(): plugin
-// independence (memory rule `feedback_plugins_independent.md` and
-// wrightward/package.json being `"private": true` with no `exports` map)
-// forbids cross-plugin imports. The roster file shape, however, is a stable
-// JSON contract owned by wrightward — keys are session UUIDs, values carry
-// `{ handle, registered_at, last_active }`. We read the file directly via
-// `node:fs` and validate the shape on every read.
-//
-// Source-of-truth pointer: wrightward/lib/agents.js#readAgents (lines
-// 104-110). Resolution semantics mirror wrightward/lib/handles.js#resolveAudience
-// (lines 64-102) — handle → sessionId via roster scan; UUID passthrough;
-// structured error on miss. Bare-name disambiguation is NOT supported here
-// (a delivery audience needs full handles; mindwright's assign-role API
-// requires full handles too).
+// A file-shape consumer, not a runtime require(), because plugin
+// independence forbids cross-plugin imports. The roster is a stable JSON
+// contract: keys are session UUIDs, values `{ handle, registered_at,
+// last_active }`; shape-validated on every read. Resolution mirrors
+// wrightward: handle → sessionId via roster scan, UUID passthrough,
+// structured error on miss. Bare-name disambiguation is NOT supported.
 
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,12 +12,9 @@ import { collabDir } from './paths.js';
 import { deriveHandle, HANDLE_PATTERN } from './handles.js';
 import { SESSION_ID_PATTERN } from './constants.js';
 
-// Read + parse `.claude/collab/agents.json`. Returns `{}` when the file is
-// missing or unparseable — wrightward applies the same defensive default
-// (see wrightward/lib/agents.js#readAgents) so mindwright matches that
-// behavior for symmetry. Caller decides whether the empty roster is an
-// error (assign_role with an unknown handle) or a no-op (lookup that's
-// optional).
+// Read + parse the roster. Returns `{}` when missing/unparseable (matches
+// wrightward's defensive default). Caller decides whether an empty roster is
+// an error or a no-op.
 export function readRoster() {
   const path = join(collabDir(), 'agents.json');
   if (!existsSync(path)) return {};
@@ -43,17 +31,13 @@ export function readRoster() {
     return {};
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-  // Validate each row's shape. A row that doesn't conform (missing handle,
-  // wrong type) is silently dropped so a corrupted half-row can't poison the
-  // whole resolution path.
+  // Drop non-conforming rows so a corrupted half-row can't poison resolution.
   const out = {};
   for (const [sid, row] of Object.entries(parsed)) {
     if (!sid || typeof sid !== 'string') continue;
     if (!row || typeof row !== 'object') continue;
-    // wrightward writes `handle` directly; older rows might be missing it
-    // (handle-field rollout happened mid-project). Treat a missing `handle`
-    // as "derive on demand from sessionId" — same as wrightward's own
-    // handleFor() does — so this never blocks resolution on a stale row.
+    // Missing `handle` ⇒ derive on demand (matches wrightward's handleFor())
+    // so a stale row never blocks resolution.
     const handle = typeof row.handle === 'string' && HANDLE_PATTERN.test(row.handle)
       ? row.handle
       : deriveHandle(sid);
@@ -62,13 +46,9 @@ export function readRoster() {
   return out;
 }
 
-// Resolve `input` to a sessionId. Accepts:
-//   - A UUID-shaped sessionId (path-safe identifier) — passthrough.
-//   - A wrightward handle (e.g. "bob-42") — resolved via the roster.
-// Returns `{ ok: true, sessionId }` on success or `{ ok: false, error,
-// liveHandles }` on failure. The `liveHandles` array surfaces what's
-// currently registered so the caller can echo it back to the LLM — same UX
-// as wrightward's `audienceError`.
+// Resolve `input` (UUID passthrough or wrightward handle) to a sessionId.
+// Returns `{ ok: true, sessionId }` or `{ ok: false, error, liveHandles }`;
+// liveHandles surfaces what's registered so the caller can echo it back.
 export function resolveTargetToSessionId(input) {
   if (typeof input !== 'string' || !input) {
     return { ok: false, error: 'target must be a non-empty string', liveHandles: [] };

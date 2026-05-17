@@ -1,18 +1,13 @@
-// Single source of truth for "is a mindwright daemon currently bound to this
-// project root?". Both the MCP server's status tool and the script-side
-// `/mindwright:status` and `/mindwright:reset` need this check; duplicating
-// the freshness window across three files invites drift if the SessionStart
-// hook ever changes how it writes tickets.
+// Single source of truth for "is a mindwright daemon bound to this project
+// root?". Shared by /mindwright:status and /mindwright:reset so the freshness
+// window can't drift across call sites.
 //
-// The check is a layered proxy:
-//   1. Ticket file mtime freshness — every session-start writes a ticket and
-//      the daemon keeps it touched. mtime older than the freshness window
-//      means a stale ticket from a crashed or killed session.
-//   2. Claude CLI process liveness (claude_pid in the ticket JSON) — even
-//      within the freshness window, a daemon that died seconds ago (user
-//      closed Claude Code, OS killed the process, etc.) is verifiably dead
-//      via process.kill(pid, 0). Without this shortcut the user has to wait
-//      out the full freshness window before /mindwright:reset will proceed.
+// Layered proxy:
+//   1. Ticket file mtime freshness — older than the window ⇒ stale ticket
+//      from a crashed/killed session.
+//   2. Claude CLI PID liveness (claude_pid) — a daemon that died within the
+//      window is still verifiably dead via process.kill(pid, 0), so reset
+//      need not wait out the full window.
 
 import { readdirSync, statSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
