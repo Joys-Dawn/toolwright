@@ -30,6 +30,8 @@ import { logHookError } from '../lib/hook-log.js';
 import { getRolePromptsFor } from '../lib/role-prompts.js';
 import { writeSidecar } from '../lib/role-sidecar.js';
 import { initOffsetIfUnknown } from '../lib/offset-init.js';
+import { connectPipe } from '../lib/pipe-client.js';
+import { sweepOnce } from '../lib/sweeper.js';
 import { SELF_RECALL_RULE } from '../lib/constants.js';
 
 export async function main() {
@@ -115,6 +117,30 @@ export async function main() {
       // first diff (treats current roles as additions and re-injects).
       try { writeSidecar(sessionId, assignedRoles); } catch (e) {
         logHookError('session-start', 'sidecar write failed', e);
+      }
+
+      // Deferred-embed sweep. Rows written with embedding=NULL while the
+      // machine model daemon was down get back-filled here, best-effort and
+      // bounded (one batch). The MCP server used to run this on a 60s loop;
+      // it is gone, so SessionStart is the cadence. Only engages the daemon
+      // when there is an actual backlog (the common path is one cheap count).
+      // Probe first so a transient daemon-down skips the sweep cleanly
+      // instead of bumping embed_failures on healthy rows — connectPipe has
+      // already fire-and-forget respawned the daemon for the next session.
+      try {
+        if (embedderCached() && store.countPendingEmbeds() > 0) {
+          const pipe = connectPipe(sessionId);
+          const probe = await pipe.embed(['mindwright sweep probe']);
+          if (Array.isArray(probe) && probe[0] instanceof Float32Array) {
+            await sweepOnce(store, async (texts) => {
+              const v = await pipe.embed(texts);
+              if (!Array.isArray(v)) throw new Error('model daemon unavailable mid-sweep');
+              return v;
+            });
+          }
+        }
+      } catch (e) {
+        logHookError('session-start', 'deferred-embed sweep failed', e);
       }
     }
   } catch (e) {
