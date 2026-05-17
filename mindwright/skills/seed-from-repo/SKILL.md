@@ -20,7 +20,7 @@ Each item lands as a `short` tier entry with `kind=seed`. Native-memory rows add
 
 **Idempotent**: re-running skips any source file already represented by an active short `seed` row (matched on the source_ref file-path prefix), so repeated invocations don't pile duplicates. An edited file is not re-chunked until its current rows are drained by a dream cycle — staleness until the next consolidation is accepted by design rather than re-diffing on every run.
 
-> Transcript history (`~/.claude/projects/<encoded-cwd>/*.jsonl`) is **not** seeded by this script. It is bootstrapped automatically by the dedicated transcript loop SessionStart fires on a fresh empty install (gated by `MINDWRIGHT_AUTO_SEED`, default on) — see DESIGN.md "Bootstrap". This script covers the repo-local + native-memory sources only.
+> Transcript history (`~/.claude/projects/<encoded-cwd>/*.jsonl`) is **not** seeded by this script, and is no longer auto-seeded at all — the automatic SessionStart transcript bootstrap was removed (it spawned an uncoordinated seed-loop + background consolidator per session). This script covers the repo-local + native-memory sources only.
 
 Report the script's `next_step` field (printed in the stdout JSON) to the user verbatim:
 - Normally "Run /mindwright:dream to consolidate the seeded rows" when rows landed under the live calling session.
