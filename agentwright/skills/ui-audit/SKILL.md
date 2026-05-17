@@ -1,11 +1,11 @@
 ---
 name: ui-audit
-description: Use after any UI edit, when reviewing UI components, or when asked for an accessibility or structure audit. Triggers on WCAG 2.2 violations, WAI-ARIA APG pattern issues, touch target sizing, focus management, component duplication, or separation of concerns problems in React/Tailwind code.
+description: Use after any UI edit, when reviewing UI components, or when asked for an accessibility or structure audit. Triggers on WCAG 2.2 violations, WAI-ARIA APG pattern issues, touch target sizing, focus management, component duplication, or separation of concerns problems in React/Tailwind or vanilla-extract (CSS-in-TS) code.
 ---
 
 # UI Audit — Accessibility & Structure
 
-Audit React/Tailwind UI code for accessibility violations and structural anti-patterns. Every finding must cite the specific standard (WCAG SC, WAI-ARIA APG pattern, platform guideline) so the developer knows the authoritative source.
+Audit React UI code — Tailwind or vanilla-extract (CSS-in-TS) — for accessibility violations and structural anti-patterns. Every finding must cite the specific standard (WCAG SC, WAI-ARIA APG pattern, platform guideline, or vanilla-extract documentation) so the developer knows the authoritative source.
 
 See [REFERENCE.md](REFERENCE.md) for detailed standard definitions, exact requirements, and code examples.
 
@@ -13,7 +13,7 @@ See [REFERENCE.md](REFERENCE.md) for detailed standard definitions, exact requir
 
 Determine what to audit based on context:
 
-- **Git diff mode** (default when no scope specified and changes exist): run `git diff` and `git diff --cached` to audit only changed/added UI code (`.tsx`, `.css` files)
+- **Git diff mode** (default when no scope specified and changes exist): run `git diff` and `git diff --cached` to audit only changed/added UI code (`.tsx`, `.css`, and vanilla-extract `.css.ts` files)
 - **File/directory mode**: audit the files or directories the user specifies
 - **Full audit mode**: when the user asks for a full UI audit, scan the project's `src/` directory (skip node_modules, build artifacts, test files)
 
@@ -183,6 +183,7 @@ Evaluate against each check. Skip checks with no findings.
 - Same Tailwind class combination (5+ utility classes forming one visual pattern) appearing 3+ times across different files — extract to a shared component
 - Common extraction candidates: Button variants, Card, Input, Badge, Modal close button
 - Utility style patterns (e.g., focus rings) repeated 10+ times — bake into base components
+- **vanilla-extract**: the same literal `style({...})` object (or a hand-written set of visual variants) duplicated 3+ times across files instead of a shared `style`, a `recipe()` with `variants`, or `sprinkles` — the CSS-in-TS equivalent of class-combination duplication
 
 **Threshold**: 3+ identical patterns across 2+ files = extract. Duplication within a single file is fine.
 
@@ -217,6 +218,7 @@ SRP heuristic: a component's purpose should be describable in one sentence witho
 **What to check**:
 - Hardcoded hex colors (`#1a1a2e`, `rgb(...)`, inline `style={{ color: '...' }}`) bypassing the project's CSS custom properties / Tailwind theme
 - Hardcoded pixel values for spacing/sizing that should use Tailwind's scale
+- **vanilla-extract**: hardcoded colors/spacing literals inside a `.css.ts` `style()`/`recipe()` that bypass the theme's `vars` when a `createTheme`/`createThemeContract` token already exists for it — the CSS-in-TS equivalent of bypassing the Tailwind theme. Do NOT flag literal values inside the theme/contract *definition* itself (that file IS the design system — see Hard Exclusions)
 - Magic numbers for timeouts, thresholds, row heights, page sizes — should be named constants (Clean Code Ch. 17: numbers other than 0 and 1 should be named)
 
 ### 15. Loading & Error Patterns
@@ -247,7 +249,7 @@ SRP heuristic: a component's purpose should be describable in one sentence witho
 **What to check**:
 - `prefers-reduced-motion` must be honored — provide reduced variant or disable animation entirely
 - Only animate compositor-friendly properties: `transform` and `opacity`. Animating `width`, `height`, `top`, `left`, `margin` causes layout thrashing.
-- `transition: all` is an anti-pattern — list properties explicitly (e.g., `transition-colors`, `transition-opacity`)
+- `transition: all` is an anti-pattern — list properties explicitly (e.g., `transition-colors`, `transition-opacity`). Applies equally to `transition: 'all …'` declared in a vanilla-extract `style({...})` — these checks target the declared CSS regardless of whether it is authored as Tailwind classes or in `.css.ts`
 - Animations should be interruptible — respond to user input mid-animation
 - SVG transforms: apply on `<g>` wrapper with `transform-box: fill-box; transform-origin: center`
 
@@ -348,6 +350,23 @@ SRP heuristic: a component's purpose should be describable in one sentence witho
 - Numbers/currency: use `Intl.NumberFormat` — never hardcode separators or currency symbols
 - Hardcoded date/number formats are an anti-pattern even in English-only apps (user locale varies)
 
+## Part 4 — Styling System (CSS-in-TS / vanilla-extract)
+
+Applies **only** when the project uses vanilla-extract (`@vanilla-extract/*` in `package.json`, `.css.ts` files). Skip this Part entirely otherwise. The a11y, structure, and platform checks (§1–§26) apply to vanilla-extract-styled components unchanged — Part 4 only adds what is specific to the CSS-in-TS authoring model.
+
+**Scoping principle — the build is the audit.** vanilla-extract is zero-runtime: `.css.ts` is evaluated at build time. Anything it rejects at build — a runtime value passed into `style()`, a `createTheme` contract/shape mismatch, a selector not scoped to `&` — is **not a finding**; the compiler already forces that fix. This Part covers only what compiles, ships, and is still wrong or degraded.
+
+### 27. CSS-in-TS Silent Failures
+
+**Source**: vanilla-extract documentation — Theming, Styling, `@vanilla-extract/dynamic` (see REFERENCE.md §27 for exact quotes and code)
+
+**What to check**:
+- **Theme variable consumed with no theme class on an ancestor.** `createTheme` returns `[themeClass, vars]`; `themeClass` is a *container class* and `vars.*` are CSS custom properties that resolve only under an element carrying that class (or a `createGlobalTheme` `:root` scope). A component using `vars.color.brand` rendered in a subtree where no ancestor applies the theme class produces an **unset variable** — no error, no warning, just missing/initial-value styling. Flag theme-var usage with no theme-class ancestor; recommend applying the class or `fallbackVar(vars.x, '<default>')`.
+- **`globalStyle` overuse / leakage.** `globalStyle` is the deliberate escape hatch from scoped-by-default styling — it emits an unscoped global rule. A component-level `.css.ts` emitting broad `globalStyle('a' | 'button' | '*' | 'body …', …)` creates app-wide cascade coupling that the scoped model exists to prevent. Flag broad `globalStyle` selectors outside a single intentional global/reset stylesheet. (Invalid non-`&` selectors inside `style()` are build-rejected — not this check's concern.)
+- **Runtime value bypassing the dynamic API.** Styles are built ahead of time, so a runtime value cannot flow through `style()`. The sanctioned path is `@vanilla-extract/dynamic` (`assignInlineVars`/`setElementVars`) writing into theme `vars`. Scattered ad-hoc `style={{ … }}` props carrying values that belong to the token system (bypassing it at runtime) is the CSS-in-TS analogue of §14 — flag it and point to `assignInlineVars`.
+
+**Severity**: Warning for the first two (visible-but-wrong styling; lost scoping/token discipline); Suggestion for the dynamic-API recommendation. Never Critical on its own — a11y/security of vanilla-extract-styled components is still §1–§26 / `security-audit`.
+
 ## Output Format
 
 Group findings by severity. Each finding MUST name the specific standard.
@@ -401,7 +420,8 @@ Improvements that increase robustness or consistency but aren't urgently broken.
 3. **Purely decorative elements** — exempt from text alternative requirements per WCAG 1.1.1
 4. **Third-party component internals** — don't audit inside node_modules
 5. **Test files** — skip `.test.tsx`, `.spec.tsx`
-6. **Theme/token definitions** — CSS variable definitions in theme config ARE the design system
+6. **Theme/token definitions** — CSS variable definitions in theme config ARE the design system. For vanilla-extract this includes `createTheme`/`createGlobalTheme`/`createThemeContract` files — never flag literal values there
+7. **vanilla-extract build errors** — a runtime value in a `.css.ts` `style()`, a `createTheme` contract/shape mismatch, or a selector not scoped to `&` are rejected by the build. The compiler is the audit; do NOT report them as findings
 
 ### Severity Calibration:
 
@@ -428,3 +448,4 @@ Before finalizing your report, verify every finding:
 - **Don't over-report DRY**: same-file duplication is fine per Tailwind guidance. Only flag cross-file duplication of 3+ occurrences.
 - **Respect scope**: in diff mode, only flag issues in changed lines and their immediate context.
 - **Don't duplicate other skills**: a11y and UI structure only. Logic bugs go to `correctness-audit`, security to `security-audit`, general code quality to `best-practices-audit`.
+- **The build is the audit (CSS-in-TS)**: never report a vanilla-extract failure the build already rejects (runtime value in `.css.ts`, contract mismatch, non-`&` selector). Part 4 covers only compile-clean-but-wrong styling; the a11y of vanilla-extract-styled components is still §1–§26.

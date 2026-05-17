@@ -35,6 +35,7 @@ describe('pipeline', () => {
     it('has all expected stages', () => {
       const expected = [
         'correctness', 'security', 'best-practices',
+        'rust-correctness', 'rust-security', 'rust-best-practices',
         'implementation', 'migration', 'ui', 'behavior',
         'test-coverage', 'test-quality'
       ];
@@ -47,6 +48,12 @@ describe('pipeline', () => {
 
     it('test-quality stage maps to test-quality-audit skill', () => {
       assert.equal(BUILTIN_STAGES['test-quality'].skillId, 'test-quality-audit');
+    });
+
+    it('rust audit stages map to their *-audit skills', () => {
+      assert.equal(BUILTIN_STAGES['rust-correctness'].skillId, 'rust-correctness-audit');
+      assert.equal(BUILTIN_STAGES['rust-security'].skillId, 'rust-security-audit');
+      assert.equal(BUILTIN_STAGES['rust-best-practices'].skillId, 'rust-best-practices-audit');
     });
   });
 
@@ -70,6 +77,15 @@ describe('pipeline', () => {
     it('full pipeline includes parallel groups', () => {
       const hasNestedArray = DEFAULT_PIPELINES.full.some(entry => Array.isArray(entry));
       assert.ok(hasNestedArray);
+    });
+
+    it('rust audits are opt-in — NOT in the built-in default or full pipelines', () => {
+      const defaultFlat = DEFAULT_PIPELINES.default.flat();
+      const fullFlat = DEFAULT_PIPELINES.full.flat();
+      for (const stage of ['rust-correctness', 'rust-security', 'rust-best-practices']) {
+        assert.ok(!defaultFlat.includes(stage), `default must not include ${stage}`);
+        assert.ok(!fullFlat.includes(stage), `full must not include ${stage}`);
+      }
     });
 
     it('full pipeline ends with test-coverage then test-quality', () => {

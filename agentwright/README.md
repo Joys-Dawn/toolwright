@@ -54,15 +54,17 @@ Run `/agentwright:config-init` to drop a fully-defaulted `.claude/agentwright.js
 
 **Full pipeline** (`/audit-run full`): default plus `security`, `migration`, `ui`, and `test-quality`.
 
+The Rust audits (`rust-correctness`, `rust-security`, `rust-best-practices`) are **opt-in, not in any built-in pipeline** — run them with `/audit-step rust-correctness <scope>`, a comma list (`/audit-run rust-correctness,rust-security,rust-best-practices`), or a custom pipeline in `.claude/agentwright.json`.
+
 **Default scope** (when no scope is specified): files changed in `git diff` (staged + unstaged). Pass `--all` to audit the entire repo, or one or more paths to audit only those files/directories.
 
 ## Skills
 
-33 vendored skills:
+39 vendored skills (plus one internal coordinator step, `check-deltas`, not listed here):
 
 ### Audit lifecycle skills
 
-Slash commands that drive an audit run. Documented in detail under [Commands](#commands) above.
+Slash commands that drive or configure an audit run. Documented in detail under [Commands](#commands) and [Customize defaults](#customize-defaults) above.
 
 | Skill | Purpose |
 |-------|---------|
@@ -73,6 +75,7 @@ Slash commands that drive an audit run. Documented in detail under [Commands](#c
 | **audit-stop** | Kill an active run |
 | **audit-reset** | Guided run-directory deletion |
 | **audit-clean** | Clean retained run artifacts |
+| **config-init** | Write a fully-defaulted `.claude/agentwright.json` into the repo |
 
 ### Audit skills (used by the pipeline)
 
@@ -81,12 +84,24 @@ Slash commands that drive an audit run. Documented in detail under [Commands](#c
 | **correctness-audit** | Logic errors, null handling, async races, type coercion, resource leaks, N+1 queries |
 | **security-audit** | OWASP Top 10 2025, API Security Top 10, CWE, GDPR, PCI-DSS |
 | **best-practices-audit** | DRY, SOLID, KISS, YAGNI, Clean Code, naming, coupling, anti-patterns |
+| **rust-correctness-audit** | Rust runtime bugs: debug-panic vs release-wrap overflow, panics, `Option`/`Result` mishandling, ownership/lifetime footguns, concurrency, async (tokio). Opt-in (not in any built-in pipeline) — `/audit-step rust-correctness` or a custom pipeline |
+| **rust-security-audit** | Rust memory-unsafety the generic security audit can't see: `unsafe`/UB soundness, `Send`/`Sync`, FFI, supply chain (RUSTSEC), deserialization DoS, crypto/secret misuse. Opt-in — `/audit-step rust-security` or a custom pipeline |
+| **rust-best-practices-audit** | Rust idioms & design: error-handling design, ownership/borrowing idioms, trait/API conventions (C-* guidelines), Clippy lint groups, performance, module hygiene. Opt-in — `/audit-step rust-best-practices` or a custom pipeline |
 | **migration-audit** | PL/pgSQL: NULL traps, race conditions, missing constraints, JSONB pitfalls |
 | **implementation-audit** | Roundabout solutions, unnecessary complexity, reinvented wheels, naive designs |
-| **ui-audit** | WCAG 2.2 accessibility, WAI-ARIA patterns, component anti-patterns (React/Tailwind) |
+| **ui-audit** | WCAG 2.2 accessibility, WAI-ARIA patterns, component anti-patterns (React/Tailwind or vanilla-extract CSS-in-TS) |
 | **behavior-audit** | User-perspective walkthrough — surprising behavior, hostile defaults, cross-feature breaks; reasons from first principles, not patterns |
 | **test-coverage-audit** | Maps source files against tests, produces risk-prioritized coverage gaps |
 | **test-quality-audit** | Routes existing test files to the matching `write-tests-*` skill and audits them in review mode (flaky patterns, weak assertions, over-mocking, isolation issues). Opt-in via `/audit-step test-quality` or the `full` pipeline |
+
+### Design skills
+
+Design the WHAT and the user-facing surface before implementation planning. Their artifacts are consumed by the planning skills.
+
+| Skill | Focus |
+|-------|-------|
+| **behavioral-design** | Specifies behaviors, triggers, edge cases, alternatives, and acceptance criteria — the WHAT, no implementation language. Works at feature or whole-product scale; upstream of feature/project planning |
+| **ui-design** | Specifies surfaces, layout, visual states, affordances, navigation, hierarchy, and accessibility constraints. Keys off `behavioral-design` when present; hard no-UI off-ramp for backend/CLI/library/skill features |
 
 ### Planning skills
 
@@ -113,6 +128,7 @@ Write, review, and fix tests. Loaded by `test-quality-audit` (one per test domai
 | **write-tests-frontend** | React with Vitest + React Testing Library |
 | **write-tests-deno** | Deno integration tests for Supabase Edge Functions |
 | **write-tests-pgtap** | pgTAP database tests for Supabase SQL migrations |
+| **write-tests-rust** | Rust tests: `cargo test` parallel-execution isolation, `#[cfg(test)]`/`tests/`/doctests, `#[should_panic]`, async/`#[tokio::test]`, proptest, snapshots, mocks, CLI tests |
 
 ### Agent shortcuts
 
@@ -192,7 +208,7 @@ Create `.claude/agentwright.json` in your project to customize pipelines and ret
 
 ### Custom stages
 
-Reference a builtin skill by `skillId` or a project-relative SKILL.md by `skillPath`. Only needed if you define your own audit stages — the 6 vendored audit skills are available by name without any configuration.
+Reference a builtin skill by `skillId` or a project-relative SKILL.md by `skillPath`. Only needed if you define your own audit stages — every built-in audit stage in the [Audit skills](#audit-skills-used-by-the-pipeline) table (including the three opt-in `rust-*` stages) is available by name without any configuration.
 
 ### Fused stages
 

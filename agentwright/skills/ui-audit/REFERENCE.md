@@ -36,6 +36,9 @@ Detailed definitions, exact requirements, and source citations for each check in
 25. [Hydration Safety](#25-hydration-safety)
 26. [Internationalization](#26-internationalization)
 
+### Part 4 — Styling System (CSS-in-TS)
+27. [CSS-in-TS Silent Failures (vanilla-extract)](#27-css-in-ts-silent-failures-vanilla-extract)
+
 ---
 
 ## 1. Touch Target Size
@@ -835,3 +838,68 @@ Use `suppressHydrationWarning` only on the specific element, not as a blanket wr
 ### Language detection
 - Use `Accept-Language` header (server) or `navigator.languages` (client)
 - Never infer language from IP address (VPNs, expats, multilingual users)
+
+---
+
+## 27. CSS-in-TS Silent Failures (vanilla-extract)
+
+Applies only when the project uses vanilla-extract (`@vanilla-extract/*` in `package.json`, `.css.ts` files).
+
+### Sources
+- **vanilla-extract — Theming**: https://vanilla-extract.style/documentation/theming/
+  - `createTheme` returns two values — *"A class name: a container class for the provided theme variables"* and *"A theme contract: a typed data-structure of CSS variables"* (quote truncated; the sentence continues "matching the shape of the provided theme implementation"). `createThemeContract` lets you *"define the contract without generating any CSS"*.
+- **vanilla-extract — Styling / `globalStyle`**: https://vanilla-extract.style/documentation/styling/
+  - Scoped selectors *"must target the `&` character which is a reference to the current element"*; to *"globally target child nodes within the current element … you should use globalStyle instead."* `globalStyle` emits an unscoped global rule; invalid non-`&` selectors are build-rejected.
+- **vanilla-extract — `@vanilla-extract/dynamic`**: https://vanilla-extract.style/documentation/packages/dynamic/
+  - The package is *"A tiny (< 1kB compressed) runtime for performing dynamic updates to scoped theme variables."* vanilla-extract generates static CSS at build time (zero-runtime), so a genuine runtime value cannot flow through the static `style()` function — the sanctioned runtime path is `assignInlineVars` / `setElementVars` writing into theme `vars`. *(Last sentence is a paraphrase of vanilla-extract's documented zero-runtime model, not a verbatim doc quote.)*
+
+### Scoping principle — the build is the audit
+vanilla-extract evaluates `.css.ts` at build time. A runtime value in `style()`, a `createTheme` contract/shape mismatch, and a selector not scoped to `&` are **build-time errors** — the compiler forces the fix, so they are NOT audit findings. §27 covers only what compiles, ships, and is still wrong.
+
+### 27a. Theme variable consumed with no theme class on an ancestor
+`const [themeClass, vars] = createTheme({...})` — `vars.*` are CSS custom properties that resolve only under an element carrying `themeClass` (or a `createGlobalTheme` `:root` scope). Standard CSS cascade: a `var(--x)` with no ancestor declaring `--x` falls back to the property's initial/inherited value — silently, no error.
+
+```tsx
+// theme.css.ts
+export const [themeClass, vars] = createTheme({ color: { brand: '#3b82f6' } });
+
+// card.css.ts
+export const card = style({ color: vars.color.brand });
+
+// Bad — no ancestor applies themeClass → vars.color.brand is unset, text uses inherited color
+function App() { return <Card />; }
+
+// Good — themeClass on an ancestor
+function App() { return <div className={themeClass}><Card /></div>; }
+
+// Good — explicit fallback where a sane default exists
+export const card = style({ color: fallbackVar(vars.color.brand, '#3b82f6') });
+```
+Flag theme-var usage rendered outside any theme-class subtree; recommend the ancestor class or `fallbackVar`.
+
+### 27b. `globalStyle` overuse / leakage
+`globalStyle` is the deliberate escape hatch from vanilla-extract's scoped-by-default model — it emits an unscoped rule. A component-level `.css.ts` emitting broad element-selector `globalStyle` calls creates app-wide cascade coupling the scoped model exists to prevent.
+
+```ts
+// Bad — a component stylesheet mutating every <a> on the site
+globalStyle('a', { textDecoration: 'none' });
+
+// Good — scope to the component; confine global resets to one intentional reset.css.ts
+export const link = style({ textDecoration: 'none' });
+```
+Flag broad `globalStyle` selectors (`'a'`, `'button'`, `'*'`, `'body …'`) outside a single intentional global/reset stylesheet. Invalid non-`&` selectors inside `style()` are build-rejected — not a finding.
+
+### 27c. Runtime value bypassing the dynamic API
+Styles are built ahead of time, so a runtime value cannot flow through `style()`. The sanctioned runtime path is `@vanilla-extract/dynamic` writing into theme `vars`. Ad-hoc `style={{ … }}` props carrying values that belong to the token system is the CSS-in-TS form of the §14 hardcoded-token anti-pattern.
+
+```tsx
+// Bad — runtime color as a raw inline style, bypassing the token system
+<div style={{ background: user.brandColor }} />
+
+// Good — assignInlineVars into a theme var
+import { assignInlineVars } from '@vanilla-extract/dynamic';
+<div className={card} style={assignInlineVars({ [vars.color.brand]: user.brandColor })} />
+```
+
+### Severity
+Warning for 27a/27b (visible-but-wrong styling; lost scoping/token discipline); Suggestion for 27c. Never Critical on its own — a11y/security of vanilla-extract-styled components is still §1–§26 / the security skill.

@@ -31,6 +31,5 @@ build/
 *.tsbuildinfo
 *.tgz
 .collab/
-agent_harness/
 
 site/

@@ -1,11 +1,11 @@
 ---
 name: test-quality-audit
-description: Audits existing test files for anti-patterns and best-practice violations using the rules defined in the four write-tests skills (`agentwright:write-tests`, `agentwright:write-tests-frontend`, `agentwright:write-tests-deno`, `agentwright:write-tests-pgtap`). Use to find flaky patterns, weak assertions, over-mocking, isolation issues, structure-coupled tests, and other quality problems in tests that already exist. Complements `agentwright:test-coverage-audit` (which finds missing tests).
+description: Audits existing test files for anti-patterns and best-practice violations using the rules defined in the five write-tests skills (`agentwright:write-tests`, `agentwright:write-tests-frontend`, `agentwright:write-tests-deno`, `agentwright:write-tests-pgtap`, `agentwright:write-tests-rust`). Use to find flaky patterns, weak assertions, over-mocking, isolation issues, structure-coupled tests, and other quality problems in tests that already exist. Complements `agentwright:test-coverage-audit` (which finds missing tests).
 ---
 
 # Test Quality Audit
 
-Audit existing test files for anti-patterns and best-practice violations against the rules defined in the four `agentwright:write-tests-*` skills. This audit finds **bad tests that already exist** — not missing tests (use `agentwright:test-coverage-audit` for that) and not bugs in production code (use `agentwright:correctness-audit`).
+Audit existing test files for anti-patterns and best-practice violations against the rules defined in the five `agentwright:write-tests-*` skills. This audit finds **bad tests that already exist** — not missing tests (use `agentwright:test-coverage-audit` for that) and not bugs in production code (use `agentwright:correctness-audit`).
 
 The rule definitions live in the per-domain skills. This audit does NOT restate them — it routes test files to the right skill, loads that skill, and applies its rules.
 
@@ -20,7 +20,8 @@ Test file locators:
 | pgTAP | `*.test.sql` (Supabase convention: `supabase/tests/database/*.test.sql`) |
 | Deno edge | `supabase/functions/tests/**`, plus any `*_test.ts` / `*-test.ts` that imports `Deno.test`, `@std/assert`, or `@std/testing` |
 | Frontend (React/RTL) | `*.test.tsx`, `*.test.jsx`, files under `__tests__/` that import `@testing-library/react` or `vitest` |
-| Generic | every other `*.test.{ts,js,py,go,rs,java,...}`, `*_test.{ts,js,py,go,rs,...}`, `test_*.py`, etc. |
+| Rust | **not a filename pattern** — Rust has no `*_test.rs` / `*.test.rs` convention. `#[cfg(test)]` modules containing `#[test]`/`#[tokio::test]`/etc. inside `src/**/*.rs`; any file directly under `tests/` (integration crates, not `tests/*/` helper modules); `///`/`//!` doctests with fenced code blocks |
+| Generic | every other `*.test.{ts,js,py,go,java,...}`, `*_test.{ts,js,py,go,...}`, `test_*.py`, etc. (`.rs` is handled by Rust above — never route Rust by filename) |
 
 Skip `node_modules/`, `vendor/`, build output, generated files.
 
@@ -35,6 +36,7 @@ Use Glob/Grep to enumerate every in-scope test file. Classify each by domain:
 | pgTAP | `agentwright:write-tests-pgtap` |
 | Deno edge | `agentwright:write-tests-deno` |
 | Frontend (React/RTL) | `agentwright:write-tests-frontend` |
+| Rust | `agentwright:write-tests-rust` |
 | Generic | `agentwright:write-tests` |
 
 A single project usually has tests from multiple domains.
@@ -46,6 +48,7 @@ A single project usually has tests from multiple domains.
 - `agentwright:write-tests-pgtap` — for `*.test.sql`
 - `agentwright:write-tests-deno` — for Deno edge function tests
 - `agentwright:write-tests-frontend` — for React/RTL tests
+- `agentwright:write-tests-rust` — for Rust tests (`#[cfg(test)]`/`#[test]`, `tests/` integration crates, doctests)
 - `agentwright:write-tests` — for everything else
 
 Load every skill that applies to the domains found in scope. Do not audit from memory — the rule definitions in the loaded skills are the source of truth, including their `REFERENCE.md` files when present.
@@ -56,7 +59,7 @@ Each loaded skill has a "Principles to Enforce" / "Common Anti-Patterns" / "Outp
 
 ### 4. Verify version-pinned claims before reporting
 
-For findings about library APIs or version-specific behavior (RTL query priorities, Vitest mocking semantics, Deno sanitizer flags, pgTAP function names), use `WebFetch`, `WebSearch`, or `mcp__context7__` to confirm the rule still applies in the version the project uses. Read `package.json`, `deno.json`, or the project's lockfile to see what's pinned. Don't flag a violation based on a memory of a library's older API.
+For findings about library APIs or version-specific behavior (RTL query priorities, Vitest mocking semantics, Deno sanitizer flags, pgTAP function names, Rust edition/MSRV-gated behavior and Clippy lint groups/levels), use `WebFetch`, `WebSearch`, or `mcp__context7__` to confirm the rule still applies in the version the project uses. Read `package.json`, `deno.json`, `Cargo.toml`/`Cargo.lock` (incl. `edition` and `rust-version`), or the project's lockfile to see what's pinned. Don't flag a violation based on a memory of a library's older API — e.g. `std::env::set_var` is only `unsafe` in edition 2024, and most test-relevant Clippy lints are allow-by-default.
 
 ### 5. Run available linters
 
@@ -65,6 +68,7 @@ If the project ships testing-related linters, run them on the in-scope test file
 - ESLint with `eslint-plugin-testing-library` for React/RTL tests (`cd app && npx eslint <test-paths>`)
 - `npx supabase db lint` for SQL-side migrations referenced by pgTAP tests
 - `deno lint` on Deno test directories
+- `cargo clippy --all-targets` for Rust test code (note: most test-relevant Clippy lints — `unwrap_used`, `float_cmp`, `should_panic_without_expect` — are allow-by-default, so a clean Clippy run does **not** clear the Rust test-quality principles; apply `agentwright:write-tests-rust` regardless)
 
 A linter error that maps to a write-tests-* principle should be reported under that principle, not as a separate "linter said so" finding.
 

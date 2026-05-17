@@ -2,7 +2,7 @@
 
 > Chained audit pipelines with a spawned auditor and in-session verification. Run `/audit-run` — a headless `claude -p` subprocess audits a frozen snapshot, the current session independently verifies each finding and applies fixes to the live repo.
 
-**Version**: 2.2.1 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/agentwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/README.md)
+**Version**: 2.3.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/agentwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/README.md)
 
 ## Install
 
@@ -57,7 +57,7 @@ All seven live under the plugin's `/` namespace as skills (since Claude Code mer
 | `/audit-reset` | `[run-id]` | Guided deletion of a run directory. |
 | `/audit-clean` | `[--logs-only]` | Prune retained artifacts per the retention policy. |
 
-## Skills (33)
+## Skills (39)
 
 Auto-discovered from `agentwright/skills/` and invokable as `/agentwright:<name>` or via the `Skill` tool.
 
@@ -72,12 +72,15 @@ The seven slash commands documented in [Commands](#commands) above are skills un
 | `/agentwright:correctness-audit` | Logic errors, null handling, async races, type coercion, resource leaks, N+1 queries. |
 | `/agentwright:security-audit` | OWASP Top 10 2025, OWASP API Security Top 10 2023, CWE, GDPR, PCI-DSS. |
 | `/agentwright:best-practices-audit` | DRY, SOLID, KISS, YAGNI, Clean Code, naming, coupling, anti-patterns. |
+| `/agentwright:rust-correctness-audit` | Rust runtime bugs: debug-panic vs release-wrap overflow, panics, `Option`/`Result` mishandling, ownership/lifetime footguns, concurrency, async (tokio). Opt-in — not in any built-in pipeline; run via `/audit-step rust-correctness` or a custom pipeline. |
+| `/agentwright:rust-security-audit` | Rust memory-unsafety the generic security audit can't see: `unsafe`/UB soundness, `Send`/`Sync`, FFI, supply chain (RUSTSEC), deserialization DoS, crypto/secret misuse. Opt-in — `/audit-step rust-security` or a custom pipeline. |
+| `/agentwright:rust-best-practices-audit` | Rust idioms & design: error-handling design, ownership/borrowing idioms, trait/API conventions (C-* guidelines), Clippy lint groups, performance, module hygiene. Opt-in — `/audit-step rust-best-practices` or a custom pipeline. |
 | `/agentwright:migration-audit` | PL/pgSQL: NULL traps, race conditions, missing constraints, JSONB pitfalls. Auto-triggers when a `supabase/migrations/*.sql` file is written. |
 | `/agentwright:implementation-audit` | Roundabout solutions, unnecessary complexity, reinvented wheels, naive designs. |
-| `/agentwright:ui-audit` | WCAG 2.2, WAI-ARIA patterns, touch target sizing, focus management, React/Tailwind anti-patterns. |
+| `/agentwright:ui-audit` | WCAG 2.2, WAI-ARIA patterns, touch target sizing, focus management, and component anti-patterns in React/Tailwind **or vanilla-extract (CSS-in-TS)** code. |
 | `/agentwright:behavior-audit` | User-perspective walkthrough — surprising behavior, hostile defaults, cross-feature breaks. Reasons from first principles, not patterns. |
 | `/agentwright:test-coverage-audit` | Maps source files against tests, produces a risk-prioritized list of gaps. |
-| `/agentwright:test-quality-audit` | Routes existing test files to the matching `write-tests-*` skill (pgTAP / Deno / frontend / generic) and audits them in review mode — flaky patterns, weak assertions, over-mocking, isolation issues. Opt-in via `/audit-step test-quality` or the `full` pipeline; not part of the default pipeline. |
+| `/agentwright:test-quality-audit` | Routes existing test files to the matching `write-tests-*` skill (pgTAP / Deno / frontend / Rust / generic) and audits them in review mode — flaky patterns, weak assertions, over-mocking, isolation issues. Opt-in via `/audit-step test-quality` or the `full` pipeline; not part of the default pipeline. |
 
 ### Planning
 
@@ -96,14 +99,15 @@ The seven slash commands documented in [Commands](#commands) above are skills un
 
 ### Test writing
 
-These four skills are loaded by `/agentwright:test-quality-audit` (one per test domain) when it audits existing tests, and are invoked by the main agent when writing new tests after `/agentwright:test-coverage-audit` flags a gap.
+These five skills are loaded by `/agentwright:test-quality-audit` (one per test domain) when it audits existing tests, and are invoked by the main agent when writing new tests after `/agentwright:test-coverage-audit` flags a gap.
 
 | Skill | Focus |
 |---|---|
-| `/agentwright:write-tests` | General test quality (assertions, isolation, flakiness, over-mocking). Defers to the three below when applicable. |
+| `/agentwright:write-tests` | General test quality (assertions, isolation, flakiness, over-mocking). Defers to the four below when applicable. |
 | `/agentwright:write-tests-frontend` | React components/hooks with Vitest + RTL. |
 | `/agentwright:write-tests-deno` | Deno integration tests for Supabase Edge Functions. |
 | `/agentwright:write-tests-pgtap` | pgTAP database tests for Supabase SQL migrations. |
+| `/agentwright:write-tests-rust` | Rust tests: `cargo test` parallel-execution isolation, `#[cfg(test)]`/`tests/`/doctests, `#[should_panic]`, async/`#[tokio::test]`, proptest, snapshots, mocks, CLI tests. |
 
 ### Agent-shortcut skills
 
