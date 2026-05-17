@@ -1,6 +1,6 @@
 // scripts/mindwright.mjs — the CLI that replaces the MCP server. Skills run
 // `node scripts/mindwright.mjs <tool> --session-id <id>` with JSON args on
-// stdin; the script dispatches into the SAME mcp/tools.mjs handlers and
+// stdin; the script dispatches into the SAME lib/tools.mjs handlers and
 // prints the unwrapped JSON payload to stdout.
 //
 // `status` is the ideal smoke target: it exercises the full path (argv

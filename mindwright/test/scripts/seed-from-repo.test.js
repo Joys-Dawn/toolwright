@@ -483,7 +483,7 @@ test('deps-absent: emits the deps_not_installed structured result and never call
   // A caller parses this stdout JSON to decide whether to retry, so the exact
   // error code + shape is a contract. Every other test here spawns the real
   // SCRIPT in the deps-present dev tree, so the deps-absent branch was never
-  // run. Reproduce a faithful marketplace copy: scripts/ + lib/ + mcp/ NO
+  // run. Reproduce a faithful marketplace copy: scripts/ + lib/ NO
   // node_modules → the copy's depsInstalled() is false (paths.js derives
   // PLUGIN_ROOT from its own location → the sandbox). store.js is copied but
   // never imported (the branch returns before `await import('../lib/store.js')`).
@@ -492,13 +492,12 @@ test('deps-absent: emits the deps_not_installed structured result and never call
   const pluginCopy = mkdtempSync(join(tmpdir(), 'mindwright-seed-plugin-'));
   const projectDir = mkdtempSync(join(tmpdir(), 'mindwright-seed-da-proj-'));
   try {
+    // lib/ + scripts/ only (no node_modules): seed-from-repo.js's static
+    // import graph (incl. lib/daemon-ticket.mjs) is dep-free, so the copy's
+    // depsInstalled() is false and it hits the deps-absent branch rather
+    // than an ESM-resolution crash.
     cpSync(join(PLUGIN_ROOT, 'lib'), join(pluginCopy, 'lib'), { recursive: true });
     cpSync(join(PLUGIN_ROOT, 'scripts'), join(pluginCopy, 'scripts'), { recursive: true });
-    // mcp/ is required: seed-from-repo.js's static dep-free graph reaches
-    // ../mcp/daemon-ticket.mjs. The dormancy invariant guarantees that whole
-    // graph is dep-free, so a node_modules-less copy hits the deps-absent
-    // branch rather than an ESM-resolution crash.
-    cpSync(join(PLUGIN_ROOT, 'mcp'), join(pluginCopy, 'mcp'), { recursive: true });
 
     const res = spawnSync(process.execPath, [join(pluginCopy, 'scripts', 'seed-from-repo.js')], {
       encoding: 'utf8',

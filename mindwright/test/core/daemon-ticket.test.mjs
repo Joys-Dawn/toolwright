@@ -18,7 +18,7 @@ import {
   readActiveTicket,
   cleanupStaleTickets,
   ticketPathFor,
-} from '../../mcp/daemon-ticket.mjs';
+} from '../../lib/daemon-ticket.mjs';
 import { ticketsDir } from '../../lib/paths.js';
 
 async function withTmp(fn) {

@@ -1,12 +1,12 @@
 // Direct unit tests for the small validators / serializers / authz checks in
-// mcp/tools.mjs. Integration tests at the MCP roundtrip level exercise these
+// lib/tools.mjs. Integration tests at the MCP roundtrip level exercise these
 // indirectly, but isolated assertions tighten the regression net (a path-
 // traversal in requireValidSessionId or a forgotten BigInt branch in
 // bigintReplacer is caught here before the full roundtrip even fires).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { __internal } from '../../mcp/tools.mjs';
+import { __internal } from '../../lib/tools.mjs';
 
 const {
   validateScope,

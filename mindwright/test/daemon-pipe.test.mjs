@@ -21,7 +21,7 @@ import net from 'node:net';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PLUGIN_ROOT = dirname(__dirname); // mindwright/
-const DAEMON_PIPE_URL = pathToFileURL(`${PLUGIN_ROOT}/mcp/daemon-pipe.mjs`).href;
+const DAEMON_PIPE_URL = pathToFileURL(`${PLUGIN_ROOT}/lib/daemon-pipe.mjs`).href;
 
 const STUB_EMBED_VALUE = 0.5;
 const STUB_DIM = 1024;
@@ -74,7 +74,7 @@ async function importFresh() {
   // against the isolated tmp root. ES modules cache by URL, so we use
   // cache-busting query strings.
   const stamp = Date.now() + '-' + Math.random();
-  const pipeMod = await import(`../mcp/daemon-pipe.mjs?t=${stamp}`);
+  const pipeMod = await import(`../lib/daemon-pipe.mjs?t=${stamp}`);
   const clientMod = await import(`../lib/pipe-client.js?t=${stamp}`);
   return { startPipeServer: pipeMod.startPipeServer, connectPipe: clientMod.connectPipe };
 }

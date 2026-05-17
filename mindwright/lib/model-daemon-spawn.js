@@ -21,7 +21,7 @@ export function ensureModelDaemon() {
   if (now - lastSpawnAt < SPAWN_THROTTLE_MS) return;
   lastSpawnAt = now;
   try {
-    const script = join(PLUGIN_ROOT, 'mcp', 'model-daemon.mjs');
+    const script = join(PLUGIN_ROOT, 'scripts', 'model-daemon.mjs');
     // Append the daemon's own stderr to a machine-global log so a failed
     // cold-load is diagnosable; stdin/stdout ignored (no protocol on them).
     let logFd = 'ignore';

@@ -1,5 +1,5 @@
 // Thin JSON-RPC client to the machine-wide model daemon's pipe server
-// (mcp/daemon-pipe.mjs). Every method opens a fresh connection, sends one
+// (lib/daemon-pipe.mjs). Every method opens a fresh connection, sends one
 // newline-delimited JSON request, awaits one response, tears it down — a
 // local socket connect+call+disconnect is single-digit ms, cheaper than
 // pooling across hook firings.

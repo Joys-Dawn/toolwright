@@ -1,7 +1,7 @@
 // Embedder + reranker loaders for mindwright.
 //
 // Models load as lazy singletons in-process. The ONLY process that should load
-// them is the machine-wide model daemon (mcp/model-daemon.mjs): it holds them
+// them is the machine-wide model daemon (scripts/model-daemon.mjs): it holds them
 // for the whole machine over a fixed global socket, so hooks and the CLI never
 // pay the ONNX cold-load themselves.
 //

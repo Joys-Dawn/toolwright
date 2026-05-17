@@ -12,7 +12,7 @@ import { pathToFileURL } from 'node:url';
 import { projectRoot } from '../lib/paths.js';
 import { runSeedLoop } from '../lib/seed-loop.js';
 import { collectNativeMemory } from '../lib/native-memory.js';
-import { readActiveTicket } from '../mcp/daemon-ticket.mjs';
+import { readActiveTicket } from '../lib/daemon-ticket.mjs';
 import { DAEMON_TICKET_MAX_AGE_MS } from '../lib/constants.js';
 import { depsInstalled } from '../lib/ready.js';
 import { maybeAutoInstall, installLogPath } from '../lib/auto-setup.js';

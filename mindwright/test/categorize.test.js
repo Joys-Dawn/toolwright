@@ -1,5 +1,5 @@
 // Tests for the deterministic (category, scope) prediction heuristic.
-// `categorize()` is the fallback that retainHandler in mcp/tools.mjs invokes
+// `categorize()` is the fallback that retainHandler in lib/tools.mjs invokes
 // when an explicit retain to long-term omits category/scope — the dream cycle
 // itself never relies on it (the calling session must tag each fact).
 //

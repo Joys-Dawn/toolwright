@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { handleToolCall } from '../../mcp/tools.mjs';
+import { handleToolCall } from '../../lib/tools.mjs';
 import { openStore } from '../../lib/store.js';
 
 async function withEnvGate(fn) {

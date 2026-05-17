@@ -1,5 +1,5 @@
 // Daemon-pipe: tiny newline-delimited JSON-RPC server over a unix socket /
-// Windows named pipe, bound by mcp/model-daemon.mjs to the fixed
+// Windows named pipe, bound by scripts/model-daemon.mjs to the fixed
 // machine-global socket. Surface is two methods, `embed` and `rerank`.
 //
 // Wire format (each side, line-delimited):
@@ -20,8 +20,8 @@
 import net from 'node:net';
 import { mkdir, unlink, chmod } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { embed as realEmbed, rerank as realRerank } from '../lib/models.js';
-import { pipePath as derivePipePath } from '../lib/paths.js';
+import { embed as realEmbed, rerank as realRerank } from './models.js';
+import { pipePath as derivePipePath } from './paths.js';
 
 // Per-connection input buffer cap (worst legitimate case ~3.2 MB plus
 // margin). Without it a newline-less unbounded chunk grows the buffer until

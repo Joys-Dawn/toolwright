@@ -565,7 +565,7 @@ const ENTRYPOINTS = [
   // (detached-spawned by clients) and the CLI every skill invokes. Both must
   // stay statically dep-free — native code only via dynamic import() after
   // the readiness gate, exactly like the hooks.
-  'mcp/model-daemon.mjs',
+  'scripts/model-daemon.mjs',
   'scripts/mindwright.mjs',
   'scripts/setup.js',
   'scripts/status.js',

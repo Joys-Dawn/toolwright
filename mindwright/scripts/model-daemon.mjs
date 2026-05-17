@@ -110,7 +110,7 @@ async function main() {
   // Imported AFTER the deps gate — startPipeServer statically pulls in
   // lib/models.js (ONNX/transformers), which must not load in a deps-less
   // process.
-  const { startPipeServer } = await import('./daemon-pipe.mjs');
+  const { startPipeServer } = await import('../lib/daemon-pipe.mjs');
   const { embed: realEmbed, rerank: realRerank } = await import('../lib/models.js');
 
   let lastActivity = Date.now();

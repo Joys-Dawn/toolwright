@@ -8,7 +8,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { openStore } from '../lib/store.js';
 import { pipePath, embedderCached } from '../lib/paths.js';
 import { pluralize } from '../lib/grammar.js';
-import { writeTicket } from '../mcp/daemon-ticket.mjs';
+import { writeTicket } from '../lib/daemon-ticket.mjs';
 import { logHookError } from '../lib/hook-log.js';
 import { getRolePromptsFor } from '../lib/role-prompts.js';
 import { writeSidecar } from '../lib/role-sidecar.js';

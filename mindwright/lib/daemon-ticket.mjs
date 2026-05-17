@@ -10,8 +10,8 @@
 
 import { writeFile, readFile, readdir, unlink, mkdir, rename, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ticketsDir } from '../lib/paths.js';
-import { DAEMON_TICKET_MAX_AGE_MS } from '../lib/constants.js';
+import { ticketsDir } from './paths.js';
+import { DAEMON_TICKET_MAX_AGE_MS } from './constants.js';
 
 const DEFAULT_MAX_AGE_MS = DAEMON_TICKET_MAX_AGE_MS;
 

@@ -1,27 +1,27 @@
 // Tool definitions + dispatcher, invoked by scripts/mindwright.mjs.
 // `ctx` = { store, sessionId, embed, rerank }.
 
-import { retrieve } from '../lib/retriever.js';
+import { retrieve } from './retriever.js';
 import {
   drainBatch,
   retainFact,
   markSuperseded,
   finalizeDrain,
   findSupersedeCandidates,
-} from '../lib/consolidator.js';
-import { renderAll } from '../lib/mirrors.js';
-import { categorize } from '../lib/categorize.js';
+} from './consolidator.js';
+import { renderAll } from './mirrors.js';
+import { categorize } from './categorize.js';
 import {
   ROLE_PATTERN, SESSION_ID_PATTERN, KIND_FACT, KIND_PATTERN, TOP_K_DEFAULT,
   INJECTED_FACT_IDS_CAP, UNBOUND_SESSION_ID, MS_PER_DAY,
   STALE_PREFERENCE_WARN_DAYS, LONG_CATEGORIES,
-} from '../lib/constants.js';
-import { embedderCached } from '../lib/paths.js';
-import { isDaemonAlive } from '../lib/daemon-status.js';
-import { deriveHandle } from '../lib/handles.js';
-import { pluralize, agree } from '../lib/grammar.js';
-import { resolveTargetToSessionId } from '../lib/agents-roster.js';
-import { spawnConsolidator } from '../lib/consolidator-spawn.js';
+} from './constants.js';
+import { embedderCached } from './paths.js';
+import { isDaemonAlive } from './daemon-status.js';
+import { deriveHandle } from './handles.js';
+import { pluralize, agree } from './grammar.js';
+import { resolveTargetToSessionId } from './agents-roster.js';
+import { spawnConsolidator } from './consolidator-spawn.js';
 
 const PREVIEW_MAX_CHARS = 200;
 

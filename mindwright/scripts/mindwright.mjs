@@ -2,7 +2,7 @@
 // mindwright CLI — the single entrypoint every memory skill invokes:
 //   node scripts/mindwright.mjs <tool> --session-id '${CLAUDE_SESSION_ID}'
 // with a JSON args object on stdin. It dispatches into the
-// mcp/tools.mjs#handleToolCall handlers; embeddings go to the machine-wide
+// lib/tools.mjs#handleToolCall handlers; embeddings go to the machine-wide
 // model daemon via the pipe-client.
 //
 // Output contract: the handler's JSON payload is printed to stdout (the
@@ -77,7 +77,7 @@ async function main() {
   }
 
   const { openStore } = await import('../lib/store.js');
-  const { handleToolCall } = await import('../mcp/tools.mjs');
+  const { handleToolCall } = await import('../lib/tools.mjs');
 
   let embed;
   let rerank;
