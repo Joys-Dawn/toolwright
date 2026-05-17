@@ -16,7 +16,6 @@ import {
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { projectSlug } from '../../lib/paths.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -54,28 +53,6 @@ function plantTicket(dir, { ageMs = 0 } = {}) {
     utimesSync(ticketPath, old, old);
   }
   return ticketPath;
-}
-
-// Plant a Claude Code transcript so the post-reset auto-seed gate
-// (lib/seed-trigger.js#shouldAutoSeed) would re-bootstrap. Returns the
-// projects-dir to pass as MINDWRIGHT_CLAUDE_PROJECTS_DIR; the reset
-// subprocess resolves transcriptsDir() = <projectsDir>/<projectSlug(dir)>.
-// Placed inside `dir` so withFreshRoot's cleanup also removes it, and well
-// away from .claude/mindwright so reset itself never touches it.
-function plantTranscript(dir) {
-  const projectsDir = join(dir, 'claude-projects');
-  const txDir = join(projectsDir, projectSlug(dir));
-  mkdirSync(txDir, { recursive: true });
-  writeFileSync(
-    join(txDir, 'aaaaaaaa-1111-4111-8111-111111111111.jsonl'),
-    JSON.stringify({
-      type: 'user',
-      message: { content: 'hi' },
-      uuid: 'u1',
-      timestamp: '2024-01-01T00:00:00.000Z',
-    }) + '\n',
-  );
-  return projectsDir;
 }
 
 function runReset(dir, args, extraEnv = {}) {
@@ -203,83 +180,5 @@ test('reset (dry-run) prints a hint about active daemon but still succeeds witho
     // Nothing deleted.
     assert.ok(existsSync(dbPath));
     assert.ok(existsSync(mirrors));
-  });
-});
-
-// ---- behavior-3: post-reset auto-re-bootstrap / token-respend warning ----
-// Emptying memory re-arms the SessionStart auto-seed gate, so the next
-// session silently re-ingests the local transcript corpus and re-spends
-// subscription tokens to rebuild what was just deleted. reset.js must surface
-// that (warn-only — no enforcement) in both the dry-run and the post-delete
-// output, gated on the same two preconditions shouldAutoSeed uses that a
-// reset can observe: transcripts present AND MINDWRIGHT_AUTO_SEED !== 'false'.
-
-const REBOOTSTRAP_RE = /re-ingest your local transcript history/;
-
-test('reset dry-run warns the next session will auto-re-bootstrap when local transcripts exist', () => {
-  withFreshRoot((dir) => {
-    plantDb(dir);
-    const projectsDir = plantTranscript(dir);
-
-    const res = runReset(dir, [], { MINDWRIGHT_CLAUDE_PROJECTS_DIR: projectsDir });
-    assert.equal(res.status, 0, `dry-run must succeed; got ${res.status}. stderr=${res.stderr}`);
-    assert.match(res.stderr, /DRY RUN/);
-    assert.match(res.stderr, REBOOTSTRAP_RE);
-    assert.match(res.stderr, /MINDWRIGHT_AUTO_SEED=false/);
-  });
-});
-
-test('reset --yes warns about auto-re-bootstrap AFTER deleting', () => {
-  withFreshRoot((dir) => {
-    const { dbPath } = plantDb(dir);
-    const projectsDir = plantTranscript(dir);
-    plantTicket(dir, { ageMs: 11 * 60 * 1000 }); // stale → reset proceeds
-
-    const res = runReset(dir, ['--yes'], { MINDWRIGHT_CLAUDE_PROJECTS_DIR: projectsDir });
-    assert.equal(res.status, 0, `expected exit 0; got ${res.status}. stderr=${res.stderr}`);
-    assert.match(res.stderr, /DELETING/);
-    assert.ok(!existsSync(dbPath), 'DB should be gone after successful reset');
-    assert.match(res.stderr, REBOOTSTRAP_RE);
-    // The warning is post-delete guidance — it must come after the removal.
-    const removedAt = res.stderr.indexOf('removed:');
-    const warnAt = res.stderr.search(REBOOTSTRAP_RE);
-    assert.ok(
-      removedAt >= 0 && warnAt > removedAt,
-      `the re-bootstrap warning must follow the deletion output; stderr=${res.stderr}`,
-    );
-  });
-});
-
-test('reset suppresses the re-bootstrap warning when MINDWRIGHT_AUTO_SEED=false', () => {
-  withFreshRoot((dir) => {
-    plantDb(dir);
-    const projectsDir = plantTranscript(dir);
-
-    const res = runReset(dir, [], {
-      MINDWRIGHT_CLAUDE_PROJECTS_DIR: projectsDir,
-      MINDWRIGHT_AUTO_SEED: 'false',
-    });
-    assert.equal(res.status, 0, `dry-run must succeed; got ${res.status}. stderr=${res.stderr}`);
-    assert.match(res.stderr, /DRY RUN/);
-    assert.ok(
-      !REBOOTSTRAP_RE.test(res.stderr),
-      `opting out via MINDWRIGHT_AUTO_SEED=false must silence the warning; stderr=${res.stderr}`,
-    );
-  });
-});
-
-test('reset does not warn about re-bootstrap when no local transcripts exist', () => {
-  withFreshRoot((dir) => {
-    plantDb(dir);
-    const emptyProjects = join(dir, 'empty-projects');
-    mkdirSync(emptyProjects, { recursive: true });
-
-    const res = runReset(dir, [], { MINDWRIGHT_CLAUDE_PROJECTS_DIR: emptyProjects });
-    assert.equal(res.status, 0, `dry-run must succeed; got ${res.status}. stderr=${res.stderr}`);
-    assert.match(res.stderr, /DRY RUN/);
-    assert.ok(
-      !REBOOTSTRAP_RE.test(res.stderr),
-      `no transcripts → no warning; stderr=${res.stderr}`,
-    );
   });
 });

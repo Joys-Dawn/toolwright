@@ -22,10 +22,9 @@ import { logHookError } from '../lib/hook-log.js';
 import { NUDGE_STATES, CONSOLIDATOR_COMPLETION_GRACE_MS } from '../lib/constants.js';
 import { spawnConsolidator } from '../lib/consolidator-spawn.js';
 import { deriveHandle } from '../lib/handles.js';
-// isConsolidatorSession lives in lib/seed-trigger.js — the same self-spawn
-// guard the SessionStart-hosted auto-seed gate uses. handleCapCheck below
-// consumes it here so the guard has a single definition (behavior-1 moved the
-// auto-seed trigger out of this hook; see lib/seed-trigger.js header).
+// isConsolidatorSession lives in lib/seed-trigger.js — the consolidator
+// self-spawn guard. handleCapCheck below consumes it so the cap-nudge path
+// never spawns a consolidator from inside a consolidator session.
 import { isConsolidatorSession } from '../lib/seed-trigger.js';
 
 // Auto-spawn the background consolidator. Returns true on successful spawn.
@@ -208,13 +207,8 @@ export async function main() {
       handleCapCheck(store, sessionId);
     }
 
-    // 3) Auto-seed bootstrap is NOT here. It is hosted by SessionStart
-    //    (lib/seed-trigger.js#maybeAutoSeed, called from
-    //    hooks/session-start.js#main). Its empty-memory precondition is only
-    //    observable before the turn's first flush; by the first Stop,
-    //    flushTranscript (step 1) plus the earlier UserPromptSubmit/PreToolUse
-    //    flushes have already written short rows, so a Stop-hosted gate could
-    //    never fire on the documented fresh-install flow (behavior-1).
+    // 3) There is no auto-seed bootstrap. Transcript/repo seeding is manual
+    //    only — the user runs the `/mindwright:seed-from-repo` skill.
   } finally {
     store.close();
   }

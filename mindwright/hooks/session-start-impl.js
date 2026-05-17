@@ -29,7 +29,6 @@ import { writeTicket } from '../mcp/daemon-ticket.mjs';
 import { logHookError } from '../lib/hook-log.js';
 import { getRolePromptsFor } from '../lib/role-prompts.js';
 import { writeSidecar } from '../lib/role-sidecar.js';
-import { maybeAutoSeed } from '../lib/seed-trigger.js';
 import { initOffsetIfUnknown } from '../lib/offset-init.js';
 import { SELF_RECALL_RULE } from '../lib/constants.js';
 
@@ -117,16 +116,6 @@ export async function main() {
       try { writeSidecar(sessionId, assignedRoles); } catch (e) {
         logHookError('session-start', 'sidecar write failed', e);
       }
-
-      // Transcript-bootstrap auto-trigger. SessionStart is the ONLY point
-      // genuine install-time emptiness is observable: it runs before the
-      // turn's first flush (UserPromptSubmit / PreToolUse / Stop all flush
-      // transcript chunks into short-term, so by the first Stop the
-      // empty-memory precondition can never hold — behavior-1). The offset
-      // write above already marked THIS session live, so the loop seeds only
-      // the genuinely pre-install transcripts, never the current one.
-      // Fire-and-forget + self-guarded; never blocks or fails session start.
-      maybeAutoSeed(store, sessionId);
     }
   } catch (e) {
     logHookError('session-start', 'db work failed', e);

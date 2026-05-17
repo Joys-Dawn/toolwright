@@ -245,8 +245,7 @@ function defaultSpawnWorker() {
 // disrupt the SessionStart/hook turn that triggered it.
 //
 // MINDWRIGHT_AUTO_INSTALL=false opts out (the escape hatch for an air-gapped
-// or vendored environment that manages node_modules out-of-band) — symmetric
-// with MINDWRIGHT_AUTO_SEED.
+// or vendored environment that manages node_modules out-of-band).
 //
 // `depsCheck`/`spawnWorker` are test seams (defaults = the real impls →
 // production unchanged). depsCheck proves the "deps already installed → no-op,

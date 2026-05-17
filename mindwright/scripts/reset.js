@@ -5,43 +5,13 @@
 //
 // Dry-run by default. Pass --yes to actually delete.
 //
-// Emptying memory re-arms the SessionStart auto-seed gate
-// (lib/seed-trigger.js#shouldAutoSeed): the next session would re-ingest this
-// project's local transcripts and re-spawn the background consolidator,
-// re-spending subscription tokens to rebuild exactly what is being deleted.
-// Both the dry-run and the post-delete path surface that so a user purging
-// unwanted/sensitive memory knows to set MINDWRIGHT_AUTO_SEED=false first
-// (behavior-3).
+// Seeding is manual only (the `/mindwright:seed-from-repo` skill), so a reset
+// does not silently re-ingest anything on the next session — there is no
+// auto-rebootstrap to warn about.
 
-import { rmSync, existsSync, readdirSync } from 'node:fs';
-import { dataDir, dbPath, mirrorsDir, transcriptsDir } from '../lib/paths.js';
+import { rmSync, existsSync } from 'node:fs';
+import { dataDir, dbPath, mirrorsDir } from '../lib/paths.js';
 import { isDaemonAlive } from '../lib/daemon-status.js';
-
-// Mirrors the two preconditions of lib/seed-trigger.js#shouldAutoSeed that a
-// reset can evaluate without a live DB or a session id: auto-seed not opted
-// out, and at least one local transcript to re-ingest. The third precondition
-// (memory empty) is exactly what a reset establishes, so when this returns
-// true the next SessionStart WILL re-bootstrap. Kept in lockstep with the
-// real gate's `.jsonl` predicate.
-function autoSeedWouldRebootstrap() {
-  if (process.env.MINDWRIGHT_AUTO_SEED === 'false') return false;
-  try {
-    return readdirSync(transcriptsDir()).some((n) => n.endsWith('.jsonl'));
-  } catch {
-    return false; // no transcript dir for this project → nothing to re-ingest
-  }
-}
-
-function writeRebootstrapWarning() {
-  process.stderr.write(
-    '\nNote: mindwright auto-seeds when memory is empty. The next Claude Code\n' +
-    '      session in this project will re-ingest your local transcript history\n' +
-    '      and re-spawn the background consolidator — re-spending subscription\n' +
-    '      tokens to rebuild the memory you are deleting now. To reset WITHOUT\n' +
-    '      re-bootstrapping (e.g. you are purging unwanted or sensitive memory),\n' +
-    '      set MINDWRIGHT_AUTO_SEED=false before the next session.\n',
-  );
-}
 
 function main() {
   const args = process.argv.slice(2);
@@ -134,7 +104,6 @@ function main() {
         '      session before passing --yes, or add --force alongside --yes to bypass.\n',
       );
     }
-    if (autoSeedWouldRebootstrap()) writeRebootstrapWarning();
     return;
   }
 
@@ -149,7 +118,6 @@ function main() {
     }
   }
   process.stderr.write('Done. Models cache is intact.\n');
-  if (autoSeedWouldRebootstrap()) writeRebootstrapWarning();
 }
 
 main();
