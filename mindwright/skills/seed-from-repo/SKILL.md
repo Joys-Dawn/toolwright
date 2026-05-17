@@ -1,31 +1,32 @@
 ---
 name: seed-from-repo
-description: Bootstrap memory from the current repo — pulls signals from CLAUDE.md, README, and Claude Code's native per-project memory into short-term rows for the next dream cycle to consolidate.
+description: Bootstrap memory from this project — pulls CLAUDE.md, README, Claude Code's native per-project memory, AND your conversation transcript history into short-term rows for the next dream cycle to consolidate. This is the only seeding entrypoint; transcript history is always included.
 ---
 
 # /mindwright:seed-from-repo
 
-Run:
+The single manual seeding command. Run:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/seed-from-repo.js"
 ```
 
-The script reads:
+It ingests **every** source — transcript history is not optional, it is the
+whole point of seeding:
 - `CLAUDE.md` (project root only by default)
 - `README.md` (root)
-- Claude Code's native per-project memory (`~/.claude/projects/<encoded-cwd>/memory/*.md`) — these LLM-written notes are an always-included source, re-distilled through consolidation like any other seed input (not direct-mapped to long-term)
+- Claude Code's native per-project memory (`~/.claude/projects/<encoded-cwd>/memory/*.md`) — LLM-written notes, re-distilled through consolidation like any other seed input
+- **Conversation transcript history** (`~/.claude/projects/<encoded-cwd>/*.jsonl`) — every pre-install transcript, via the bounded/resumable seed loop. The current live session is skipped (it has an offsets row), so live content is never double-ingested.
 
-Each item lands as a `short` tier entry with `kind=seed`. Native-memory rows additionally carry an `event_ts` (frontmatter date or file mtime) so recall ranks them by when the note was actually written, not the seed-run time. The next `/mindwright:dream` distills them into long-term facts.
+Each item lands as a `short` tier entry with `kind=seed`. Native-memory and transcript rows carry an `event_ts` (the note's frontmatter date / the transcript record's real timestamp) so recall ranks them by when the memory actually happened, not the seed-run time. The next `/mindwright:dream` distills everything into long-term facts.
 
-**Idempotent**: re-running skips any source file already represented by an active short `seed` row (matched on the source_ref file-path prefix), so repeated invocations don't pile duplicates. An edited file is not re-chunked until its current rows are drained by a dream cycle — staleness until the next consolidation is accepted by design rather than re-diffing on every run.
-
-> Transcript history (`~/.claude/projects/<encoded-cwd>/*.jsonl`) is **not** seeded by this script, and is no longer auto-seeded at all — the automatic SessionStart transcript bootstrap was removed (it spawned an uncoordinated seed-loop + background consolidator per session). This script covers the repo-local + native-memory sources only.
+**Idempotent / resumable**: re-running skips any markdown/native source already represented by an active short `seed` row; transcript seeding resumes via the `offsets` table, so an already-seeded transcript is never re-ingested. Auto-seeding was removed — there is no longer any automatic SessionStart bootstrap or background `claude --bg` consolidator spawned on your behalf; seeding only happens when you run this command, and consolidation only when you run `/mindwright:dream`.
 
 Report the script's `next_step` field (printed in the stdout JSON) to the user verbatim:
-- Normally "Run /mindwright:dream to consolidate the seeded rows" when rows landed under the live calling session.
-- When no live Claude session ticket is found, the rows land under the synthetic `seed-from-repo` session instead, and `next_step` will tell the user they must run `/mindwright:dream` with `scope="all"` for this batch to be picked up. Surfacing it prevents a silent miss where a default session-scoped dream skips the seeded rows.
-- When nothing new was inserted because every source is already an un-drained short `seed` row, `next_step` still points at `/mindwright:dream` (consolidate the existing rows) rather than reporting "nothing found".
+- When transcript rows were seeded, `next_step` instructs `/mindwright:dream` with `scope="all"` — required because transcript history seeds under its original session ids, which a default session-scoped dream would skip.
+- With no transcripts, only repo/native rows under the live calling session: a plain `/mindwright:dream` consolidates them.
+- No live session ticket: repo/native rows land under the synthetic `seed-from-repo` session and `next_step` directs `scope="all"`.
+- Nothing new inserted (all sources already un-drained short `seed` rows): `next_step` still points at `/mindwright:dream` to consolidate the existing rows.
 
 ### Ancestor walking (opt-in)
 

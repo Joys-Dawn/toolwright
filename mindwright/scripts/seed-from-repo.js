@@ -1,20 +1,27 @@
 #!/usr/bin/env node
-// Seed short-term memory from repo-local signals so the next /mindwright:dream
-// has material to consolidate from when memory is empty. Pulls from:
+// Seed short-term memory so the next /mindwright:dream has material to
+// consolidate. This is the ONE manual seeding entrypoint and it ALWAYS pulls
+// every source — transcript history is not optional, it is the whole point of
+// seeding:
 //   - CLAUDE.md (project root only; --include-ancestors also walks parent dirs)
 //   - README.md (root)
 //   - Claude Code's native per-project memory (~/.claude/projects/<cwd>/memory)
+//   - Conversation transcript history (~/.claude/projects/<cwd>/*.jsonl) via
+//     the bounded, resumable lib/seed-loop.js — every pre-install transcript
+//     (a session with no offsets row; the current live session is skipped so
+//     its content is never double-ingested).
 //
 // Each item lands as a `short` tier row with kind="seed". The consolidator
 // treats them like any other short-term content during dream. Idempotent:
-// re-running skips any source file already represented by an active short
-// `seed` row (matched on the source_ref file-path prefix) so repeated
-// invocations don't pile duplicates.
+// markdown/native re-runs skip any source already represented by an active
+// short `seed` row; transcript seeding is resumable via the offsets table, so
+// re-running never re-ingests an already-seeded transcript.
 
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { projectRoot } from '../lib/paths.js';
+import { runSeedLoop } from '../lib/seed-loop.js';
 import { collectNativeMemory } from '../lib/native-memory.js';
 import { readActiveTicket } from '../mcp/daemon-ticket.mjs';
 import { DAEMON_TICKET_MAX_AGE_MS } from '../lib/constants.js';
@@ -54,7 +61,19 @@ const FALLBACK_SEED_SESSION_ID = 'seed-from-repo';
 // contract (the four total/dropped/skipped cases) is independently
 // unit-testable instead of buried in a 3-level nested ternary with an
 // interleaved comment (best-practices-4). Guard-style: one return per case.
-export function describeNextStep({ total, droppedUnderCallingSession, skippedFiles }) {
+export function describeNextStep({ total, droppedUnderCallingSession, skippedFiles, transcriptRows = 0 }) {
+  // Transcript history seeds under each transcript's ORIGINAL session id, not
+  // the calling session — so a default session-scoped dream would skip it.
+  // Whenever any transcript rows landed, the only guidance that consolidates
+  // everything (repo + native + history, across many session ids) is the
+  // documented bootstrap full drain: scope="all". This takes precedence over
+  // the session-scoped hints below.
+  if (transcriptRows > 0) {
+    return `Run /mindwright:dream with scope="all" to consolidate everything seeded ` +
+      `(repo + native memory + ${transcriptRows} row(s) from your project's transcript history) ` +
+      `into long-term facts. scope="all" is required: transcript history seeds under its ` +
+      `original session ids, which a default session-scoped dream would skip.`;
+  }
   if (total > 0) {
     if (droppedUnderCallingSession) {
       return 'Run /mindwright:dream to consolidate the seeded rows into long-term facts.';
@@ -227,6 +246,8 @@ async function main() {
   let claudeMdCount = 0;
   let nativeMemoryFiles = 0;
   let skippedFiles = 0;
+  let transcriptSummary = { transcriptsSeeded: 0, rowsInserted: 0, skipped: 0 };
+  let transcriptError = null;
   try {
     // Collect everything first (file reads) so the SQLite transaction only
     // holds for the inserts.
@@ -304,6 +325,23 @@ async function main() {
       }
     });
     seedTxn();
+
+    // Transcript history — ALWAYS, not optional. Reuses the bounded,
+    // resumable loop: it enumerates ~/.claude/projects/<cwd>/*.jsonl,
+    // skips any session that already has an offsets row (the live session,
+    // or one a prior run finished — never double-ingested), and seeds the
+    // rest as short kind:'seed' rows under their original session ids.
+    // No `consolidate` is injected: this is a manual skill, so it only
+    // ingests; the user runs /mindwright:dream next (no surprise background
+    // `claude --bg` consolidator spawned from a manual command). Best-effort:
+    // a transcript-side failure must not lose the markdown/native rows just
+    // committed, nor crash the skill.
+    try {
+      transcriptSummary = await runSeedLoop({ store });
+    } catch (e) {
+      transcriptError = (e && e.message) ? e.message : String(e);
+      process.stderr.write(`mindwright seed-from-repo — transcript seeding failed (markdown/native rows kept): ${transcriptError}\n`);
+    }
   } finally {
     store.close();
   }
@@ -313,7 +351,10 @@ async function main() {
   // (scope=session) drains them; otherwise the user needs scope=all to
   // include the fallback session id.
   const droppedUnderCallingSession = !!callingSessionId;
-  const nextStep = describeNextStep({ total, droppedUnderCallingSession, skippedFiles });
+  const transcriptRows = transcriptSummary.rowsInserted || 0;
+  const nextStep = describeNextStep({
+    total, droppedUnderCallingSession, skippedFiles, transcriptRows,
+  });
 
   const result = {
     ok: true,
@@ -323,14 +364,21 @@ async function main() {
     readme_present: readmePresent,
     native_memory_files: nativeMemoryFiles,
     skipped_already_seeded: skippedFiles,
+    transcripts_seeded: transcriptSummary.transcriptsSeeded || 0,
+    transcript_rows_inserted: transcriptRows,
+    transcripts_skipped: transcriptSummary.skipped || 0,
+    transcript_error: transcriptError,
     session_id: sessionId,
     next_step: nextStep,
   };
   const modeNote = includeAncestors
     ? ' (CLAUDE.md walk includes parent dirs — global ~/.claude/CLAUDE.md may be ingested)'
     : ' (CLAUDE.md scope: project root only — pass --include-ancestors to walk parent dirs)';
-  process.stderr.write(`mindwright seed-from-repo — inserted ${total} short-term row(s) under session "${sessionId}"${modeNote}.\n`);
-  if (total > 0) process.stderr.write(`Next: ${nextStep}\n`);
+  process.stderr.write(
+    `mindwright seed-from-repo — inserted ${total} repo/native row(s) under session "${sessionId}" ` +
+    `+ ${transcriptRows} transcript row(s) from ${result.transcripts_seeded} transcript(s)${modeNote}.\n`,
+  );
+  if (total > 0 || transcriptRows > 0) process.stderr.write(`Next: ${nextStep}\n`);
   process.stdout.write(JSON.stringify(result) + '\n');
 }
 
