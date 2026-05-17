@@ -1,15 +1,16 @@
-// MCP tool definitions + dispatcher for the mindwright server.
+// Tool definitions + dispatcher for the mindwright memory tools.
 //
-// Surface is 12 tools, mapped one-to-one to design-doc / plan entries. Heavy
-// lifting (retrieval, consolidation, mirror render) lives in lib/ — this file
-// is just argument validation, ctx routing, and shaping the response into
-// MCP's `{content: [{type:'text', text: JSON.stringify(...)}]}` envelope.
+// These handlers were originally an MCP server surface; the MCP server is
+// gone. They are now invoked by scripts/mindwright.mjs (the CLI every skill
+// runs). Heavy lifting (retrieval, consolidation, mirror render) lives in
+// lib/ — this file is just argument validation, ctx routing, and shaping the
+// response into the `{content: [{type:'text', text: JSON.stringify(...)}]}`
+// envelope the CLI unwraps to stdout JSON.
 //
-// `ctx` is passed in by server.mjs:
+// `ctx` is passed in by scripts/mindwright.mjs:
 //   { store, sessionId, embed, rerank }
-// where `embed` / `rerank` are the local in-process model functions (NOT the
-// pipe-client — server.mjs runs in the daemon process; hooks are the ones
-// that go through the pipe).
+// where `embed` / `rerank` resolve through the machine-wide model daemon
+// (or deterministic stubs under MINDWRIGHT_USE_STUB_MODELS=1).
 
 import { retrieve } from '../lib/retriever.js';
 import {
@@ -189,7 +190,7 @@ const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'UUID session_id OR wrightward handle. Defaults to this MCP server\'s bound session.' },
+        target: { type: 'string', description: 'UUID session_id OR wrightward handle. Defaults to the calling session (--session-id).' },
       },
     },
   },
@@ -365,11 +366,11 @@ const TOOLS_REQUIRING_SESSION = new Set([
 
 export async function handleToolCall(name, args, ctx) {
   if (!ctx || !ctx.store) {
-    return errResponse('mindwright MCP server not initialized');
+    return errResponse('mindwright: store not initialized');
   }
   if (TOOLS_REQUIRING_SESSION.has(name) && !ctx.sessionId) {
     return errResponse(
-      'mindwright MCP server is binding to its session; retry in a moment'
+      'mindwright: this command needs a session id; re-run with --session-id (skills pass ${CLAUDE_SESSION_ID} automatically)'
     );
   }
   const handler = HANDLERS[name];
@@ -617,8 +618,8 @@ function statusHandler(_args, ctx) {
   const poison_embeds = ctx.store.countPoisonEmbeds();
 
   // Surface rows that landed under the synthetic 'mindwright-unbound'
-  // session_id — happens when the MCP server boots without a SessionStart
-  // ticket. These rows are otherwise invisible to session-scoped operations
+  // session_id — happens when the CLI is invoked without --session-id (e.g.
+  // run outside a Claude session). These rows are otherwise invisible to session-scoped operations
   // (countShortTermFor(realSessionId)=0, Stop's cap check never fires,
   // /mindwright:dream with default scope=session finds nothing).
   const unbound_count = ctx.store.countUnboundActive();
@@ -626,7 +627,7 @@ function statusHandler(_args, ctx) {
   if (unbound_count > 0) {
     warnings.push(
       `${pluralize(unbound_count, 'row')} ${agree(unbound_count, 'is', 'are')} stored under session_id='${UNBOUND_SESSION_ID}' ` +
-      `(session-bind failed at MCP boot). Run /mindwright:dream with scope='all' to consolidate them.`,
+      `(written without a session id). Run /mindwright:dream with scope='all' to consolidate them.`,
     );
   }
   if (poison_embeds > 0) {
@@ -722,8 +723,8 @@ function drainBatchHandler(args, ctx) {
   //       the team. README.md and DESIGN.md promise this role makes a peer
   //       "drain on cue", so a silent no-op here would break the contract.
   //   (b) other-session bound rows exist (the solo-user case above).
-  //   (c) rows under the synthetic 'mindwright-unbound' session — a prior
-  //       MCP boot failed session-bind and parked rows there.
+  //   (c) rows under the synthetic 'mindwright-unbound' session — a CLI
+  //       invocation without --session-id parked rows there.
   if (requested === 'session') {
     const reasons = [];
 
@@ -757,7 +758,7 @@ function drainBatchHandler(args, ctx) {
       reasons.push(
         `${pluralize(unbound, 'short-term row')} ` +
         `${agree(unbound, 'exists', 'exist')} under session_id='${UNBOUND_SESSION_ID}' ` +
-        `(session-bind failed at MCP boot).`,
+        `(written without a session id).`,
       );
     }
 
@@ -925,7 +926,7 @@ function requireValidSessionId(sid) {
 function resolveTargetArg(target, ctx) {
   if (target === undefined) {
     if (!ctx.sessionId) {
-      return { errResp: errResponse('target required when MCP server is not session-bound') };
+      return { errResp: errResponse('target required when no session id was passed (--session-id)') };
     }
     return { sessionId: ctx.sessionId };
   }

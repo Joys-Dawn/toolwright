@@ -561,7 +561,12 @@ const ENTRYPOINTS = [
   'hooks/user-prompt-submit.js',
   'hooks/pre-tool-use.js',
   'hooks/post-tool-use-inbox.js',
-  'mcp/server.mjs',
+  // The MCP server is gone. Its replacements: the machine-wide model daemon
+  // (detached-spawned by clients) and the CLI every skill invokes. Both must
+  // stay statically dep-free — native code only via dynamic import() after
+  // the readiness gate, exactly like the hooks.
+  'mcp/model-daemon.mjs',
+  'scripts/mindwright.mjs',
   'scripts/setup.js',
   'scripts/status.js',
   'scripts/seed-from-repo.js',

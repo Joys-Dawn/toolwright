@@ -1,8 +1,9 @@
 // Embedder + reranker loaders for mindwright.
 //
-// Models live as lazy singletons inside the calling process. The MCP daemon
-// (mcp/server.mjs) holds these across the session lifetime; hooks reach them
-// through the daemon-pipe RPC so they never pay the cold-load cost themselves.
+// Models live as lazy singletons inside the calling process. The ONLY process
+// that should load them is the machine-wide model daemon (mcp/model-daemon.mjs):
+// it holds them for the whole machine and serves embed/rerank over a fixed
+// global socket, so hooks and the CLI never pay the ONNX cold-load themselves.
 // See DESIGN.md "Architecture sketch" for the full picture.
 //
 // Embedder: Xenova/bge-m3, dtype q8 (model_quantized.onnx) with fp16 fallback
@@ -30,9 +31,13 @@ import { loadNativeDefault } from './native-require.js';
 const { pipeline, AutoModelForSequenceClassification, AutoTokenizer } =
   await loadNativeDefault('@huggingface/transformers');
 
+import { EMBEDDING_DIM } from './constants.js';
+
 export const EMBEDDER_MODEL_ID = 'Xenova/bge-m3';
 export const RERANKER_MODEL_ID = 'onnx-community/bge-reranker-v2-m3-ONNX';
-export const EMBEDDING_DIM = 1024;
+// Re-exported from lib/constants.js (single source of truth) so existing
+// importers of `models.js#EMBEDDING_DIM` keep working unchanged.
+export { EMBEDDING_DIM };
 
 let _embedderPromise = null;
 let _rerankerPromise = null;

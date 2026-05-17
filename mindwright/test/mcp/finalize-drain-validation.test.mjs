@@ -5,22 +5,16 @@
 // branches) and ran the DELETE with no temporal filter — wiping every
 // active short-term row in scope. The handler now rejects empty / unparseable
 // cutoff_ts; finalizeDrain itself throws as a second line of defense.
+// Drives the same handlers via the scripts/mindwright.mjs CLI.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { join } from 'node:path';
 import { openStore } from '../../lib/store.js';
 import { finalizeDrain } from '../../lib/consolidator.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const PLUGIN_ROOT = join(__dirname, '..', '..');
-const SERVER_PATH = join(PLUGIN_ROOT, 'mcp', 'server.mjs');
+import { cliCall } from './_cli-harness.mjs';
 
 function setupSandbox(label) {
   const dir = mkdtempSync(join(tmpdir(), `mindwright-fd-${label}-`));
@@ -56,32 +50,6 @@ function withInternalStore(label, fn) {
   }
 }
 
-async function connect({ projectRoot, sessionId }) {
-  const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: [SERVER_PATH],
-    cwd: projectRoot,
-    env: {
-      ...process.env,
-      MINDWRIGHT_PROJECT_ROOT: projectRoot,
-      MINDWRIGHT_SESSION_ID: sessionId,
-      MINDWRIGHT_USE_STUB_MODELS: '1',
-    },
-    stderr: 'inherit',
-  });
-  const client = new Client(
-    { name: 'fd-test', version: '0.0.0' },
-    { capabilities: {} }
-  );
-  await client.connect(transport);
-  return { client, transport };
-}
-
-function unwrap(result) {
-  assert.ok(result && Array.isArray(result.content));
-  return JSON.parse(result.content[0].text);
-}
-
 // ---------------------------------------------------------------
 // MCP handler — empty cutoff_ts must be rejected
 // ---------------------------------------------------------------
@@ -89,24 +57,16 @@ function unwrap(result) {
 test('finalize_drain rejects drain_id with empty cutoff_ts segment', async () => {
   const sb = setupSandbox('empty-ts');
   try {
-    const { client, transport } = await connect({ projectRoot: sb.dir, sessionId: sb.sessionId });
-    try {
-      // Plant a short-term row so an unbounded DELETE would be visible.
-      await client.callTool({
-        name: 'mindwright_retain',
-        arguments: { content: 'survivor', kind: 'note', tier: 'short' },
-      });
-      const raw = await client.callTool({
-        name: 'mindwright_finalize_drain',
-        arguments: { drain_id: 'all||5' },
-      });
-      assert.ok(raw.isError, 'response must signal error');
-      const body = unwrap(raw);
-      assert.match(body.error, /cutoff_ts/i);
-    } finally {
-      await client.close();
-      await transport.close();
-    }
+    // Plant a short-term row so an unbounded DELETE would be visible.
+    cliCall('mindwright_retain',
+      { content: 'survivor', kind: 'note', tier: 'short' },
+      { projectRoot: sb.dir, sessionId: sb.sessionId });
+    const raw = cliCall('mindwright_finalize_drain',
+      { drain_id: 'all||5' },
+      { projectRoot: sb.dir, sessionId: sb.sessionId });
+    assert.ok(raw.isError, 'response must signal error');
+    const body = raw.payload;
+    assert.match(body.error, /cutoff_ts/i);
   } finally {
     sb.cleanup();
   }
@@ -115,19 +75,12 @@ test('finalize_drain rejects drain_id with empty cutoff_ts segment', async () =>
 test('finalize_drain rejects drain_id with garbage cutoff_ts segment', async () => {
   const sb = setupSandbox('garbage-ts');
   try {
-    const { client, transport } = await connect({ projectRoot: sb.dir, sessionId: sb.sessionId });
-    try {
-      const raw = await client.callTool({
-        name: 'mindwright_finalize_drain',
-        arguments: { drain_id: 'all|not-a-date|7' },
-      });
-      assert.ok(raw.isError);
-      const body = unwrap(raw);
-      assert.match(body.error, /cutoff_ts/i);
-    } finally {
-      await client.close();
-      await transport.close();
-    }
+    const raw = cliCall('mindwright_finalize_drain',
+      { drain_id: 'all|not-a-date|7' },
+      { projectRoot: sb.dir, sessionId: sb.sessionId });
+    assert.ok(raw.isError);
+    const body = raw.payload;
+    assert.match(body.error, /cutoff_ts/i);
   } finally {
     sb.cleanup();
   }
@@ -136,19 +89,12 @@ test('finalize_drain rejects drain_id with garbage cutoff_ts segment', async () 
 test('finalize_drain rejects drain_id with empty scope segment', async () => {
   const sb = setupSandbox('empty-scope');
   try {
-    const { client, transport } = await connect({ projectRoot: sb.dir, sessionId: sb.sessionId });
-    try {
-      const raw = await client.callTool({
-        name: 'mindwright_finalize_drain',
-        arguments: { drain_id: '|2026-05-13T05:00:00.000Z|7' },
-      });
-      assert.ok(raw.isError);
-      const body = unwrap(raw);
-      assert.match(body.error, /scope/i);
-    } finally {
-      await client.close();
-      await transport.close();
-    }
+    const raw = cliCall('mindwright_finalize_drain',
+      { drain_id: '|2026-05-13T05:00:00.000Z|7' },
+      { projectRoot: sb.dir, sessionId: sb.sessionId });
+    assert.ok(raw.isError);
+    const body = raw.payload;
+    assert.match(body.error, /scope/i);
   } finally {
     sb.cleanup();
   }
@@ -168,33 +114,23 @@ test('finalize_drain rejects drain_id with empty scope segment', async () => {
 test('finalize_drain rejects drain_id whose scope is a different session', async () => {
   const sb = setupSandbox('cross-session');
   try {
-    const { client, transport } = await connect({ projectRoot: sb.dir, sessionId: sb.sessionId });
-    try {
-      // Plant a short-term row under the CURRENT session so an unbounded
-      // DELETE would have something visible to wipe — proves the row
-      // survives the rejection.
-      await client.callTool({
-        name: 'mindwright_retain',
-        arguments: { content: 'survivor', kind: 'note', tier: 'short' },
-      });
-      // Forged drain_id with another session's id in the scope segment.
-      const raw = await client.callTool({
-        name: 'mindwright_finalize_drain',
-        arguments: { drain_id: 'sess-other|2026-05-13T05:00:00.000Z|9999' },
-      });
-      assert.ok(raw.isError, 'cross-session finalize must error');
-      const body = unwrap(raw);
-      assert.match(body.error, /does not match/);
+    // Plant a short-term row under the CURRENT session so an unbounded
+    // DELETE would have something visible to wipe — proves the row
+    // survives the rejection.
+    cliCall('mindwright_retain',
+      { content: 'survivor', kind: 'note', tier: 'short' },
+      { projectRoot: sb.dir, sessionId: sb.sessionId });
+    // Forged drain_id with another session's id in the scope segment.
+    const raw = cliCall('mindwright_finalize_drain',
+      { drain_id: 'sess-other|2026-05-13T05:00:00.000Z|9999' },
+      { projectRoot: sb.dir, sessionId: sb.sessionId });
+    assert.ok(raw.isError, 'cross-session finalize must error');
+    const body = raw.payload;
+    assert.match(body.error, /does not match/);
 
-      // Survivor still present.
-      const status = unwrap(
-        await client.callTool({ name: 'mindwright_status', arguments: {} }),
-      );
-      assert.ok(status.short_count >= 1, 'short-term row must survive rejection');
-    } finally {
-      await client.close();
-      await transport.close();
-    }
+    // Survivor still present.
+    const status = cliCall('mindwright_status', {}, { projectRoot: sb.dir, sessionId: sb.sessionId }).payload;
+    assert.ok(status.short_count >= 1, 'short-term row must survive rejection');
   } finally {
     sb.cleanup();
   }
@@ -203,19 +139,12 @@ test('finalize_drain rejects drain_id whose scope is a different session', async
 test("finalize_drain rejects drain_id with scope='all' when confirm_all_sessions is not true", async () => {
   const sb = setupSandbox('all-no-confirm');
   try {
-    const { client, transport } = await connect({ projectRoot: sb.dir, sessionId: sb.sessionId });
-    try {
-      const raw = await client.callTool({
-        name: 'mindwright_finalize_drain',
-        arguments: { drain_id: 'all|2026-05-13T05:00:00.000Z|9999' },
-      });
-      assert.ok(raw.isError);
-      const body = unwrap(raw);
-      assert.match(body.error, /confirm_all_sessions/);
-    } finally {
-      await client.close();
-      await transport.close();
-    }
+    const raw = cliCall('mindwright_finalize_drain',
+      { drain_id: 'all|2026-05-13T05:00:00.000Z|9999' },
+      { projectRoot: sb.dir, sessionId: sb.sessionId });
+    assert.ok(raw.isError);
+    const body = raw.payload;
+    assert.match(body.error, /confirm_all_sessions/);
   } finally {
     sb.cleanup();
   }
@@ -224,22 +153,15 @@ test("finalize_drain rejects drain_id with scope='all' when confirm_all_sessions
 test("finalize_drain rejects drain_id with scope='all' when confirm_all_sessions is the string 'true' (must be boolean true)", async () => {
   const sb = setupSandbox('all-string-confirm');
   try {
-    const { client, transport } = await connect({ projectRoot: sb.dir, sessionId: sb.sessionId });
-    try {
-      const raw = await client.callTool({
-        name: 'mindwright_finalize_drain',
-        arguments: {
-          drain_id: 'all|2026-05-13T05:00:00.000Z|9999',
-          confirm_all_sessions: 'true',
-        },
-      });
-      assert.ok(raw.isError, 'string "true" must not satisfy the boolean check');
-      const body = unwrap(raw);
-      assert.match(body.error, /confirm_all_sessions/);
-    } finally {
-      await client.close();
-      await transport.close();
-    }
+    const raw = cliCall('mindwright_finalize_drain',
+      {
+        drain_id: 'all|2026-05-13T05:00:00.000Z|9999',
+        confirm_all_sessions: 'true',
+      },
+      { projectRoot: sb.dir, sessionId: sb.sessionId });
+    assert.ok(raw.isError, 'string "true" must not satisfy the boolean check');
+    const body = raw.payload;
+    assert.match(body.error, /confirm_all_sessions/);
   } finally {
     sb.cleanup();
   }
@@ -248,38 +170,25 @@ test("finalize_drain rejects drain_id with scope='all' when confirm_all_sessions
 test("finalize_drain accepts drain_id whose scope matches the caller's session", async () => {
   const sb = setupSandbox('matching-scope');
   try {
-    const { client, transport } = await connect({ projectRoot: sb.dir, sessionId: sb.sessionId });
-    try {
-      // Plant enough rows so drainBatch produces a real drain_id (drainPct=0.7).
-      for (let i = 0; i < 6; i++) {
-        await client.callTool({
-          name: 'mindwright_retain',
-          arguments: { content: `row-${i}`, kind: 'thinking', tier: 'short' },
-        });
-      }
-      const batch = unwrap(
-        await client.callTool({
-          name: 'mindwright_drain_batch',
-          arguments: { scope: 'session' },
-        }),
-      );
-      assert.ok(batch.drain_id, 'drain_batch must produce a drain_id');
-      // The scope segment of drain_id must be the caller's session.
-      const [scope] = batch.drain_id.split('|');
-      assert.equal(scope, sb.sessionId, 'scope segment matches caller session');
-      // finalize must succeed.
-      const finalRes = unwrap(
-        await client.callTool({
-          name: 'mindwright_finalize_drain',
-          arguments: { drain_id: batch.drain_id },
-        }),
-      );
-      assert.ok(typeof finalRes.drained_count === 'number');
-      assert.ok(finalRes.drained_count >= 1);
-    } finally {
-      await client.close();
-      await transport.close();
+    // Plant enough rows so drainBatch produces a real drain_id (drainPct=0.7).
+    for (let i = 0; i < 6; i++) {
+      cliCall('mindwright_retain',
+        { content: `row-${i}`, kind: 'thinking', tier: 'short' },
+        { projectRoot: sb.dir, sessionId: sb.sessionId });
     }
+    const batch = cliCall('mindwright_drain_batch',
+      { scope: 'session' },
+      { projectRoot: sb.dir, sessionId: sb.sessionId }).payload;
+    assert.ok(batch.drain_id, 'drain_batch must produce a drain_id');
+    // The scope segment of drain_id must be the caller's session.
+    const [scope] = batch.drain_id.split('|');
+    assert.equal(scope, sb.sessionId, 'scope segment matches caller session');
+    // finalize must succeed.
+    const finalRes = cliCall('mindwright_finalize_drain',
+      { drain_id: batch.drain_id },
+      { projectRoot: sb.dir, sessionId: sb.sessionId }).payload;
+    assert.ok(typeof finalRes.drained_count === 'number');
+    assert.ok(finalRes.drained_count >= 1);
   } finally {
     sb.cleanup();
   }
@@ -288,35 +197,22 @@ test("finalize_drain accepts drain_id whose scope matches the caller's session",
 test("finalize_drain accepts drain_id with scope='all' when confirm_all_sessions:true", async () => {
   const sb = setupSandbox('all-confirm');
   try {
-    const { client, transport } = await connect({ projectRoot: sb.dir, sessionId: sb.sessionId });
-    try {
-      for (let i = 0; i < 6; i++) {
-        await client.callTool({
-          name: 'mindwright_retain',
-          arguments: { content: `row-${i}`, kind: 'thinking', tier: 'short' },
-        });
-      }
-      const batch = unwrap(
-        await client.callTool({
-          name: 'mindwright_drain_batch',
-          arguments: { scope: 'all' },
-        }),
-      );
-      assert.ok(batch.drain_id);
-      const [scope] = batch.drain_id.split('|');
-      assert.equal(scope, 'all');
-      const finalRes = unwrap(
-        await client.callTool({
-          name: 'mindwright_finalize_drain',
-          arguments: { drain_id: batch.drain_id, confirm_all_sessions: true },
-        }),
-      );
-      assert.ok(typeof finalRes.drained_count === 'number');
-      assert.ok(finalRes.drained_count >= 1);
-    } finally {
-      await client.close();
-      await transport.close();
+    for (let i = 0; i < 6; i++) {
+      cliCall('mindwright_retain',
+        { content: `row-${i}`, kind: 'thinking', tier: 'short' },
+        { projectRoot: sb.dir, sessionId: sb.sessionId });
     }
+    const batch = cliCall('mindwright_drain_batch',
+      { scope: 'all' },
+      { projectRoot: sb.dir, sessionId: sb.sessionId }).payload;
+    assert.ok(batch.drain_id);
+    const [scope] = batch.drain_id.split('|');
+    assert.equal(scope, 'all');
+    const finalRes = cliCall('mindwright_finalize_drain',
+      { drain_id: batch.drain_id, confirm_all_sessions: true },
+      { projectRoot: sb.dir, sessionId: sb.sessionId }).payload;
+    assert.ok(typeof finalRes.drained_count === 'number');
+    assert.ok(finalRes.drained_count >= 1);
   } finally {
     sb.cleanup();
   }

@@ -298,6 +298,12 @@ export const DAEMON_TICKET_MAX_AGE_MS = 10 * 60 * 1000;
 // change.
 export const MODEL_DAEMON_PROTOCOL = 1;
 
+// Embedding width of bge-m3. Single source of truth so non-model code (the
+// CLI's stub-model test seam, the daemon, vec sizing) can reference it
+// without importing lib/models.js — which top-level-awaits the ONNX runtime
+// just to read a constant.
+export const EMBEDDING_DIM = 1024;
+
 // Idle self-exit. With no embed/rerank request for this long the daemon frees
 // its ~1-2 GB and exits; the next client lazily respawns it. 15 min comfortably
 // outlives normal think/tool gaps within an active session.
@@ -333,10 +339,11 @@ export const KIND_FACT = 'fact';
 export const MS_PER_HOUR = 60 * 60 * 1000;
 export const MS_PER_DAY = 24 * MS_PER_HOUR;
 
-// Synthetic session_id used by the MCP server when SessionStart never
-// landed a ticket — rows still need an author so reads/writes don't blow
-// up on NULL. Appears in:
-//   - mcp/server.mjs (setter, late-bind path)
+// Synthetic session_id used when a CLI invocation gets no --session-id
+// (e.g. run outside a Claude session) — rows still need an author so
+// reads/writes don't blow up on NULL. Appears in:
+//   - scripts/mindwright.mjs (store author falls back to this when no
+//     --session-id is passed; ctx.sessionId stays null as the old server did)
 //   - lib/store.js (count helpers that include/exclude the bucket)
 //   - mcp/tools.mjs (user-facing warning text)
 // Single source of truth so a typo in one site can't silently divorce the

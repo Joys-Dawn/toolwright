@@ -88,29 +88,49 @@ async function main() {
 
   const { openStore } = await import('../lib/store.js');
   const { handleToolCall } = await import('../mcp/tools.mjs');
-  const { connectPipe } = await import('../lib/pipe-client.js');
 
-  // Machine-wide model daemon adapter. Mirrors the OLD in-process realEmbed/
-  // realRerank contract: resolve to vectors/scores or THROW — never null —
-  // so the handlers' existing try/catch degrade paths (e.g. retain's
-  // sweeper-backfill fallback) and retrieve()'s internal handling behave
-  // exactly as they did under the MCP server. A down daemon throws here;
-  // connectPipe has already fire-and-forget respawned it for the retry.
-  const pipe = connectPipe(sessionId);
-  const embed = async (texts) => {
-    const v = await pipe.embed(texts);
-    if (!Array.isArray(v)) throw new Error('mindwright model daemon unavailable — retry shortly (it is being started)');
-    return v;
-  };
-  const rerank = async (query, candidates) => {
-    const s = await pipe.rerank(query, candidates);
-    if (!Array.isArray(s)) throw new Error('mindwright model daemon unavailable — retry shortly (it is being started)');
-    return s;
-  };
+  let embed;
+  let rerank;
+  if (process.env.MINDWRIGHT_USE_STUB_MODELS === '1') {
+    // Deterministic, dependency-free stubs (constant 0.5 vector; rerank
+    // 0.5 + i*0.01) — the same shapes the old MCP server's stub seam used.
+    // Keeps tests hermetic (no daemon, no ONNX); also a usable offline mode.
+    const { EMBEDDING_DIM } = await import('../lib/constants.js');
+    embed = async (texts) => texts.map(() => { const v = new Float32Array(EMBEDDING_DIM); v.fill(0.5); return v; });
+    rerank = async (_q, candidates) => candidates.map((_, i) => 0.5 + i * 0.01);
+  } else {
+    const { connectPipe } = await import('../lib/pipe-client.js');
+    // Machine-wide model daemon adapter. Mirrors the OLD in-process
+    // realEmbed/realRerank contract: resolve to vectors/scores or THROW —
+    // never null — so the handlers' existing try/catch degrade paths (e.g.
+    // retain's sweeper-backfill fallback) and retrieve()'s internal handling
+    // behave exactly as under the MCP server. A down daemon throws here;
+    // connectPipe has already fire-and-forget respawned it for the retry.
+    const pipe = connectPipe(sessionId);
+    embed = async (texts) => {
+      const v = await pipe.embed(texts);
+      if (!Array.isArray(v)) throw new Error('mindwright model daemon unavailable — retry shortly (it is being started)');
+      return v;
+    };
+    rerank = async (query, candidates) => {
+      const s = await pipe.rerank(query, candidates);
+      if (!Array.isArray(s)) throw new Error('mindwright model daemon unavailable — retry shortly (it is being started)');
+      return s;
+    };
+  }
 
+  const { UNBOUND_SESSION_ID } = await import('../lib/constants.js');
   const store = openStore();
   try {
-    const ctx = { store, sessionId: sessionId || null, embed, rerank };
+    // Mirror the old MCP server's binding contract exactly: ctx.sessionId is
+    // the real id or null (session-requiring tools error on null, as before);
+    // the store's author falls back to UNBOUND_SESSION_ID so rows written
+    // without a session still land in the well-known unbound bucket that
+    // status/unbound_count and drainBatch's cross-session hint key on —
+    // never a NULL author.
+    const sid = sessionId || null;
+    store.setSessionId(sid || UNBOUND_SESSION_ID);
+    const ctx = { store, sessionId: sid, embed, rerank };
     const res = await handleToolCall(tool, args, ctx);
     // Unwrap the MCP envelope {content:[{type:'text',text:<json>}], isError?}.
     let payload;
