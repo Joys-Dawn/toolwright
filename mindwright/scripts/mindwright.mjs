@@ -1,23 +1,13 @@
 #!/usr/bin/env node
-// mindwright CLI — the single entrypoint every memory skill invokes.
-//
-// Replaces the per-session MCP server: instead of a long-lived process
-// exposing tools over the MCP protocol, each skill runs
+// mindwright CLI — the single entrypoint every memory skill invokes:
 //   node scripts/mindwright.mjs <tool> --session-id '${CLAUDE_SESSION_ID}'
-// with a JSON args object on stdin. Claude Code substitutes the real session
-// id into the skill command (the same ${CLAUDE_SESSION_ID} pattern wrightward
-// and gripewright already use), so there is no ticket polling / session-bind.
+// with a JSON args object on stdin. It dispatches into the
+// mcp/tools.mjs#handleToolCall handlers; embeddings go to the machine-wide
+// model daemon via the pipe-client.
 //
-// The tool logic itself is unchanged — this dispatches into the exact same
-// mcp/tools.mjs#handleToolCall handlers the MCP server used. Embeddings go to
-// the MACHINE-wide model daemon (one ONNX load per box, not per session) via
-// the pipe-client; the adapter throws on a down daemon so the handlers' own
-// degrade paths behave exactly as they did with the old in-process models.
-//
-// Output contract: the handler's JSON payload is printed to stdout (the MCP
+// Output contract: the handler's JSON payload is printed to stdout (the
 // {content:[{text}]} envelope is unwrapped). Always exit 0 and always emit
-// the JSON — soft errors (SETUP_HINT, validation) carry an `error` field the
-// skill relays to the user, exactly as the MCP tool result did.
+// the JSON — soft errors carry an `error` field the skill relays to the user.
 
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -41,8 +31,8 @@ function parseArgv(argv) {
 }
 
 function readStdinJson() {
-  // Skills pass the args object via a heredoc on stdin (the wrightward
-  // pattern). A TTY / no pipe / empty body → no args.
+  // Skills pass the args object via a heredoc on stdin. TTY / no pipe / empty
+  // body → no args.
   try {
     if (process.stdin.isTTY) return {};
     const raw = readFileSync(0, 'utf8').trim();
@@ -75,8 +65,8 @@ async function main() {
     if (args && args.__parse_error) { emit({ error: 'stdin is not valid JSON' }); return; }
   }
 
-  // Dependency gate (same contract as scripts/seed-from-repo.js): a deps-less
-  // marketplace copy must not ESM-crash on the better-sqlite3 import.
+  // Dependency gate: a deps-less marketplace copy must not ESM-crash on the
+  // better-sqlite3 import.
   if (!depsInstalled()) {
     maybeAutoInstall();
     emit(
@@ -92,19 +82,15 @@ async function main() {
   let embed;
   let rerank;
   if (process.env.MINDWRIGHT_USE_STUB_MODELS === '1') {
-    // Deterministic, dependency-free stubs (constant 0.5 vector; rerank
-    // 0.5 + i*0.01) — the same shapes the old MCP server's stub seam used.
-    // Keeps tests hermetic (no daemon, no ONNX); also a usable offline mode.
+    // Deterministic dep-free stubs: keeps tests hermetic (no daemon, no
+    // ONNX); also a usable offline mode.
     const { EMBEDDING_DIM } = await import('../lib/constants.js');
     embed = async (texts) => texts.map(() => { const v = new Float32Array(EMBEDDING_DIM); v.fill(0.5); return v; });
     rerank = async (_q, candidates) => candidates.map((_, i) => 0.5 + i * 0.01);
   } else {
     const { connectPipe } = await import('../lib/pipe-client.js');
-    // Machine-wide model daemon adapter. Mirrors the OLD in-process
-    // realEmbed/realRerank contract: resolve to vectors/scores or THROW —
-    // never null — so the handlers' existing try/catch degrade paths (e.g.
-    // retain's sweeper-backfill fallback) and retrieve()'s internal handling
-    // behave exactly as under the MCP server. A down daemon throws here;
+    // Resolve to vectors/scores or THROW (never null) so the handlers'
+    // existing try/catch degrade paths fire. A down daemon throws here;
     // connectPipe has already fire-and-forget respawned it for the retry.
     const pipe = connectPipe(sessionId);
     embed = async (texts) => {
@@ -122,17 +108,16 @@ async function main() {
   const { UNBOUND_SESSION_ID } = await import('../lib/constants.js');
   const store = openStore();
   try {
-    // Mirror the old MCP server's binding contract exactly: ctx.sessionId is
-    // the real id or null (session-requiring tools error on null, as before);
-    // the store's author falls back to UNBOUND_SESSION_ID so rows written
-    // without a session still land in the well-known unbound bucket that
+    // ctx.sessionId is the real id or null (session-requiring tools error on
+    // null); the store's author falls back to UNBOUND_SESSION_ID so rows
+    // written without a session land in the well-known unbound bucket that
     // status/unbound_count and drainBatch's cross-session hint key on —
     // never a NULL author.
     const sid = sessionId || null;
     store.setSessionId(sid || UNBOUND_SESSION_ID);
     const ctx = { store, sessionId: sid, embed, rerank };
     const res = await handleToolCall(tool, args, ctx);
-    // Unwrap the MCP envelope {content:[{type:'text',text:<json>}], isError?}.
+    // Unwrap the {content:[{type:'text',text:<json>}], isError?} envelope.
     let payload;
     try {
       payload = JSON.parse(res.content[0].text);

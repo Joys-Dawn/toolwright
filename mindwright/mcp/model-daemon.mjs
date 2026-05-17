@@ -1,24 +1,15 @@
 #!/usr/bin/env node
-// mindwright machine-wide model daemon.
+// mindwright machine-wide model daemon: ONE process per machine owns the
+// bge-m3 embedder + bge-reranker and serves embed/rerank to every session
+// across every project over a single fixed global socket — exactly one copy
+// of the ~1-2 GB ONNX weights regardless of how many sessions are open.
 //
-// ONE process per machine owns the bge-m3 embedder + bge-reranker and serves
-// embed/rerank to every Claude session across every project over a single
-// fixed global socket (lib/paths.js#modelDaemonSocketPath). This replaces the
-// old per-session in-MCP model load: N sessions used to mean N × ~1-2 GB of
-// ONNX weights; now it is exactly one, machine-wide, regardless of how many
-// sessions or projects are open.
-//
-// Lifecycle:
-//   - Lazily spawned (detached) by the first client that needs embeddings —
-//     see lib/model-daemon-spawn.js. Racing spawns are harmless: the lock
-//     election below picks exactly one winner; the rest exit 0.
-//   - Singleton via an O_EXCL lock file holding {pid, protocol, startedAt}.
-//   - Idle self-exit: no embed/rerank for MODEL_DAEMON_IDLE_EXIT_MS frees the
-//     weights and exits; the next client respawns it.
-//   - Deps-less / models-not-cached: exit cleanly so clients degrade exactly
-//     as before (write NULL-embedding rows; a later sweep backfills).
-//
-// stdout is unused (no protocol on it); all logging goes to stderr.
+// Lazily spawned detached by the first client needing embeddings; racing
+// spawns are harmless (the lock election picks one winner, the rest exit 0).
+// Singleton via an O_EXCL lock file. Idle self-exit after
+// MODEL_DAEMON_IDLE_EXIT_MS frees the weights; the next client respawns.
+// Deps-less / models-not-cached ⇒ exit cleanly so clients degrade (write
+// NULL-embedding rows; a later sweep backfills).
 
 import { openSync, writeSync, closeSync, readFileSync, unlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -34,10 +25,9 @@ import { MODEL_DAEMON_PROTOCOL, MODEL_DAEMON_IDLE_EXIT_MS } from '../lib/constan
 
 const log = (m) => process.stderr.write(`[mindwright/modeld] ${m}\n`);
 
-// Try to become THE daemon. Returns true if we won the election (and wrote
-// the lock), false if a live daemon already owns it (caller should exit 0).
-// Self-heals a stale lock (dead pid or wrong protocol) by removing it and
-// retrying, bounded so a pathological race can't spin forever.
+// Become THE daemon: true if we won (and wrote the lock), false if a live
+// daemon already owns it (caller exits 0). Self-heals a stale lock (dead pid
+// / wrong protocol), bounded so a pathological race can't spin forever.
 function acquireSingleton(lockPath) {
   for (let attempt = 0; attempt < 5; attempt++) {
     try {

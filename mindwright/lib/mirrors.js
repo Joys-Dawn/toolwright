@@ -1,17 +1,6 @@
-// Markdown audit mirrors.
-//
-// Every write path that mutates `entries` (consolidator finalize, explicit retain,
-// deferred-embed sweeper, hook fallback resync) calls renderAll(store) to
-// regenerate the markdown reflection of the active tier. Mirrors are intended
-// to be gitignored locally and diff-readable: every fact ends up under a
-// human-readable header.
-//
-// Layout (all paths under .claude/mindwright/mirrors/):
-//   recent.md           — last 50 short-term observations, newest first
-//   preferences.md      — active fact rows with scope='user'
-//   project.md          — active fact rows with scope='project'
-//   episodes.md         — active episodic rows (typically scope='project')
-//   agents/<role>/heuristics.md — active procedural rows scoped to role:<role>
+// Markdown audit mirrors: every write path that mutates `entries` calls
+// renderAll(store) to regenerate the diff-readable markdown reflection of the
+// active tier under .claude/mindwright/mirrors/.
 
 import { writeFileSync, mkdirSync, existsSync, readFileSync, lstatSync, renameSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -28,13 +17,10 @@ export function renderAll(store) {
   writeIfChanged(join(dir, 'project.md'), renderProjectFacts(store));
   writeIfChanged(join(dir, 'episodes.md'), renderEpisodes(store));
 
-  // Heuristics: one file per role. Role list comes from Store so raw SQL
-  // stays out of this file.
+  // Heuristics: one file per role.
   for (const role of store.listActiveProceduralRoles()) {
-    // Defense-in-depth: handlers validate at the write boundary, but a role
-    // that somehow landed in the DB without the whitelist passing (direct
-    // SQL, legacy row, future code path) would otherwise turn this loop
-    // into a path-traversal primitive. Skip anything not path-safe.
+    // Defense-in-depth: a role that landed in the DB without the whitelist
+    // passing would otherwise make this loop a path-traversal primitive.
     if (typeof role !== 'string' || !ROLE_PATTERN.test(role)) continue;
     const p = join(dir, 'agents', role, 'heuristics.md');
     mkdirSync(dirname(p), { recursive: true });
@@ -42,8 +28,6 @@ export function renderAll(store) {
   }
 }
 
-// Shared scaffolding: head + (empty-marker | rows.map(...).join). Each tier
-// renderer is now a config (rows / head / emptyMarker / formatRow) passed in.
 function renderTier({ rows, head, emptyMarker, formatRow }) {
   if (!rows.length) return head + emptyMarker;
   return head + rows.map(formatRow).join('\n');
@@ -118,14 +102,9 @@ function formatConfidence(c) {
   return c.toFixed(2);
 }
 
-// Audit archive for /mindwright:dream. finalizeDrain hard-deletes rows after
-// the calling Claude session finishes distilling — if the consolidator decided
-// nothing was worth retaining, that data is otherwise gone with no recourse.
-// Before the DELETE we write a markdown copy here so the user can grep / diff
-// / hand-re-import anything that turned out to matter. Set
-// MINDWRIGHT_DROPPED_ARCHIVE=off to skip if you want zero on-disk residue.
-//
-// Layout: <mirrorsDir>/dropped/<YYYY-MM-DD>-<drainId>.md
+// Audit archive written before finalizeDrain hard-deletes rows, so the user
+// can grep/diff/re-import anything that turned out to matter.
+// MINDWRIGHT_DROPPED_ARCHIVE=off skips it.
 export function writeDroppedArchive({ drainId, sessionId, firedAt, rows, producedCount }) {
   if (process.env.MINDWRIGHT_DROPPED_ARCHIVE === 'off') return null;
   if (!Array.isArray(rows) || rows.length === 0) return null;
@@ -133,8 +112,7 @@ export function writeDroppedArchive({ drainId, sessionId, firedAt, rows, produce
   const dir = join(mirrorsDir(), 'dropped');
   mkdirSync(dir, { recursive: true });
 
-  // drainId is internal and not user-controlled, but keep the path-safe
-  // guarantee anyway — defense-in-depth, same as the role whitelist above.
+  // drainId is internal, but keep the path-safe guarantee anyway.
   const safeDrainId = String(drainId || 'unknown').replace(/[^A-Za-z0-9._-]/g, '_');
   const day = (firedAt && typeof firedAt === 'string' ? firedAt : new Date().toISOString()).slice(0, 10);
   const path = join(dir, `${day}-${safeDrainId}.md`);
@@ -162,17 +140,11 @@ export function writeDroppedArchive({ drainId, sessionId, firedAt, rows, produce
   return path;
 }
 
-// Windows-only transient rename failures. Unlike POSIX rename(2) — which
-// atomically replaces the destination — Windows MoveFileEx fails with
-// EPERM/EACCES/EBUSY when another process has the destination briefly open
-// (a racing renderAll writer, antivirus, or the Search indexer). The
-// contention clears within milliseconds, so a bounded retry with linear
-// backoff turns a hard failure into a short wait. This is the same approach
-// npm's write-file-atomic and graceful-fs take for the documented Windows
-// rename race. On POSIX the first attempt always succeeds for this pattern,
-// so the loop is a no-op there. Safe to retry because the source is a
-// pid-scoped temp (`.tmp.<pid>`) — no other process can be racing THIS
-// source path; only the shared destination is contended.
+// Windows MoveFileEx (unlike POSIX rename(2)) fails with EPERM/EACCES/EBUSY
+// when another process has the destination briefly open (racing writer,
+// antivirus, indexer); the contention clears within ms so a bounded backoff
+// retry turns a hard failure into a short wait. Safe to retry because the
+// source is a pid-scoped temp — only the shared destination is contended.
 const TRANSIENT_RENAME_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
 function renameWithRetry(from, to, attempts = 10) {
   for (let i = 0; ; i++) {
@@ -183,39 +155,23 @@ function renameWithRetry(from, to, attempts = 10) {
       if (i >= attempts - 1 || !err || !TRANSIENT_RENAME_CODES.has(err.code)) {
         throw err;
       }
-      // Synchronous backoff (writeIfChanged is sync, called from sync
-      // renderAll): 5,10,15,…,50 ms — worst case ~275 ms total across 10
-      // tries, far below user-perceptible mirror latency and far rarer
-      // than once per run. Atomics.wait on a fresh zeroed SAB is the
-      // canonical dependency-free synchronous sleep.
+      // Synchronous backoff (writeIfChanged is sync). Atomics.wait on a fresh
+      // zeroed SAB is the canonical dep-free synchronous sleep.
       const ms = 5 * (i + 1);
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
     }
   }
 }
 
-// Avoid rewriting a file whose content hasn't changed (no spurious mtime churn
-// when consolidator runs but nothing actually changed in a tier).
+// Skip rewriting unchanged content (no spurious mtime churn).
 //
-// Defense-in-depth: refuse to follow a symlink at the target. The mirrors dir
-// is supposed to be project-local plain files; a planted symlink (e.g. by a
-// co-located local user, or a stray prior run) could redirect a writeFileSync
-// through it onto an arbitrary path the owning user can write. Mirror content
-// includes partially-controllable text (retained fact bodies), so following a
-// symlink here is a real surface even at low likelihood.
-//
-// TOCTOU note: the lstat-then-rename pair has a small race window. We rely on
-// two structural guarantees that make this residual gap acceptable:
-//   1. The mirrors directory (`.claude/mindwright/mirrors/`) is owned by the
-//      project user and only this plugin writes to it — there is no other
-//      process with legitimate write access racing against us.
-//   2. Even if a symlink IS injected between lstat and rename, `rename(2)` on
-//      POSIX and `MoveFileEx` on Windows both replace the symlink-as-link,
-//      they do not follow it. The worst case is overwriting a planted
-//      symlink with a regular file containing the mirror content — no
-//      escape to an arbitrary target. The lstat is therefore primarily
-//      diagnostic (loud failure when the directory has been tampered with)
-//      rather than the sole defense.
+// Defense-in-depth: refuse to follow a symlink at the target — a planted
+// symlink could redirect this writeFileSync (which includes partially
+// user-controllable retained fact bodies) onto an arbitrary path. The
+// lstat-then-rename pair has a small TOCTOU window, but rename(2)/MoveFileEx
+// replace the symlink-as-link rather than following it, so the worst case is
+// overwriting the planted symlink with a regular file — no escape. The lstat
+// is therefore primarily a loud-failure diagnostic.
 function writeIfChanged(path, content) {
   let isSymlink = false;
   try {
@@ -233,12 +189,9 @@ function writeIfChanged(path, content) {
   } catch {
     // file doesn't exist — fall through and write
   }
-  // Atomic replace via temp-file + rename. Direct writeFileSync is NOT
-  // atomic — a concurrent reader sees partial bytes mid-write, and two
-  // concurrent writers (consolidator's renderAll plus a user-triggered
-  // mindwright_retain renderAll) can produce a torn file with interleaved
-  // fragments. The .tmp.<pid> suffix scopes the temp file to the calling
-  // process so two parallel writes don't clobber each other's temp.
+  // Atomic replace via temp + rename: direct writeFileSync is not atomic
+  // (concurrent reader sees partial bytes; two concurrent writers tear the
+  // file). The .tmp.<pid> suffix scopes the temp to this process.
   const tmp = `${path}.tmp.${process.pid}`;
   writeFileSync(tmp, content, 'utf8');
   try {

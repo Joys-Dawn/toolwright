@@ -1,13 +1,6 @@
-// Daemon-pipe: tiny newline-delimited JSON-RPC server over a per-session
-// Windows named pipe (`\\.\pipe\mindwright-<sessionId>`) or POSIX unix
-// socket (`<.claude/mindwright>/daemon-<sessionId>.sock`). The MCP server
-// process spawns this so hooks can offload hot-model calls (embed + rerank)
-// onto the persistent daemon and avoid paying the ~1-3 s ONNX cold-load
-// cost per PreToolUse firing.
-//
-// Surface is intentionally minimal: two methods, `embed` and `rerank`. All
-// DB I/O stays in the hooks' own better-sqlite3 connections (WAL handles
-// the concurrency). See DESIGN.md "Architecture sketch" / "Daemon pattern".
+// Daemon-pipe: tiny newline-delimited JSON-RPC server over a unix socket /
+// Windows named pipe, bound by mcp/model-daemon.mjs to the fixed
+// machine-global socket. Surface is two methods, `embed` and `rerank`.
 //
 // Wire format (each side, line-delimited):
 //   request:  {"id": <n>, "method": "embed",  "params": ["t1", "t2", ...]}
@@ -15,20 +8,14 @@
 //   response: {"id": <n>, "result": <result>}
 //   response: {"id": <n>, "error":  "<message>"}
 //
-// `embed` results are Float32Array[]; each vector is base64-encoded from the
-// raw HOST-ENDIAN byte buffer of the typed array. JavaScript's Float32Array
-// uses the platform's native endianness — little-endian on x86/ARM, big on
-// the rare legacy big-endian box. Since the daemon and the pipe-client always
-// run on the SAME machine over a named pipe / unix socket, both ends agree
-// on endianness and the round-trip Float32Array → Buffer → base64 → ArrayBuffer
-// → Float32Array reproduces the original bits losslessly. This wire format is
-// LOCAL-IPC ONLY. If we ever extend the daemon to accept connections from a
-// different host, switch to explicit little-endian via DataView.setFloat32(.,
-// true). `rerank` results are plain `number[]` of sigmoid-applied scores.
+// `embed` vectors are base64 of the raw HOST-ENDIAN Float32Array buffer.
+// LOCAL-IPC ONLY: daemon and client are always on the same machine so both
+// ends agree on endianness; for cross-host use, switch to explicit
+// little-endian via DataView.setFloat32(., true). `rerank` results are
+// `number[]` of sigmoid-applied scores.
 //
-// `embedFn` / `rerankFn` are constructor injectable. Production code passes
-// the real `lib/models.js` exports; tests pass stubs so `daemon-pipe.test.mjs`
-// doesn't need to download or load ONNX runtime to validate the wire format.
+// `embedFn` / `rerankFn` are injectable so tests can stub the wire format
+// without loading ONNX.
 
 import net from 'node:net';
 import { mkdir, unlink, chmod } from 'node:fs/promises';
@@ -36,13 +23,10 @@ import { dirname } from 'node:path';
 import { embed as realEmbed, rerank as realRerank } from '../lib/models.js';
 import { pipePath as derivePipePath } from '../lib/paths.js';
 
-// Per-connection input buffer cap. Sized for the worst legitimate case
-// (~100 texts × 32 KB ≈ 3.2 MB for an embed batch; same order of magnitude
-// for rerank candidate lists) plus margin. A client that sends an unbounded
-// chunk with no newline can otherwise grow the buffer until heap exhaustion
-// and crash the daemon — CWE-770. Closing the connection drops the in-flight
-// payload; the client either retries with a sane size or the hook degrades
-// to write-only via the pipe-client's existing null-return path.
+// Per-connection input buffer cap (worst legitimate case ~3.2 MB plus
+// margin). Without it a newline-less unbounded chunk grows the buffer until
+// heap exhaustion (CWE-770); closing the connection drops the payload and
+// the client retries or degrades to write-only.
 const MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
 function f32ToBase64(f32) {
@@ -115,10 +99,9 @@ export async function startPipeServer({
   }
   const path = pipePath || derivePipePath(sessionId);
 
-  // On POSIX the pipe is a real file under .claude/mindwright/. Make sure
-  // the parent dir exists and a stale sock from a previous run is removed
-  // before we try to bind. On Windows the named-pipe namespace handles this
-  // automatically; node:net rejects re-binding if it's already in use.
+  // On POSIX the pipe is a real file: ensure the parent dir exists and a
+  // stale sock from a previous run is removed before binding. Windows's
+  // named-pipe namespace handles this automatically.
   if (process.platform !== 'win32') {
     await mkdir(dirname(path), { recursive: true });
     try {
@@ -134,7 +117,6 @@ export async function startPipeServer({
     conn.on('data', async (chunk) => {
       buf += chunk;
       if (buf.length > maxBufferBytes) {
-        // Refuse to keep growing. Best-effort error reply, then close.
         try {
           if (!conn.destroyed) {
             conn.write(
@@ -194,23 +176,12 @@ export async function startPipeServer({
     server.listen(path);
   });
 
-  // POSIX defense-in-depth: lock the socket to owner-only so a permissive
-  // umask (e.g. 0 in some Docker images / shared shells) doesn't leave the
-  // RPC channel accessible to co-located local users. Per-session path is
-  // already the primary boundary; this closes the file-mode side door.
-  //
-  // WINDOWS LIMITATION: this chmod is POSIX-only. The named pipe namespace
-  // `\\.\pipe\mindwright-<sessionId>` is by default accessible to any local
-  // process on the same Windows machine — Node's net.createServer does not
-  // expose a portable way to set the pipe SECURITY_ATTRIBUTES from JS, and
-  // Win32 SetNamedPipeHandleState/SetKernelObjectSecurity require native
-  // FFI. On Windows the per-session id (typically a UUIDv4 from Claude Code,
-  // matched against SESSION_ID_PATTERN) is therefore the SOLE boundary
-  // against a co-located local user discovering the pipe — a co-located
-  // attacker who can read ps/env can also read the session id and connect.
-  // Threat model accepts this: mindwright runs in the user's own session;
-  // anyone with local-user access on the same Windows box already has the
-  // user's full project read/write surface.
+  // POSIX: chmod the socket owner-only so a permissive umask (e.g. 0 in some
+  // Docker images) doesn't leave the RPC channel open to co-located local
+  // users. Windows has no portable equivalent (Node can't set pipe
+  // SECURITY_ATTRIBUTES without native FFI); the threat model accepts this —
+  // anyone with local-user access already has the user's full
+  // read/write surface.
   if (process.platform !== 'win32') {
     try {
       await chmod(path, 0o600);

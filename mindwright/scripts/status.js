@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Diagnostic dump for mindwright. Mirrors the mindwright_status MCP tool but
-// runs as a plain script so the user can sanity-check state without an active
-// MCP server. Used by /mindwright:status when the daemon may be down.
+// Diagnostic dump for mindwright, used by /mindwright:status. Mirrors the
+// mindwright_status tool but runs as a plain script so the user can
+// sanity-check state even when the model daemon is down.
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -12,12 +12,10 @@ import { depsInstalled } from '../lib/ready.js';
 import { maybeAutoInstall, installLogPath } from '../lib/auto-setup.js';
 
 async function main() {
-  // Dependency gate: better-sqlite3/sqlite-vec aren't installed by a
-  // marketplace plugin copy (nor after a plugin update wipes node_modules).
-  // openStore() is the only native-dep import here, so quarantine it behind a
-  // dep-free check and emit a status built only from dep-free signals; trigger
-  // the single-flight background install so a later /mindwright:status comes
-  // up fully on its own.
+  // Dependency gate: quarantine openStore() (the only native-dep import)
+  // behind a dep-free check, emit a status built only from dep-free signals,
+  // and trigger the background install so a later /mindwright:status comes up
+  // fully on its own.
   if (!depsInstalled()) {
     maybeAutoInstall();
     print({
@@ -55,10 +53,9 @@ async function main() {
     out.last_consolidation = last ? last.fired_at : null;
     out.pending_embeds = store.countPendingEmbeds();
     out.oldest_preference_at = store.oldestUserPreference();
-    // Unlike the MCP tool's `consolidator` (filtered to the caller's
-    // requester handle), the script has no caller and lists every
-    // consolidator-for record so the user can see what's spawned at the
-    // project level when debugging dream-cycle issues.
+    // The script has no caller, so (unlike the tool, which filters to the
+    // caller's requester handle) it lists every consolidator-for record for
+    // debugging dream-cycle issues.
     out.consolidators = store.listConsolidators();
   } finally {
     store.close();
@@ -67,12 +64,9 @@ async function main() {
   print(out);
 }
 
-// Single source of truth for the status payload shape. Both degraded
-// branches (deps-missing, db-not-initialized) and the live path build on
-// these so adding/renaming a status field is a one-site change instead of
-// a three-site change where the least-exercised copy silently drifts.
-// Dep-free by construction (paths.js / daemon-status.js / node:fs only) —
-// safe to call from the pre-dependency-gate branch.
+// Single source of truth for the status payload shape so all three branches
+// (deps-missing, db-not-initialized, live) can't drift. Dep-free by
+// construction — safe to call from the pre-dependency-gate branch.
 function baseStatus() {
   return {
     project_root: projectRoot(),
@@ -133,8 +127,7 @@ function print(out) {
   process.stdout.write(JSON.stringify(out) + '\n');
 }
 
-// Only run main() when this file is invoked directly (e.g., via the
-// /mindwright:status skill), not when imported for unit testing.
+// Only run main() when invoked directly, not on import (unit tests).
 const invokedDirectly =
   process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (invokedDirectly) {

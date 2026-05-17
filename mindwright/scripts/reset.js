@@ -1,13 +1,7 @@
 #!/usr/bin/env node
-// Destructive reset for mindwright. Drops the SQLite DB and all markdown mirrors.
-// Models in ~/.cache/huggingface/hub/ are intentionally LEFT IN PLACE — they
-// take 5-15 min to download and survive across resets / clean rebuilds.
-//
-// Dry-run by default. Pass --yes to actually delete.
-//
-// Seeding is manual only (the `/mindwright:seed-from-repo` skill), so a reset
-// does not silently re-ingest anything on the next session — there is no
-// auto-rebootstrap to warn about.
+// Destructive reset: drops the SQLite DB and all markdown mirrors. Dry-run by
+// default; pass --yes to actually delete. Models in ~/.cache/huggingface/hub/
+// are left in place — they take 5-15 min to download and survive resets.
 
 import { rmSync, existsSync } from 'node:fs';
 import { dataDir, dbPath, mirrorsDir } from '../lib/paths.js';
@@ -16,33 +10,21 @@ import { isDaemonAlive } from '../lib/daemon-status.js';
 function main() {
   const args = process.argv.slice(2);
   const confirmed = args.includes('--yes');
-  // --force bypasses the active-daemon check for diagnostic recovery — e.g.
-  // a crashed session left a stale ticket file but the DB is truly idle.
-  // Two-stage override: when isDaemonAlive() returns true AND the user only
-  // passed --force, we still refuse — single-flag override of an irreversible
-  // destructive operation is too coarse. The user must additionally pass
-  // --bypass-live-daemon to acknowledge "I really do mean to delete the DB
-  // out from under a daemon that the ticket files say is alive." This guards
-  // against the common user error of mis-judging whether the daemon is dead.
+  // Two-stage override (--force, then --bypass-live-daemon): a single-flag
+  // override of an irreversible delete is too coarse — it guards against the
+  // common user error of mis-judging whether the daemon is dead.
   const forced = args.includes('--force');
   const bypassLiveDaemon = args.includes('--bypass-live-daemon');
 
-  // Refuse to delete while a daemon is alive. Two failure modes if we ignore
-  // this and the user runs reset from another shell while a session is open:
-  //   - Windows: rmSync(dbPath()) fails because better-sqlite3 holds an
-  //     exclusive lock. Mirrors get deleted but the DB stays. Half-reset, no
-  //     warning. User believes they're clean.
-  //   - POSIX: rmSync succeeds at the directory entry but the daemon's open
-  //     fd keeps writing to the orphan inode. New hooks open a fresh DB at
-  //     the same path. Two separated stores diverge silently — retrieval
-  //     and consolidation now point at different data.
-  // Both are worse than refusing.
-  // Two-stage override: --bypass-live-daemon alone is intentionally NOT a
-  // sufficient escape hatch. The docs and the refusal messages below
-  // describe a ladder (--yes → --force → --bypass-live-daemon); accepting
-  // --bypass-live-daemon by itself would let a single mistaken flag wipe
-  // an actively-bound DB. Require BOTH override flags for the bypass to
-  // fire.
+  // Refuse to delete while a daemon is alive — both failure modes are worse
+  // than refusing:
+  //   - Windows: rmSync(dbPath()) fails on better-sqlite3's exclusive lock,
+  //     leaving a half-reset (mirrors gone, DB stays) with no warning.
+  //   - POSIX: rmSync removes the dir entry but the daemon's open fd keeps
+  //     writing the orphan inode while new hooks open a fresh DB at the same
+  //     path — two stores diverge silently.
+  // Require BOTH override flags so a single mistaken flag can't wipe an
+  // actively-bound DB.
   if (confirmed && isDaemonAlive() && !(forced && bypassLiveDaemon)) {
     if (forced) {
       process.stderr.write(

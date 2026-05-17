@@ -1,14 +1,12 @@
-// Ticket files binding a SessionStart hook to the in-process MCP daemon.
+// Ticket files recording the active Claude session.
 //
 // On SessionStart, `hooks/session-start.js` calls `writeTicket()` with the
-// session_id (from the hook input) and the pipe path (`pipePath(sessionId)`).
-// On MCP startup, `mcp/session-bind.mjs` calls `readActiveTicket()` to find
-// the matching ticket via process.ppid correlation, then connects the daemon
-// to that session.
+// session_id and pipe path. Scripts (e.g. seed-from-repo) call
+// `readActiveTicket()` for session-id discovery, and isDaemonAlive() uses
+// ticket freshness for liveness.
 //
-// Pattern mirrored from wrightward/lib/mcp-ticket.js. Filenames encode both
-// the Claude CLI pid (process.ppid for hooks) and the hook's own pid so two
-// SessionStart hooks sharing one shell never collide on the same ticket key.
+// Filenames encode both the Claude CLI pid (process.ppid for hooks) and the
+// hook's own pid so two SessionStart hooks sharing one shell never collide.
 
 import { writeFile, readFile, readdir, unlink, mkdir, rename, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -21,11 +19,10 @@ function ticketFilename(claudePid, hookPid) {
   return `${claudePid}-${hookPid}.json`;
 }
 
-// Absolute path of the ticket file for a given (claudePid, hookPid) key.
-// The MCP daemon needs this so it can `utimesSync` its own ticket on a
-// periodic heartbeat — without that, isDaemonAlive() falsely reports
-// dead 10 minutes into a live session and reset.js will happily delete
-// the DB out from under the running daemon.
+// Absolute path of the ticket file for a given (claudePid, hookPid) key, so
+// the session heartbeat can `utimesSync` its own ticket — without that,
+// isDaemonAlive() falsely reports dead 10 minutes into a live session and
+// reset.js would delete the DB out from under it.
 export function ticketPathFor(claudePid, hookPid) {
   return join(ticketsDir(), ticketFilename(claudePid, hookPid));
 }
@@ -62,8 +59,7 @@ export async function writeTicket({ sessionId, pipePath }) {
 
 /**
  * Read the most recent valid ticket. Optionally restrict to tickets written
- * by a specific Claude CLI pid (matches by `claude_pid`) — the MCP daemon's
- * session-bind uses this with `process.ppid` to find its own ticket.
+ * by a specific Claude CLI pid (matches by `claude_pid`).
  *
  * @param {object} [opts]
  * @param {number} [opts.maxAgeMs] discard tickets older than this (default 10m)
@@ -87,15 +83,12 @@ export async function readActiveTicket({
   for (const f of files) {
     if (!f.endsWith('.json') || f.includes('.tmp.')) continue;
     const fp = join(dir, f);
-    // Freshness via file mtime, NOT data.created_at. The MCP daemon keeps
-    // its ticket alive by `utimesSync` (server.mjs) — it never rewrites the
-    // JSON's created_at field. Using created_at here makes any session
-    // older than maxAgeMs look stale even while its daemon is actively
-    // touching mtime; isDaemonAlive() reads mtime, so the two checks
-    // diverge after the first heartbeat. Most visible failure:
-    // seed-from-repo running 10+ min into a live session would silently
-    // fall back to the synthetic FALLBACK_SEED_SESSION_ID and orphan
-    // its seed rows away from the user's /mindwright:dream scope=session.
+    // Freshness via file mtime, NOT data.created_at: the heartbeat keeps a
+    // ticket alive by `utimesSync` without rewriting created_at, and
+    // isDaemonAlive() also reads mtime — so created_at here would diverge
+    // after the first heartbeat. Visible failure: seed-from-repo 10+ min
+    // into a live session falls back to FALLBACK_SEED_SESSION_ID and orphans
+    // its seed rows from /mindwright:dream scope=session.
     let st;
     try { st = await stat(fp); } catch { continue; }
     if (now - st.mtimeMs > maxAgeMs) continue;
@@ -133,10 +126,8 @@ export async function cleanupStaleTickets(maxAgeMs = DEFAULT_MAX_AGE_MS) {
   let removed = 0;
   for (const f of files) {
     const fp = join(dir, f);
-    // Orphan `.tmp.<pid>` files left behind when writeTicket crashed
-    // between writeFile and rename — clean them too. They never end in
-    // .json, so the old gate dropped them and they accumulated forever.
-    // Filter by mtime since we can't trust the tmp file's JSON to parse.
+    // Orphan `.tmp.<pid>` files left when writeTicket crashed between
+    // writeFile and rename. Filter by mtime since their JSON may not parse.
     if (f.includes('.tmp.')) {
       try {
         const st = await stat(fp);
@@ -150,10 +141,8 @@ export async function cleanupStaleTickets(maxAgeMs = DEFAULT_MAX_AGE_MS) {
       continue;
     }
     if (!f.endsWith('.json')) continue;
-    // Same divergence concern as readActiveTicket: mtime is what the daemon
-    // heartbeat actually updates. A long-running session whose JSON
-    // created_at is past maxAgeMs but whose mtime is fresh must NOT be
-    // considered stale — its daemon is alive and its ticket is in use.
+    // mtime, not created_at (same reason as readActiveTicket): a long
+    // session with stale created_at but fresh mtime is still in use.
     let st;
     try { st = await stat(fp); } catch { continue; }
     let data = null;

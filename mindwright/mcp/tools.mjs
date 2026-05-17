@@ -1,16 +1,5 @@
-// Tool definitions + dispatcher for the mindwright memory tools.
-//
-// These handlers were originally an MCP server surface; the MCP server is
-// gone. They are now invoked by scripts/mindwright.mjs (the CLI every skill
-// runs). Heavy lifting (retrieval, consolidation, mirror render) lives in
-// lib/ — this file is just argument validation, ctx routing, and shaping the
-// response into the `{content: [{type:'text', text: JSON.stringify(...)}]}`
-// envelope the CLI unwraps to stdout JSON.
-//
-// `ctx` is passed in by scripts/mindwright.mjs:
-//   { store, sessionId, embed, rerank }
-// where `embed` / `rerank` resolve through the machine-wide model daemon
-// (or deterministic stubs under MINDWRIGHT_USE_STUB_MODELS=1).
+// Tool definitions + dispatcher, invoked by scripts/mindwright.mjs.
+// `ctx` = { store, sessionId, embed, rerank }.
 
 import { retrieve } from '../lib/retriever.js';
 import {
@@ -34,17 +23,8 @@ import { pluralize, agree } from '../lib/grammar.js';
 import { resolveTargetToSessionId } from '../lib/agents-roster.js';
 import { spawnConsolidator } from '../lib/consolidator-spawn.js';
 
-// Max chars echoed back when a tool wants to confirm to the caller which row
-// it just touched (update_memory echoes the OLD content; forget echoes the
-// content of the row that's now archived). 200 is enough for a typo-check
-// without flooding the LLM's context.
 const PREVIEW_MAX_CHARS = 200;
 
-// Surfaced to the caller when an embed-requiring tool runs before
-// /mindwright:setup downloaded the model cache. Without this gate, the first
-// embed call from a fresh install lazy-loads bge-m3 — a ~5 GB blocking
-// download from inside e.g. /mindwright:dream that the user has no warning
-// about. embedderCached() is a fast existsSync, so the preflight is free.
 const SETUP_HINT =
   'mindwright embedder not cached — run `/mindwright:setup` first ' +
   '(one-time ~5 GB download). Recall, dream, and long-term retain need ' +
@@ -278,9 +258,7 @@ export function getToolDefinitions() {
   return TOOL_DEFINITIONS;
 }
 
-// Scope validator: returns true iff scope is one of "user" | "project" |
-// "role:<role-name>" where <role-name> matches ROLE_PATTERN (path-safe
-// identifier). Used by every long-tier write path that takes a scope arg.
+// True iff scope is "user" | "project" | "role:<role>" (role matching ROLE_PATTERN).
 function validateScope(scope) {
   if (typeof scope !== 'string') return false;
   if (scope === 'user' || scope === 'project') return true;
@@ -290,39 +268,21 @@ function validateScope(scope) {
   return false;
 }
 
-// SQLite rowids returned by better-sqlite3 are BigInt past 2^32. JSON.stringify
-// throws on raw bigints, so every wire-bound payload runs through this
-// replacer. It walks the payload recursively (JSON.stringify behavior),
-// so nested BigInts in arrays or sub-objects also get coerced — callers
-// should NOT pre-coerce ids by hand. Keeping a manual per-id wrapper at call
-// sites would mean two valid encoding paths coexist for the same problem; if
-// someone later removes this replacer the manual sites keep working but the
-// auto sites break, and the failure surface is non-uniform.
+// JSON.stringify throws on the BigInt rowids better-sqlite3 returns past 2^32,
+// so every wire-bound payload runs through this replacer (single coercion path
+// — callers must NOT pre-coerce ids by hand).
 function bigintReplacer(_key, value) {
   if (typeof value === 'bigint') return value.toString();
   return value;
 }
 
-// scope_both contradiction resolution appends "(applies when: <scope>)" to a
-// fact's content. Without this strip, a second scope_both pass on the same
-// fact would STACK the qualifier and the body would grow into nonsense:
-//     "original. \n\n(applies when: A)\n\n(applies when: B)"
-// We strip any pre-existing trailing `(applies when: ...)` so repeated
-// scope_both calls REPLACE the qualifier instead of appending.
-//
-// A naive regex `\(applies when:[^)]*\)` stops at the FIRST `)` and breaks
-// when the scope description itself contains parens — e.g.
-//   "(applies when: running tests (CI))"
-// would leave a `(CI))` fragment behind, defeating the helper. Instead we
-// walk back from the trailing `)` counting paren depth, then verify the
-// matching `(` opens with the literal `(applies when:` prefix. Anything
-// that isn't a clean trailing scope qualifier is left untouched.
+// Strip a trailing `(applies when: ...)` so repeated scope_both resolutions
+// REPLACE the qualifier instead of stacking it. Paren-depth walk, not a naive
+// `[^)]*` regex, because the scope text itself may contain parens (e.g. "(CI)").
 function stripScopeQualifier(text) {
   if (typeof text !== 'string') return '';
   const t = text.trimEnd();
   if (!t.endsWith(')')) return t;
-  // Walk backwards counting paren depth to find the opening `(` that the
-  // trailing `)` closes.
   let depth = 1;
   let i = t.length - 2;
   while (i >= 0 && depth > 0) {
@@ -349,13 +309,9 @@ function errResponse(message, extra = {}) {
   };
 }
 
-// Tools that need a bound session id to write under (either as author of
-// an insert or as the implicit scope of a session-bound query). When
-// ctx.sessionId hasn't resolved yet (brief window between MCP handshake
-// and bindOwnSession completion) these would otherwise hit a SQLITE
-// NOT NULL constraint deep inside insertEntry; we surface a clear error
-// instead. Read-only diagnostic tools (status, recall, get_roles) and
-// arg-driven write tools (assign_role / unassign_role) are exempt.
+// Tools that need a bound session id to write under; without it they would hit
+// a NOT NULL constraint deep in insertEntry. Read-only diagnostics and
+// arg-driven role writes are exempt.
 const TOOLS_REQUIRING_SESSION = new Set([
   'mindwright_retain',
   'mindwright_retain_fact',
@@ -375,12 +331,8 @@ export async function handleToolCall(name, args, ctx) {
   }
   const handler = HANDLERS[name];
   if (!handler) return errResponse(`unknown tool: ${name}`);
-  // Reset the long-tier mutation flag. Handlers that change long-tier state
-  // (insertEntry under long, markSuperseded, softArchive, restore) set
-  // `ctx.mutatedLong = true` at their final-mutation point; the dispatcher
-  // renders mirrors once after the handler returns. This collapses what used
-  // to be 8 scattered `renderAll(ctx.store)` calls — and the comments
-  // explaining when NOT to call them — into one place.
+  // Handlers set ctx.mutatedLong=true at their final long-tier mutation; the
+  // dispatcher renders mirrors once afterward.
   ctx.mutatedLong = false;
   try {
     const result = await handler(args || {}, ctx);
@@ -389,9 +341,6 @@ export async function handleToolCall(name, args, ctx) {
     }
     return result;
   } catch (err) {
-    // Log the full stack so operators can diagnose failures from server
-    // stderr (the wire-side error envelope below intentionally stays terse —
-    // it returns to the calling LLM, which doesn't benefit from stacks).
     process.stderr.write(
       `[mindwright/mcp] tool ${name} threw: ${err && err.stack ? err.stack : err}\n`
     );
@@ -407,10 +356,6 @@ export async function handleToolCall(name, args, ctx) {
   }
 }
 
-// --------------------------------------------------------------------------
-// Handlers
-// --------------------------------------------------------------------------
-
 async function recallHandler(args, ctx) {
   const { query } = args;
   if (args.k !== undefined && (!Number.isInteger(args.k) || args.k <= 0)) {
@@ -425,29 +370,17 @@ async function recallHandler(args, ctx) {
     return errResponse('scope must be "short" | "long" | "all"');
   }
   if (!embedderCached()) return errResponse(SETUP_HINT);
-  // Push the tier filter into the retrieval pipeline (each retriever's SQL)
-  // so a scope='long' caller can't get back zero results when 2k+ short-term
-  // rows happen to dominate the unfiltered top.
-  // Scope role-tagged procedural rows to the caller's assigned roles so
-  // /mindwright:recall reflects what the hook-based retrieval surfaces.
-  // Callers can pass `roles` explicitly to override (e.g. to debug what
-  // another role would see); otherwise we resolve the session's set.
+  // Default role scoping mirrors what hook-based retrieval surfaces; explicit
+  // `roles` overrides.
   let roles = null;
   if (Array.isArray(args.roles)) {
     roles = args.roles;
   } else if (ctx.sessionId) {
     try { roles = ctx.store.getRoles(ctx.sessionId); } catch { roles = []; }
   }
-  // Build excludeIds: caller-provided ids (for the self-recall path) plus
-  // the per-session injected-ids dedup set. We extend the set after
-  // emission so subsequent recall calls in the same session don't re-inject
-  // the same fact. The agent has no way to read its own injected set, so
-  // the handler does the read+append transparently.
-  //
-  // bypass_session_dedup=true is the /mindwright:recall debug path —
-  // the user wants to see what would match, not a delta against prior
-  // injections. Skip both the read and the post-emit append in that case
-  // so a second debug call shows the same hits as the first.
+  // excludeIds = caller ids + per-session injected-ids dedup set, extended
+  // post-emit so later recalls don't re-inject the same fact.
+  // bypass_session_dedup skips both read and append (repeatable debug recall).
   const bypassDedup = args.bypass_session_dedup === true;
   const callerExclude = Array.isArray(args.exclude_ids)
     ? args.exclude_ids.map((n) => Number(n)).filter(Number.isFinite)
@@ -467,9 +400,6 @@ async function recallHandler(args, ctx) {
     excludeIds,
     options: { k },
   });
-  // Extend the dedup set with the emitted ids. Best-effort; a failure to
-  // append is logged via the throw → handleToolCall path and the caller
-  // still gets a useful response.
   if (ctx.sessionId && !bypassDedup && Array.isArray(hits) && hits.length > 0) {
     const emittedIds = hits.map((h) => Number(h.id)).filter(Number.isFinite);
     if (emittedIds.length > 0) {
@@ -483,9 +413,6 @@ async function recallHandler(args, ctx) {
   return okResponse({ results: hits });
 }
 
-// Validate raw retain args. Returns either {ok:false, err:errResponse}
-// or {ok:true, content, kind, tier, category, scope, confidence}. Keeps
-// retainHandler focused on orchestration instead of input-shape minutiae.
 function validateRetainArgs(args) {
   const { content, kind, tier } = args;
   const category = args.category ?? null;
@@ -509,12 +436,9 @@ function validateRetainArgs(args) {
   return { ok: true, content, kind, tier, category, scope, confidence };
 }
 
-// Long-term rows must have a category AND scope; when the caller omitted
-// either, fall back to the deterministic heuristic. Track the silent
-// default-to-fact/project case — terse phrasings ("dark theme yes") can be
-// user preferences that look like nothing to the cues and end up filed as
-// project facts. Returns the resolved tags plus a warning string when the
-// heuristic returned NULL so the caller can re-tag via update-memory.
+// Long-term rows need category AND scope; fall back to the heuristic for
+// whichever is missing. Warns when no cue matched, since the silent
+// default-to-fact/project can mis-file a terse preference.
 function resolveLongTermTags({ content, category, scope }) {
   let warning = null;
   if (!category || !scope) {
@@ -538,12 +462,8 @@ async function retainHandler(args, ctx) {
   const { content, kind, tier, confidence } = v;
   let { category, scope } = v;
 
-  // Long-term retain needs the embedder for supersede-candidate detection
-  // to mean anything — without it the user silently ends up with two
-  // contradictory active facts and no warning. Short-term retain can still
-  // succeed with NULL embedding (sweeper backfills later); skip the embed
-  // call entirely when the model isn't cached so we don't trigger a 5 GB
-  // download on a simple /mindwright:retain note=... call.
+  // Long-term retain needs the embedder for supersede-candidate detection;
+  // without it the user silently keeps two contradictory active facts.
   if (tier === 'long' && !embedderCached()) {
     return errResponse(SETUP_HINT);
   }
@@ -559,9 +479,8 @@ async function retainHandler(args, ctx) {
       return errResponse('scope must be "user" | "project" | "role:<role>" for tier=long');
     }
   } else {
-    // Short-tier: scope must be null (DB CHECK enforces) and category
-    // in (NULL, 'raw'). Coerce a wrong-tier value rather than rejecting —
-    // the caller's "tier=short" is the authoritative signal.
+    // Short-tier DB CHECK requires scope NULL and category in (NULL,'raw');
+    // coerce rather than reject (caller's tier=short is authoritative).
     scope = null;
     if (category && category !== 'raw') category = 'raw';
   }
@@ -572,8 +491,7 @@ async function retainHandler(args, ctx) {
       const out = await ctx.embed([content]);
       emb = out && out[0] ? out[0] : null;
     } catch {
-      // degrade silently — sweeper backfills NULL-embedded rows later
-      emb = null;
+      emb = null; // sweeper backfills NULL-embedded rows later
     }
   }
   const id = ctx.store.insertEntry({
@@ -582,10 +500,9 @@ async function retainHandler(args, ctx) {
   });
   ctx.mutatedLong = true;
 
-  // Supersede-candidate detection. Mirrors the dream-cycle path
-  // (lib/consolidator.js retainFact) so the explicit /mindwright:retain user
-  // still gets a "two contradictory facts active" warning. Helper swallows
-  // its own failures here — retrieval errors shouldn't break the retain.
+  // Mirror the dream-cycle supersede detection so explicit retain also warns
+  // about contradictions. Swallow errors — a retrieval failure must not break
+  // the retain.
   let supersede_candidates = [];
   if (tier === 'long' && emb) {
     try {
@@ -617,11 +534,9 @@ function statusHandler(_args, ctx) {
   const pending_embeds = ctx.store.countPendingEmbeds();
   const poison_embeds = ctx.store.countPoisonEmbeds();
 
-  // Surface rows that landed under the synthetic 'mindwright-unbound'
-  // session_id — happens when the CLI is invoked without --session-id (e.g.
-  // run outside a Claude session). These rows are otherwise invisible to session-scoped operations
-  // (countShortTermFor(realSessionId)=0, Stop's cap check never fires,
-  // /mindwright:dream with default scope=session finds nothing).
+  // Rows under the synthetic 'mindwright-unbound' session_id (CLI invoked
+  // without --session-id) are invisible to every session-scoped operation, so
+  // surface them explicitly.
   const unbound_count = ctx.store.countUnboundActive();
   const warnings = [];
   if (unbound_count > 0) {
@@ -637,10 +552,8 @@ function statusHandler(_args, ctx) {
       `WHERE embed_failures >= 5;`,
     );
   }
-  // The sweeper only runs inside the MCP daemon (mcp/server.mjs spawns it
-  // on boot). When the daemon is down, pending_embeds stays stuck until the
-  // next session opens with mindwright bound. Without this warning the user
-  // sees the pending count but no hint at the dependency.
+  // When the model daemon is down, pending_embeds stays stuck until the next
+  // session opens with mindwright bound; warn so the count isn't a mystery.
   if (!daemon_alive && pending_embeds > 0) {
     warnings.push(
       `${pluralize(pending_embeds, 'embedding')} ${agree(pending_embeds, 'is', 'are')} pending but no mindwright daemon is running — ` +
@@ -648,13 +561,8 @@ function statusHandler(_args, ctx) {
     );
   }
 
-  // Surface the oldest active user-scoped fact's age so users know whether
-  // they may want to audit and prune. Per DESIGN.md, time-based confidence
-  // decay / auto-archive of stale preferences is a future feature ("opinion
-  // network"); current behavior only supports manual /mindwright:forget or
-  // supersede via the consolidator. Without this hint, a 6-month-old
-  // preference looks identical to a 2-day-old one in retrieval, and the
-  // user has no signal that something stale is still injecting.
+  // Preferences don't auto-decay — a 6-month-old one looks identical to a
+  // 2-day-old one in retrieval — so surface the oldest's age as a prune hint.
   const oldest_preference_at = ctx.store.oldestUserPreference();
   if (oldest_preference_at) {
     const ageMs = Date.now() - Date.parse(oldest_preference_at);
@@ -667,10 +575,8 @@ function statusHandler(_args, ctx) {
     }
   }
 
-  // Consolidator-spawn record for the calling session: surfaces who runs
-  // consolidations on its behalf. Handle is recomputed from the persisted
-  // UUID via deriveHandle so no separate handle field needs to be stored.
-  // null when no consolidator has been spawned for this requester yet.
+  // Handle is recomputed from the persisted UUID via deriveHandle so no
+  // separate handle field is stored.
   let consolidator = null;
   if (ctx.sessionId) {
     try {
@@ -711,26 +617,15 @@ function drainBatchHandler(args, ctx) {
   const scopeSessionId =
     requested === 'session' ? ctx.sessionId : null;
   const result = drainBatch({ store: ctx.store, sessionId: scopeSessionId });
-  // Surface a cross-session hint whenever real work waits elsewhere — even if
-  // the current session's drain came back non-empty. A solo user manually
-  // running /mindwright:dream typically has a tiny current-session pile and
-  // a much larger pile across past sessions; suppressing the hint when the
-  // current drain has any content would let the user "succeed" consolidating
-  // 1 row while 49 rows sit in past sessions and they'd never know.
-  //
-  // Three signals, any of which fires the hint:
-  //   (a) consolidator role — the session was assigned to drain on behalf of
-  //       the team. README.md and DESIGN.md promise this role makes a peer
-  //       "drain on cue", so a silent no-op here would break the contract.
-  //   (b) other-session bound rows exist (the solo-user case above).
-  //   (c) rows under the synthetic 'mindwright-unbound' session — a CLI
-  //       invocation without --session-id parked rows there.
+  // Surface a cross-session hint whenever real work waits elsewhere even if
+  // this session's drain was non-empty: suppressing it would let a user
+  // "succeed" on 1 row while 49 sit unconsolidated in past sessions.
   if (requested === 'session') {
     const reasons = [];
 
-    // (a)+(b): rows under other bound sessions. Consolidator gets a
-    // role-specific phrasing; everyone else gets the generic one. Only one
-    // of the two is emitted to avoid double-counting.
+    // Rows under other bound sessions. Consolidator gets role-specific
+    // phrasing; everyone else the generic one. Only one is emitted (no
+    // double-count).
     let teamCount = 0;
     let isConsolidator = false;
     if (ctx.sessionId) {
@@ -752,7 +647,6 @@ function drainBatchHandler(args, ctx) {
       );
     }
 
-    // (c) unbound rows
     const unbound = ctx.store.countUnboundShortTerm();
     if (unbound > 0) {
       reasons.push(
@@ -779,10 +673,8 @@ async function retainFactHandler(args, ctx) {
   const { drain_id = null, exchange_id = null, content, category, scope = null } = args;
   const entities = Array.isArray(args.entities) ? args.entities : null;
   const confidence = args.confidence ?? null;
-  // Opaque pass-through of the exchange's representative event_ts (the dream
-  // skill forwards drain_batch's exchange.event_ts verbatim). Only stamp a
-  // real non-empty string; anything else → NULL (behaves as today via
-  // COALESCE in retrieval).
+  // Opaque pass-through of the exchange's event_ts; non-string/empty → NULL
+  // (treated via COALESCE in retrieval).
   const eventTs =
     typeof args.event_ts === 'string' && args.event_ts.length > 0 ? args.event_ts : null;
   if (typeof content !== 'string' || !content.trim()) {
@@ -812,11 +704,9 @@ async function retainFactHandler(args, ctx) {
     embed: ctx.embed,
     rerank: ctx.rerank,
   });
-  // Inside a drain (`drain_id` set) skip the per-fact mirror render —
-  // finalizeDrain re-renders once at the end. With 30+ retain_fact calls per
-  // drain and 4 queries + 4 file writes per render this was the dominant
-  // I/O cost of a dream cycle. The dispatcher reads `ctx.mutatedLong` after
-  // this handler returns and renders mirrors then.
+  // Inside a drain, skip the per-fact mirror render (30+ calls × 4 writes was
+  // the dominant dream-cycle I/O cost) — finalizeDrain re-renders once at the
+  // end.
   if (!drain_id) {
     ctx.mutatedLong = true;
   }
@@ -832,11 +722,8 @@ function markSupersededHandler(args, ctx) {
     return errResponse('old_id and new_id must be numbers');
   }
   markSuperseded(ctx.store, old_id, new_id);
-  // No per-call renderAll: this tool is only used inside the /mindwright:dream
-  // cycle (see skills/dream/SKILL.md step 5), and `mindwright_finalize_drain`
-  // renders mirrors once after the whole batch. User-facing supersede paths
-  // (update_memory, resolve_contradiction) call store.markSuperseded directly
-  // and render themselves.
+  // No per-call renderAll: dream-cycle-only, and finalize_drain renders once
+  // after the whole batch.
   return okResponse({ ok: true });
 }
 
@@ -855,13 +742,11 @@ function finalizeDrainHandler(args, ctx) {
   }
   if (!drainCutoff || Number.isNaN(Date.parse(drainCutoff))) {
     // Empty/garbage cutoff would let the DELETE run with no temporal filter,
-    // potentially wiping every active short-term row in scope. Reject.
+    // wiping every active short-term row in scope.
     return errResponse(`drain_id cutoff_ts is missing or not a parseable timestamp: ${JSON.stringify(drainCutoff)}`);
   }
-  // Keep the cutoff id as BigInt end-to-end. SQLite rowids are 64-bit; coercing
-  // to Number silently loses precision above 2^53. finalizeDrain() in
-  // lib/consolidator.js accepts BigInt/Number/string and binds via better-sqlite3's
-  // native BigInt support so the DELETE matches the right row even past 2^53.
+  // Keep the cutoff id as BigInt end-to-end — coercing 64-bit rowids to Number
+  // silently loses precision above 2^53.
   let drainCutoffId;
   if (!/^-?\d+$/.test(idStr)) {
     return errResponse(`drain_id cutoff id is not an integer: ${idStr}`);
@@ -872,18 +757,10 @@ function finalizeDrainHandler(args, ctx) {
     return errResponse(`drain_id cutoff id is not an integer: ${idStr}`);
   }
 
-  // Scope authorization. The LLM has access to the drain_id we returned from
-  // drainBatch, but it could ALSO forge a different scope (e.g. another
-  // session's id, or "all") if a prompt-injection lands. Without an authz
-  // check, a malicious injected memory could trigger finalize_drain on rows
-  // belonging to other sessions or to the entire project. OWASP API1:2023 /
-  // CWE-639 BOLA. Defenses:
-  //   - scope must equal ctx.sessionId, OR
-  //   - scope === 'all' AND the caller passes confirm_all_sessions:true
-  //     (so a stray scope='all' from prompt injection still fails).
-  // The orphan-consolidation hint surfaced by status (rows under the synthetic
-  // 'mindwright-unbound' session id) takes the scope='all' path, not a
-  // dedicated unbound-only branch — there is no special-case here.
+  // Scope authorization (BOLA, OWASP API1:2023 / CWE-639): a prompt-injected
+  // memory could forge another session's id or "all". scope must equal
+  // ctx.sessionId, OR be 'all' with confirm_all_sessions:true. The unbound
+  // orphan-consolidation hint takes the scope='all' path — no special-case.
   if (scope !== 'all' && scope !== ctx.sessionId) {
     return errResponse(
       `drain_id scope='${scope}' does not match the caller's session ('${ctx.sessionId}'). ` +
@@ -908,11 +785,8 @@ function finalizeDrainHandler(args, ctx) {
   return okResponse(result);
 }
 
-// Session id arrives over the wire from the calling Claude — validate at the
-// same boundary as `role`. Even though the only DB use is meta-table binding
-// (parameterized, so SQL injection is moot), keeping the validation uniform
-// here means future code paths can't accidentally use an unvalidated sessionId
-// in a filesystem context (pipePath etc. already enforce SESSION_ID_PATTERN).
+// Validate the session id at the wire boundary (uniform with `role`) so a
+// future code path can't use an unvalidated sessionId in a filesystem context.
 function requireValidSessionId(sid) {
   if (typeof sid !== 'string' || !sid) return 'session_id required';
   if (!SESSION_ID_PATTERN.test(sid)) {
@@ -921,8 +795,6 @@ function requireValidSessionId(sid) {
   return null;
 }
 
-// Resolve a `target` argument (UUID or wrightward handle) to a session_id,
-// returning a structured error response or null on success.
 function resolveTargetArg(target, ctx) {
   if (target === undefined) {
     if (!ctx.sessionId) {
@@ -945,9 +817,8 @@ function getRolesHandler(args, ctx) {
   const sid = resolved.sessionId;
   const sidErr = requireValidSessionId(sid);
   if (sidErr) return errResponse(sidErr);
-  // Cross-session read is recon for BOLA targeting — enumerating which
-  // sessions hold which roles tells an attacker which victim to graft
-  // against. Same authz boundary as assign/unassign.
+  // Cross-session read is BOLA recon (which session to graft against) — same
+  // authz boundary as assign/unassign.
   if (args.target !== undefined) {
     const authzErr = authzCrossSession(sid, args, ctx, 'read');
     if (authzErr) return errResponse(authzErr);
@@ -955,13 +826,9 @@ function getRolesHandler(args, ctx) {
   return okResponse({ roles: ctx.store.getRoles(sid) });
 }
 
-// Authorize a cross-session role operation against the caller's session.
-// Mirrors the finalizeDrainHandler defense: the LLM could carry a forged
-// session_id from a prompt injection. For writes (assign/unassign), this
-// blocks BOLA grafts (OWASP API1:2023 / CWE-639); for reads (get_roles),
-// it blocks the information-disclosure recon step that pairs with BOLA
-// (CWE-200 / OWASP API3:2023). Same-session ops are implicit; cross-
-// session ops require an explicit confirm_cross_session:true.
+// Block cross-session role ops driven by a prompt-injected forged session_id
+// (BOLA, OWASP API1:2023/CWE-639; for reads, CWE-200 recon). Cross-session
+// requires explicit confirm_cross_session:true.
 function authzCrossSession(session_id, args, ctx, opLabel) {
   if (session_id === ctx.sessionId) return null;
   if (args.confirm_cross_session !== true) {
@@ -991,12 +858,9 @@ function assignRoleHandler(args, ctx) {
   const next = [...new Set([...current, role])];
   ctx.store.setRoles(sid, next);
 
-  // Auto-spawn-on-role-assignment branch (Phase 4, requirement 6 in plan).
-  // When a leader assigns the 'consolidator' role to a peer (the role
-  // applies to a session OTHER than the caller's), spawn the consolidator
-  // subprocess so it can drain and distill autonomously. Same-session
-  // self-assignment does NOT trigger a spawn — that path is for an agent
-  // identifying its own role, not requesting work.
+  // Assigning 'consolidator' to a peer (a session OTHER than the caller's)
+  // spawns the consolidator subprocess. Same-session self-assignment does NOT
+  // spawn — that path is an agent identifying its own role, not requesting work.
   let spawn_result = null;
   if (role === 'consolidator' && sid !== ctx.sessionId && ctx.sessionId) {
     try {
@@ -1064,7 +928,6 @@ async function updateMemoryHandler(args, ctx) {
   ctx.store.markSuperseded(fact_id, newId);
   ctx.mutatedLong = true;
   // Echo the old content so the user can verify they updated the right row.
-  // The new content is what they just typed — no echo needed for that side.
   const oldContentPreview = (old.content || '').slice(0, PREVIEW_MAX_CHARS);
   return okResponse({
     new_id: newId,
@@ -1078,10 +941,8 @@ function forgetHandler(args, ctx) {
   const row = ctx.store.fetch(fact_id);
   if (!row) return errResponse(`fact_id ${fact_id} not found`);
   if (row.tier !== 'long') return errResponse('mindwright_forget only operates on long-term facts');
-  // Snapshot the content BEFORE soft-archive so the response can echo what
-  // was forgotten. A user who typo'd the id (e.g. from a stale recall result)
-  // needs an immediate signal that the wrong row went down; without the
-  // echo, recovery requires opening the SQLite DB to inspect a row by id.
+  // Snapshot content BEFORE soft-archive so the response can echo what was
+  // forgotten (immediate signal if the id was typo'd).
   const contentPreview = (row.content || '').slice(0, PREVIEW_MAX_CHARS);
   ctx.store.softArchive(fact_id);
   ctx.mutatedLong = true;
@@ -1100,10 +961,9 @@ function restoreHandler(args, ctx) {
   return okResponse({ ok: true, fact_id, content_preview: contentPreview });
 }
 
-// One side wins — record the supersede edge (loser superseded by winner) AND
-// archive in one step. softArchive alone would leave the audit chain unable
-// to answer "what happened to fact X?" — merge / scope_both both record the
-// edge, so prefer_a/prefer_b must preserve the same invariant.
+// Record the supersede edge AND archive in one step. softArchive alone would
+// break the audit chain ("what happened to fact X?"); merge/scope_both record
+// the edge too, so prefer_a/prefer_b must preserve the same invariant.
 function resolvePrefer(ctx, archivedId, keptId, label) {
   ctx.store.markSuperseded(archivedId, keptId, label);
   ctx.mutatedLong = true;
@@ -1123,9 +983,8 @@ async function resolveMerge(ctx, fact_id_a, fact_id_b, a, args) {
   } catch {
     emb = null;
   }
-  // Insert + both supersede links happen under one transaction so a mid-
-  // resolution failure rolls back the merged row instead of leaving an
-  // orphan with only one of the originals archived.
+  // One transaction: a mid-resolution failure rolls back the merged row
+  // instead of leaving an orphan with only one original archived.
   const mergeTxn = ctx.store.db.transaction(() => {
     const newId = ctx.store.insertEntry({
       tier: 'long',
@@ -1157,8 +1016,6 @@ async function resolveScopeBoth(ctx, fact_id_a, fact_id_b, a, b, args) {
   if (typeof scope_b !== 'string' || !scope_b.trim()) {
     return errResponse('scope_both requires scope_b');
   }
-  // Insert two new scoped facts; archive the originals so retrieval surfaces
-  // the scoped versions only. Supersede chain records the connection.
   const scopedA = `${stripScopeQualifier(a.content)}\n\n(applies when: ${scope_a})`;
   const scopedB = `${stripScopeQualifier(b.content)}\n\n(applies when: ${scope_b})`;
   let embA = null;
@@ -1170,9 +1027,8 @@ async function resolveScopeBoth(ctx, fact_id_a, fact_id_b, a, b, args) {
   } catch {
     // best-effort embed; sweeper backfills NULL embeddings
   }
-  // Two inserts + two supersede links happen under one transaction so a
-  // partial failure can't leave (e.g.) scoped-A inserted and A archived
-  // while B is still in its un-scoped state.
+  // One transaction: a partial failure can't leave scoped-A inserted and A
+  // archived while B is still un-scoped.
   const scopeTxn = ctx.store.db.transaction(() => {
     const insertedA = ctx.store.insertEntry({
       tier: 'long',
@@ -1212,13 +1068,9 @@ async function resolveContradictionHandler(args, ctx) {
   if (typeof fact_id_a !== 'number' || typeof fact_id_b !== 'number') {
     return errResponse('fact_id_a and fact_id_b must be numbers');
   }
-  // Reject the same-id case before reaching any resolution branch. With
-  // duplicate ids, scope_both inserts two near-identical scoped rows and
-  // double-stamps the supersedes pointer on the (single) archived original;
-  // prefer_a/prefer_b would self-supersede the kept row (blocked by the
-  // entries.supersedes CHECK with a non-obvious error); merge is benign but
-  // still records a confusing audit trail. All paths are caller-error
-  // scenarios — surface a clear message instead.
+  // Reject same-id before any resolution branch: every branch misbehaves
+  // (scope_both double-stamps, prefer_* self-supersedes, merge confuses the
+  // audit trail) — all caller error, so surface a clear message.
   if (fact_id_a === fact_id_b) {
     return errResponse('fact_id_a and fact_id_b must be different ids');
   }
@@ -1258,10 +1110,7 @@ const HANDLERS = {
   mindwright_resolve_contradiction: resolveContradictionHandler,
 };
 
-// Internal helpers exposed for tests only. Not part of the public MCP API.
-// Mirrors the lib/chunker.js __internal pattern — keeps the module's public
-// surface to its tools and capability map while still letting white-box
-// tests pin the parsing/formatting helpers directly.
+// Internal helpers exposed for tests only.
 export const __internal = {
   stripScopeQualifier,
   validateScope,

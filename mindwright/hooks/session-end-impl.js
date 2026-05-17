@@ -1,9 +1,7 @@
 #!/usr/bin/env node
-// SessionEnd hook. One job: final transcript flush so nothing in the tail
-// of the session gets dropped. No retrieval, no cap-check hint (no next
-// turn to read it). Mirrors stop.js's first pass without the cap surface.
-//
-// On any error: silent exit. The session is ending anyway.
+// SessionEnd hook. One job: final transcript flush so the session tail
+// isn't dropped. No retrieval, no cap-check (no next turn to read it). On
+// any error: silent exit.
 
 import { readFileSync } from 'node:fs';
 import { openStore } from '../lib/store.js';

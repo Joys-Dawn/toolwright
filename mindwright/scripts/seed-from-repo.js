@@ -1,21 +1,10 @@
 #!/usr/bin/env node
-// Seed short-term memory so the next /mindwright:dream has material to
-// consolidate. This is the ONE manual seeding entrypoint and it ALWAYS pulls
-// every source — transcript history is not optional, it is the whole point of
-// seeding:
-//   - CLAUDE.md (project root only; --include-ancestors also walks parent dirs)
-//   - README.md (root)
-//   - Claude Code's native per-project memory (~/.claude/projects/<cwd>/memory)
-//   - Conversation transcript history (~/.claude/projects/<cwd>/*.jsonl) via
-//     the bounded, resumable lib/seed-loop.js — every pre-install transcript
-//     (a session with no offsets row; the current live session is skipped so
-//     its content is never double-ingested).
+// The single manual seeding entrypoint: seeds short-term memory so the next
+// /mindwright:dream has material to consolidate. Always pulls every source —
+// CLAUDE.md, README.md, native per-project memory, and transcript history.
 //
-// Each item lands as a `short` tier row with kind="seed". The consolidator
-// treats them like any other short-term content during dream. Idempotent:
-// markdown/native re-runs skip any source already represented by an active
-// short `seed` row; transcript seeding is resumable via the offsets table, so
-// re-running never re-ingests an already-seeded transcript.
+// Idempotent: markdown/native re-runs skip any source already represented by
+// an active short `seed` row; transcript seeding is resumable via offsets.
 
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
@@ -28,24 +17,14 @@ import { DAEMON_TICKET_MAX_AGE_MS } from '../lib/constants.js';
 import { depsInstalled } from '../lib/ready.js';
 import { maybeAutoInstall, installLogPath } from '../lib/auto-setup.js';
 
-// Re-exported so callers (and tests) reference a single source-of-truth
-// constant. The actual value lives in lib/constants.js#DAEMON_TICKET_MAX_AGE_MS;
-// drift between this script's freshness window and the daemon's would
-// silently change behavior, so the constant is shared.
+// Shared constant so this script's freshness window and the daemon's cannot
+// drift.
 export const TICKET_MAX_AGE_MS = DAEMON_TICKET_MAX_AGE_MS;
 
-// Find the calling Claude session's id from the most-recent ticket file
-// written by `hooks/session-start.js`. When the script is run inside a
-// live Claude session, returns that session's id — seeded rows then land
-// under the calling session and default `/mindwright:dream` scope picks
-// them up. When run outside Claude (no fresh ticket), returns null so
-// the caller falls back to the synthetic id.
-//
-// Delegates to the canonical ticket reader so freshness/parse rules don't
-// drift between this script and the MCP daemon. We do NOT filter by
-// claudePid here — seed-from-repo can be invoked manually outside the
-// SessionStart-rooted process tree (e.g., from `/mindwright:seed-from-repo`
-// where the script's parent isn't the Claude CLI).
+// Discover the calling Claude session's id from the most-recent ticket file
+// (null when run outside Claude → caller uses the synthetic fallback id). No
+// claudePid filter — this can be invoked manually outside any hook process
+// tree.
 export async function findCallingSessionId() {
   try {
     const ticket = await readActiveTicket();
@@ -57,17 +36,13 @@ export async function findCallingSessionId() {
 
 const FALLBACK_SEED_SESSION_ID = 'seed-from-repo';
 
-// The user-facing "what to do next" line. Pure + exported so the messaging
-// contract (the four total/dropped/skipped cases) is independently
-// unit-testable instead of buried in a 3-level nested ternary with an
-// interleaved comment (best-practices-4). Guard-style: one return per case.
+// The user-facing "what to do next" line. Pure + exported so the four
+// total/dropped/skipped cases are independently unit-testable.
 export function describeNextStep({ total, droppedUnderCallingSession, skippedFiles, transcriptRows = 0 }) {
-  // Transcript history seeds under each transcript's ORIGINAL session id, not
-  // the calling session — so a default session-scoped dream would skip it.
-  // Whenever any transcript rows landed, the only guidance that consolidates
-  // everything (repo + native + history, across many session ids) is the
-  // documented bootstrap full drain: scope="all". This takes precedence over
-  // the session-scoped hints below.
+  // Transcript history seeds under each transcript's ORIGINAL session id, so
+  // a default session-scoped dream would skip it — when any landed, only
+  // scope="all" consolidates everything. Takes precedence over the
+  // session-scoped hints below.
   if (transcriptRows > 0) {
     return `Run /mindwright:dream with scope="all" to consolidate everything seeded ` +
       `(repo + native memory + ${transcriptRows} row(s) from your project's transcript history) ` +
@@ -81,13 +56,9 @@ export function describeNextStep({ total, droppedUnderCallingSession, skippedFil
     return `No live Claude session detected; rows landed under "${FALLBACK_SEED_SESSION_ID}". From a Claude session, run /mindwright:dream and tell it to use scope="all" so this batch is included.`;
   }
   if (skippedFiles > 0) {
-    // Nothing NEW inserted because every source already has an un-drained
-    // short seed row. By design the guard skips a whole file rather than
-    // re-chunking edits (seed-from-repo/SKILL.md), so any edits made since
-    // those rows were first seeded are NOT captured yet. Say that
-    // explicitly — "All seed sources are already present" masked silent
-    // non-capture of edits a user just made and re-ran to capture — while
-    // still pointing at the actionable consolidation step.
+    // The guard skips a whole file rather than re-chunking edits, so edits
+    // made since those rows were first seeded are NOT captured yet — say so
+    // explicitly while still pointing at the consolidation step.
     return `${skippedFiles} source file(s) already have un-consolidated short-term seed rows and were skipped; any edits made to them since they were first seeded are NOT captured yet. Run /mindwright:dream to consolidate the existing rows, then re-run /mindwright:seed-from-repo to pick up edited files.`;
   }
   return 'No seed material found.';
@@ -103,15 +74,10 @@ function readIfExists(path) {
 }
 
 export function collectClaudeMdAncestry(root, { includeAncestors = false } = {}) {
-  // Collect CLAUDE.md at `root`. With includeAncestors=true, also walks up the
-  // parent chain to the filesystem root and includes any CLAUDE.md found along
-  // the way (matching Claude Code's own ancestor-lookup behavior).
-  //
-  // Default is project-root-only because ancestor walking would pull in
-  // ~/.claude/CLAUDE.md (the user's global config — typically holds personal
-  // preferences, account handles, machine details). Those facts do not belong
-  // in a single project's mindwright DB. Opt in explicitly when the project
-  // legitimately depends on monorepo-level CLAUDE.md.
+  // Default is project-root-only: ancestor walking would pull in
+  // ~/.claude/CLAUDE.md (the user's global config — personal preferences,
+  // account handles, machine details), which doesn't belong in a single
+  // project's DB. Opt in via includeAncestors for monorepo-level CLAUDE.md.
   const found = [];
   let cur = resolve(root);
   while (true) {
@@ -126,33 +92,25 @@ export function collectClaudeMdAncestry(root, { includeAncestors = false } = {})
   return found;
 }
 
-// Prefix of a source_ref used for the idempotency guard. Markdown sources
-// emit `<path>#section-<N>` (multiple rows per file, N varies with the
-// byte-budget split) so the stable per-file key is everything before
-// `#section-`. Native-memory rows emit a single `memory:<file>` token with
-// no section suffix — that whole token is the key. Matching on this prefix
-// (rather than the consolidated long-term provenance, which retainFact
-// rewrites to `drain:<id>`) lets a re-run detect "this file is already
-// seeded and not yet drained" and skip it wholesale.
+// Stable per-file key for the idempotency guard: markdown emits
+// `<path>#section-<N>` (N varies with the byte-budget split) so the key is
+// everything before `#section-`; native-memory's `memory:<file>` token is
+// itself the key. Matching this short-tier prefix (not the long-term
+// provenance, which retainFact rewrites to `drain:<id>`) lets a re-run skip
+// a file that is already seeded and not yet drained.
 function sourceRefPrefix(sourceRef) {
   const i = sourceRef.indexOf('#section-');
   return i === -1 ? sourceRef : sourceRef.slice(0, i);
 }
 
-// Hard-split a single block that exceeds maxBytes on its own. Used as a
-// last-resort fallback when neither heading nor blank-line splits respect the
-// budget — without this a 100 KB blank-line-free section would land in
-// entries.content unchunked and silently overflow the embedder's 8192-token
-// context window, embedding only the prefix and degrading recall on the tail.
+// Last-resort split for a block that exceeds maxBytes with no heading/blank
+// line to split on — without it an oversized section overflows the
+// embedder's context window, embedding only its prefix.
 //
-// Walks UTF-16 *code points* (iterates the string with Array.from so an
-// astral-plane codepoint — emoji, rare CJK — comes out as one element rather
-// than a surrogate pair) and accumulates by their UTF-8 byte length. A naive
-// slice(i, i + maxBytes) would (a) treat UTF-16 code units as the budget
-// (a CJK char is 1 code unit but 3 UTF-8 bytes — 4000 code units = up to
-// 12000 bytes) and (b) split a surrogate pair, leaving lone surrogates that
-// the embedder encodes as U+FFFD replacement chars. Both bugs are real for
-// non-English content, even though typical Latin-only docs never hit them.
+// Iterates codepoints (Array.from, so an astral-plane char stays one
+// element) and accumulates by UTF-8 byte length. A naive slice would budget
+// by UTF-16 code units (a CJK char is 1 unit but 3 UTF-8 bytes) and could
+// split a surrogate pair into lone surrogates the embedder maps to U+FFFD.
 function hardSplitBlock(blk, maxBytes) {
   const out = [];
   const codepoints = Array.from(blk);
@@ -160,9 +118,8 @@ function hardSplitBlock(blk, maxBytes) {
   let bufBytes = 0;
   for (const cp of codepoints) {
     const cpBytes = Buffer.byteLength(cp, 'utf8');
-    // A single codepoint above the budget can't be split further — emit it
-    // alone (oversized by at most 3 bytes for a 4-byte astral codepoint) so
-    // the loop makes forward progress and no content is dropped.
+    // A single codepoint over budget can't be split — emit it alone so the
+    // loop makes forward progress and no content is dropped.
     if (cpBytes > maxBytes) {
       if (buf.length) { out.push(buf); buf = ''; bufBytes = 0; }
       out.push(cp);
@@ -193,10 +150,9 @@ export function splitMarkdownSections(body, maxBytes = 4000) {
       continue;
     }
     // Long section — split on blank lines, accumulate up to maxBytes.
-    // Pre-expand any individually-oversized block via hardSplitBlock so the
-    // accumulator never has to hold a chunk that already breaches the budget
-    // on its own. Without this, a section that contains no blank lines
-    // (e.g. a single giant code block) would emit one over-budget chunk.
+    // Pre-expand individually-oversized blocks via hardSplitBlock so the
+    // accumulator never holds an already-over-budget chunk (e.g. a section
+    // that is one giant blank-line-free code block).
     const rawBlocks = trimmed.split(/\n\s*\n/);
     const blocks = [];
     for (const b of rawBlocks) {
@@ -222,11 +178,9 @@ export function splitMarkdownSections(body, maxBytes = 4000) {
 }
 
 async function main() {
-  // Dependency gate: openStore() is the only native-dep import in this
-  // script. A marketplace plugin copy (or a post-update node_modules wipe)
-  // has no better-sqlite3, so check before importing it, kick off the
-  // single-flight background install, and return a structured "not ready"
-  // result instead of crashing at ESM load.
+  // Dependency gate: check before importing openStore() (the only native-dep
+  // import) so a deps-less copy returns a structured "not ready" result
+  // instead of crashing at ESM load.
   if (!depsInstalled()) {
     maybeAutoInstall();
     const msg = `mindwright native dependencies not installed yet — a one-time background install was triggered (log: ${installLogPath()}). Re-run /mindwright:seed-from-repo once it completes.`;
@@ -254,20 +208,16 @@ async function main() {
     const claudeMds = collectClaudeMdAncestry(root, { includeAncestors });
     claudeMdCount = claudeMds.length;
     const readme = readIfExists(join(root, 'README.md'));
-    // Native per-project memory is an ALWAYS-INCLUDED source (not a fallback):
-    // these LLM-written notes re-distill through consolidation like any other
-    // seed input. collectNativeMemory() returns [] when the project has no
-    // native-memory tree (the common fresh-install case).
+    // Native per-project memory is always included (not a fallback);
+    // collectNativeMemory() returns [] when the project has no such tree.
     const nativeMemory = collectNativeMemory();
     nativeMemoryFiles = nativeMemory.length;
 
-    // Idempotency guard: a source file is skipped wholesale if ANY active
-    // short `seed` row already exists under its source_ref prefix. We accept
-    // staleness (an edited file is not re-chunked until its current rows are
-    // drained) rather than diffing content on every run — the next dream
-    // refreshes long-term anyway. Long-term rows can't satisfy this check:
-    // retainFact rewrites their source_ref to `drain:<id>`, erasing the
-    // origin path — so the guard is deliberately short-tier only.
+    // Idempotency guard: skip a source file wholesale if ANY active short
+    // `seed` row exists under its source_ref prefix. Accept staleness rather
+    // than diffing content every run — the next dream refreshes long-term
+    // anyway. Short-tier only: retainFact rewrites long-term source_ref to
+    // `drain:<id>`, erasing the origin path.
     const seededPrefixes = new Set(
       store.db
         .prepare(
@@ -284,9 +234,8 @@ async function main() {
       ...(readme ? [{ path: join(root, 'README.md'), body: readme }] : []),
     ];
 
-    // Single transaction across all inserts: better-sqlite3 in WAL mode pays
-    // one fsync per implicit-txn insert, so 30-100 separate inserts is
-    // 30-100 fsyncs. Wrapping them collapses to one.
+    // Single transaction across all inserts: WAL mode pays one fsync per
+    // implicit-txn insert, so wrapping collapses 30-100 fsyncs to one.
     const seedTxn = store.db.transaction(() => {
       for (const { path, body } of markdownSources) {
         if (seededPrefixes.has(path)) { skippedFiles++; continue; }
@@ -304,10 +253,8 @@ async function main() {
       }
 
       // Native-memory rows carry an event_ts (frontmatter date or file
-      // mtime) — the "when this memory actually happened" provenance the
-      // recency invariant ranks on. CLAUDE.md/README sections stay NULL
-      // event_ts (no transcript event-time → COALESCE makes them behave
-      // exactly as today).
+      // mtime) the recency invariant ranks on; CLAUDE.md/README sections
+      // stay NULL event_ts.
       for (const { content, eventTs, sourceRef } of nativeMemory) {
         if (seededPrefixes.has(sourceRefPrefix(sourceRef))) {
           skippedFiles++;
@@ -326,16 +273,11 @@ async function main() {
     });
     seedTxn();
 
-    // Transcript history — ALWAYS, not optional. Reuses the bounded,
-    // resumable loop: it enumerates ~/.claude/projects/<cwd>/*.jsonl,
-    // skips any session that already has an offsets row (the live session,
-    // or one a prior run finished — never double-ingested), and seeds the
-    // rest as short kind:'seed' rows under their original session ids.
-    // No `consolidate` is injected: this is a manual skill, so it only
-    // ingests; the user runs /mindwright:dream next (no surprise background
-    // `claude --bg` consolidator spawned from a manual command). Best-effort:
-    // a transcript-side failure must not lose the markdown/native rows just
-    // committed, nor crash the skill.
+    // Transcript history — always, not optional. The resumable loop skips
+    // any session that already has an offsets row (never double-ingested).
+    // No `consolidate` injected: a manual skill only ingests, so it does not
+    // spawn a surprise background consolidator. Best-effort: a
+    // transcript-side failure must not lose the just-committed rows or crash.
     try {
       transcriptSummary = await runSeedLoop({ store });
     } catch (e) {
@@ -347,9 +289,8 @@ async function main() {
   }
 
   const readmePresent = existsSync(join(root, 'README.md'));
-  // When seeded under the calling session, default `/mindwright:dream`
-  // (scope=session) drains them; otherwise the user needs scope=all to
-  // include the fallback session id.
+  // Seeded under the calling session ⇒ default scope=session dream drains
+  // them; otherwise the user needs scope=all for the fallback session id.
   const droppedUnderCallingSession = !!callingSessionId;
   const transcriptRows = transcriptSummary.rowsInserted || 0;
   const nextStep = describeNextStep({
@@ -382,8 +323,8 @@ async function main() {
   process.stdout.write(JSON.stringify(result) + '\n');
 }
 
-// Only invoke main() when this file is executed directly (CLI), not when
-// imported by unit tests that pull the helpers out.
+// Only invoke main() when executed directly (CLI), not when a test imports
+// the helpers.
 const invokedDirectly =
   process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (invokedDirectly) {

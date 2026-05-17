@@ -1,21 +1,10 @@
 #!/usr/bin/env node
-// PreToolUse hook. Most complex of the five.
-//
-//   1) Read transcript [stored offset, EOF], chunk it, write all rows in a
-//      single transaction, advance the offset. Writes are unconditional.
-//   2) Identify the most-recent thinking block in the new chunks. Apply the
-//      novelty gate (DESIGN.md "Locked design decisions" #4):
-//         cosine(thinking_emb, meta:last_retrieval_query_emb:<sessionId>) < NOVELTY_THRESHOLD
-//      First firing of a session always passes (no prior embedding).
-//      When the gate passes, run retrieval with length-bucketed K and
-//      emit hookSpecificOutput.additionalContext. Otherwise return {}.
-//   3) Per-session dedup: every retrieval path reads
-//      meta:injected_fact_ids:<sessionId>, passes its contents as
-//      excludeIds, and appends the just-emitted ids after the response.
-//      The set is FIFO-trimmed at INJECTED_FACT_IDS_CAP. SessionStart
-//      clears it so a fresh boot starts cold.
-//
-// On any error this hook emits {} so the tool call is never blocked.
+// PreToolUse hook. (1) Read transcript [offset, EOF], chunk, write all rows
+// in one transaction, advance offset (unconditional). (2) Find the latest
+// thinking block, apply the novelty gate, and on pass run retrieval with
+// length-bucketed K. (3) Per-session dedup via injected_fact_ids, FIFO-
+// trimmed at INJECTED_FACT_IDS_CAP, cleared by SessionStart. On any error
+// emit {} so the tool call is never blocked.
 
 import { readFileSync } from 'node:fs';
 import { openStore } from '../lib/store.js';
@@ -43,19 +32,17 @@ function lastThinkingChunk(chunks) {
   return null;
 }
 
-// Pick top-K based on thinking-block length. Short blocks get fewer hits to
-// keep injected context tight; long blocks get more hits to cover more of
-// the agent's mental surface.
+// Top-K by thinking-block length: short blocks get fewer hits to keep
+// injected context tight; long blocks get more to cover more surface.
 export function topKForLength(len) {
   if (len <= LENGTH_BUCKET_SMALL) return TOP_K_BY_LENGTH.small;
   if (len <= LENGTH_BUCKET_MID) return TOP_K_BY_LENGTH.mid;
   return TOP_K_BY_LENGTH.large;
 }
 
-// Novelty gate. Returns true when retrieval should fire. No prior embedding
-// (first PreToolUse of a session, or DB-cleared on resume) → fire. Cosine
-// strictly less than threshold → fire. Length mismatch on the stored row
-// → fire (defensive: a malformed meta row shouldn't wedge retrieval silent).
+// Novelty gate. Fire when there's no prior embedding (first PreToolUse, or
+// cleared on resume), or cosine strictly below threshold. On any error fire
+// (a malformed meta row must not wedge retrieval permanently silent).
 export function noveltyPasses(prev, curr) {
   if (!prev) return true;
   try {
@@ -102,19 +89,17 @@ export async function main() {
       return;
     }
     const chunks = flushed.chunks;
-    // Stash the row ids the chunker just wrote so retrieval can exclude
-    // them — the just-flushed thinking block IS the query; without this
-    // filter it scores ~1.0 against itself via bm25/temporal and dominates
-    // its own recall context.
+    // Exclude the rows just written: the just-flushed thinking block IS the
+    // query, so without this it scores ~1.0 against itself and dominates its
+    // own recall context.
     const justFlushedIds = flushed.insertedIds || [];
 
     // Step 2 — identify the latest thinking block.
     const thinking = lastThinkingChunk(chunks);
     if (!thinking) return;
 
-    // Step 3 — embed the thinking block. Pipe down → no embed → skip
-    // retrieval. (The chunk row is still in entries; the sweeper will
-    // backfill the embedding next time the daemon is live.)
+    // Step 3 — embed the thinking block. Pipe down → skip retrieval (the row
+    // is still in entries; the sweeper backfills the embedding later).
     const { timeoutPromise: overallTimeout, isTimedOut } = createTimeoutBudget();
     let promptEmb = null;
     try {
@@ -129,10 +114,9 @@ export async function main() {
       promptEmb = null;
     }
     if (!promptEmb) {
-      // Daemon-down: embed returned null without timing out → MCP daemon is
-      // unreachable. Surface a once-per-session warning so the user knows
-      // recall is degraded for the rest of this session. Fall through to the
-      // finally so additionalContext is emitted to Claude.
+      // Daemon-down: embed returned null without timing out → model daemon
+      // unreachable. Surface a once-per-session degraded-recall warning;
+      // fall through to the finally so it's emitted to Claude.
       if (!isTimedOut()) {
         const warning = emitDaemonDownWarningIfFirst(store, sessionId);
         if (warning) additionalContext = warning;
@@ -146,14 +130,14 @@ export async function main() {
     if (!noveltyPasses(prevEmb, promptEmb)) {
       return;
     }
-    // Persist the new embedding BEFORE retrieval so a retrieval failure
-    // still updates the gate state (otherwise a slow rerank could leave
-    // last_query_emb stale and re-trigger on the same thinking block).
+    // Persist the new embedding BEFORE retrieval so a retrieval failure still
+    // advances the gate (else a slow rerank leaves last_query_emb stale and
+    // re-triggers on the same thinking block).
     try { store.setLastQueryEmb(sessionId, promptEmb); } catch (e) {
       logHookError('pre-tool-use', 'setLastQueryEmb failed', e);
     }
 
-    // Step 5 — retrieval. Length-bucket K. Dedup via injected_fact_ids.
+    // Step 5 — retrieval.
     const result = await fetchRecallContext({
       store,
       sessionId,
