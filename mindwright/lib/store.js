@@ -23,8 +23,14 @@
 // JS `Number` as float64 which sqlite-vec rejects. Pass rowids as `BigInt`
 // (smoke-tested 2026-05-12).
 
-import Database from 'better-sqlite3';
-import * as sqliteVec from 'sqlite-vec';
+// Native deps are resolved from the persistent ${CLAUDE_PLUGIN_DATA}/
+// node_modules via lib/native-require.js (see that file), NOT a bare import
+// (which would resolve against the ephemeral PLUGIN_ROOT that has no
+// node_modules). Top-level await is safe: store.js is only ever reached by a
+// dynamic import() AFTER the readiness gate, so deps are present by here.
+import { loadNative, loadNativeDefault } from './native-require.js';
+const Database = await loadNativeDefault('better-sqlite3');
+const sqliteVec = await loadNative('sqlite-vec');
 import { readdirSync, readFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { dbPath, migrationsDir } from './paths.js';
@@ -404,6 +410,18 @@ class Store {
   getOffset(sessionId) {
     const row = this.db.prepare('SELECT last_read_byte FROM offsets WHERE session_id = ?').get(sessionId);
     return row ? row.last_read_byte : 0;
+  }
+
+  // EXISTENCE, not value. getOffset() conflates "no row" and "row with
+  // last_read_byte = 0" (both return 0) — so it cannot answer "has mindwright
+  // ever made an offset decision for this session?". The trigger-agnostic
+  // offset-init latch (lib/offset-init.js) needs exactly that: a fresh-opt-in
+  // session is deliberately left at offset 0, and the EOF-default backstop
+  // must fire once per UNKNOWN session and never again — value-0 vs no-row is
+  // the only thing that distinguishes "already initialized to 0 on purpose"
+  // from "never seen". Returns true iff an offsets row exists for sessionId.
+  hasOffsetRow(sessionId) {
+    return !!this.db.prepare('SELECT 1 FROM offsets WHERE session_id = ?').get(sessionId);
   }
 
   setOffset(sessionId, byte) {

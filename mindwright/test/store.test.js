@@ -386,6 +386,35 @@ test('offsets get/set are per-session', () => {
   });
 });
 
+test('hasOffsetRow is false before any setOffset and true after (existence, not value)', () => {
+  withStore((store) => {
+    // The offset-init latch (lib/offset-init.js) depends on this distinction:
+    // before any decision there is NO row; after a decision there is one,
+    // regardless of its value.
+    assert.equal(store.hasOffsetRow('sess-x'), false);
+    store.setOffset('sess-x', 4242);
+    assert.equal(store.hasOffsetRow('sess-x'), true);
+    // Per-session, like get/setOffset — an unrelated session is still rowless.
+    assert.equal(store.hasOffsetRow('sess-y'), false);
+  });
+});
+
+test('hasOffsetRow is true for a deliberately value-0 row — the case getOffset cannot distinguish', () => {
+  withStore((store) => {
+    // The exact ambiguity the latch exists to resolve: a fresh
+    // MINDWRIGHT_SEED_TRANSCRIPT session is left at offset 0 ON PURPOSE.
+    // getOffset() returns 0 for BOTH "no row" and this deliberate value-0
+    // row, so it cannot gate exactly-once; hasOffsetRow() must.
+    assert.equal(store.hasOffsetRow('sess-0'), false);
+    assert.equal(store.getOffset('sess-0'), 0); // no row → 0
+
+    store.setOffset('sess-0', 0); // deliberate value-0 latch row
+
+    assert.equal(store.getOffset('sess-0'), 0); // STILL 0 — indistinguishable via getOffset
+    assert.equal(store.hasOffsetRow('sess-0'), true); // but the row now exists
+  });
+});
+
 test('pendingEmbedSweep returns rows with no vec_index counterpart', () => {
   withStore((store) => {
     const e = fixedEmbedding(3);

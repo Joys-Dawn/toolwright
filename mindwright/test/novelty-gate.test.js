@@ -1,11 +1,11 @@
 // Tests for the PreToolUse novelty gate and the length-bucketed top-K
-// helper. Both live in hooks/pre-tool-use.js and are exported specifically
-// so the gate logic can be unit-tested without spawning the hook
-// subprocess (which reads stdin and would block node:test).
+// helper. Both live in hooks/pre-tool-use-impl.js and are exported
+// specifically so the gate logic can be unit-tested without spawning the
+// hook subprocess (which reads stdin and would block node:test).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { noveltyPasses, topKForLength } from '../hooks/pre-tool-use.js';
+import { noveltyPasses, topKForLength } from '../hooks/pre-tool-use-impl.js';
 import {
   NOVELTY_THRESHOLD,
   LENGTH_BUCKET_SMALL,

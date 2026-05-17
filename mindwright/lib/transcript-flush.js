@@ -17,8 +17,43 @@
 // should NOT crash the session over a flush failure.
 
 import { chunkStreaming } from './chunker.js';
+import { initOffsetIfUnknown } from './offset-init.js';
+import { logHookError } from './hook-log.js';
 
 export function flushTranscript({ store, sessionId, transcriptPath }) {
+  // Trigger-agnostic offset-init backstop (behavior-1). MUST run before the
+  // getOffset() below: SessionStart is dormant on a deps-less first run, so on
+  // the documented fresh-install flow it never made the offset decision — and
+  // without this the first deps-present flush would see getOffset()===0 and
+  // chunk the ENTIRE pre-mindwright transcript into short-term. initOffsetIfUnknown
+  // commits its setOffset SYNCHRONOUSLY (every write is before its single
+  // await — see its synchronous-core contract), so the offset is already
+  // correct on the getOffset() line even though flushTranscript is sync and
+  // does not await here; the returned Promise carries only the best-effort
+  // resumed-session notice. Idempotent via the hasOffsetRow existence latch ⇒
+  // an immediate no-op on every already-tracked session ⇒ byte-identical to
+  // pre-Step-7 on the steady-state live-capture path. FULLY GUARDED: a backstop
+  // failure must NEVER crash the flush — the never-throws → {error} contract is
+  // this helper's load-bearing promise to all five hook callers. (An async
+  // fn surfaces a sync throw as a rejected Promise, not a sync throw, so the
+  // .then onRejected is what actually swallows e.g. a fake/missing-method
+  // store; the try/catch is belt-and-suspenders.)
+  try {
+    const p = initOffsetIfUnknown({ store, sessionId, transcriptPath });
+    if (p && typeof p.then === 'function') {
+      p.then(
+        (r) => {
+          if (r && r.message) {
+            try { logHookError('transcript-flush', 'offset-init notice', r.message); } catch { /* stderr gone */ }
+          }
+        },
+        () => { /* notice is best-effort; the correctness setOffset already committed synchronously */ },
+      );
+    }
+  } catch {
+    /* backstop is best-effort; the flush proceeds from whatever offset exists */
+  }
+
   let prevOffset = 0;
   let toolMap;
   try {

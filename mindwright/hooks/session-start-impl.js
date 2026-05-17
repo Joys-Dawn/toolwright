@@ -2,23 +2,26 @@
 // SessionStart hook. Three jobs:
 //   1) Write a ticket file binding this Claude CLI process to its mindwright
 //      session so the in-process MCP daemon can find its session id.
-//   2) Initialize the per-session transcript offset. For an unknown session
-//      (no offset row yet) we default to current EOF so we don't retroactively
-//      ingest pre-mindwright history. BUT — if the transcript already
-//      contains substantial content, that probably means mindwright is
-//      meeting a `claude --resume`d session for the first time; we warn the
-//      user explicitly so they know prior content was skipped. Users who
-//      want the historical content ingested can set
-//      `MINDWRIGHT_SEED_TRANSCRIPT=1` before launching; we'll leave the
-//      offset at 0 and let the first PreToolUse pass chunk from the top.
+//   2) Initialize the per-session transcript offset via the shared,
+//      trigger-agnostic lib/offset-init.js#initOffsetIfUnknown. For an unknown
+//      session it defaults to current EOF so we don't retroactively ingest
+//      pre-mindwright history (unless MINDWRIGHT_SEED_TRANSCRIPT=1), and warns
+//      when meeting a `claude --resume`d session for the first time. The same
+//      helper backstops the first transcript flush, so the decision is made
+//      exactly once regardless of which entrypoint first sees the session
+//      (behavior-1) — critical because this hook is dormant on a deps-less
+//      first run and would otherwise never make the decision at all. An
+//      explicit MINDWRIGHT_SEED_TRANSCRIPT=1 on an ALREADY-tracked session
+//      (behavior-8) is handled here only — never in the shared helper, since
+//      it is unsafe to share with the per-flush backstop (see the inline
+//      note); SessionStart runs once per session, so the reset is safe here.
 //   3) Emit a short status line via `additionalContext` so the agent sees
 //      whether mindwright is warm or degraded.
 //
 // On any error this hook exits without injecting context. Mindwright is opt-in
 // memory; a failure here must not block the session.
 
-import { readFileSync, statSync, existsSync, createReadStream } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { openStore } from '../lib/store.js';
 import { pipePath, embedderCached } from '../lib/paths.js';
 import { pluralize } from '../lib/grammar.js';
@@ -27,39 +30,10 @@ import { logHookError } from '../lib/hook-log.js';
 import { getRolePromptsFor } from '../lib/role-prompts.js';
 import { writeSidecar } from '../lib/role-sidecar.js';
 import { maybeAutoSeed } from '../lib/seed-trigger.js';
+import { initOffsetIfUnknown } from '../lib/offset-init.js';
 import { SELF_RECALL_RULE } from '../lib/constants.js';
 
-// Any prior transcript longer than this triggers the "first time meeting a
-// resumed session" warning. A handful of empty turns produces less than this;
-// anything past it is meaningful prior conversation.
-const RESUMED_SESSION_WARN_BYTES = 4096;
-
-// Count newline-delimited records in a JSONL transcript. Streams the file
-// so we don't allocate a multi-MB buffer for what is conceptually a single
-// integer — this helper only fires when size > RESUMED_SESSION_WARN_BYTES,
-// so the transcripts it sees are always at least 4 KB and frequently much
-// larger. Best-effort: any read failure resolves to null and the warning
-// falls back to bytes only.
-export function countTranscriptRecords(transcriptPath) {
-  return new Promise((resolve) => {
-    let n = 0;
-    let settled = false;
-    const stream = createReadStream(transcriptPath);
-    stream.on('data', (chunk) => {
-      for (let i = 0; i < chunk.length; i++) {
-        if (chunk[i] === 0x0a) n++;
-      }
-    });
-    stream.on('end', () => {
-      if (!settled) { settled = true; resolve(n); }
-    });
-    stream.on('error', () => {
-      if (!settled) { settled = true; resolve(null); }
-    });
-  });
-}
-
-async function main() {
+export async function main() {
   let input;
   try {
     input = JSON.parse(readFileSync(0, 'utf8'));
@@ -84,59 +58,50 @@ async function main() {
 
   try {
     if (sessionId) {
-      const existing = store.getOffset(sessionId);
-      if (transcriptPath && existsSync(transcriptPath)) {
-        try {
+      try {
+        // Trigger-agnostic offset init (behavior-1). The decision + the
+        // resumed-session warning now live in lib/offset-init.js so the
+        // first transcript flush can run the SAME logic when this hook was
+        // dormant on a deps-less first run. Idempotent via the hasOffsetRow
+        // existence latch: an immediate no-op on an already-tracked session,
+        // so SessionStart (eager) and the flush backstop never disagree or
+        // double-warn. Never throws by contract; the guard is belt-and-
+        // suspenders so a bookkeeping failure can't block the session.
+        const r = await initOffsetIfUnknown({ store, sessionId, transcriptPath });
+        if (r.message) initOffsetMessage = r.message;
+
+        // SessionStart-ONLY: opt-in re-ingest of an ALREADY-tracked session
+        // (behavior-8). initOffsetIfUnknown above is gated on !hasOffsetRow —
+        // it MUST be, because it also backstops the per-flush transcript path,
+        // where resetting a tracked session's offset to 0 on every flush would
+        // be an unbounded re-ingest/duplicate loop. But an explicit
+        // MINDWRIGHT_SEED_TRANSCRIPT=1 on a session mindwright already tracked
+        // is a deliberate user request to re-seed the older content, and it is
+        // safe HERE precisely because SessionStart fires exactly once per
+        // session. So this branch lives in this once-per-session entrypoint
+        // only, never in the shared helper. (Preserves the original
+        // session-start opt-in-on-tracked behavior; the Cluster-A plan
+        // requires "SessionStart behavior preserved". `existing > 0`
+        // distinguishes a genuinely-tracked session from a fresh-opt-in
+        // value-0 latch row, exactly as the original code did.)
+        if (
+          !r.initialized &&
+          transcriptPath &&
+          process.env.MINDWRIGHT_SEED_TRANSCRIPT === '1' &&
+          existsSync(transcriptPath) &&
+          store.hasOffsetRow(sessionId)
+        ) {
           const size = statSync(transcriptPath).size;
-          const optIn = process.env.MINDWRIGHT_SEED_TRANSCRIPT === '1';
-          if (optIn && size > 0) {
-            // Honor MINDWRIGHT_SEED_TRANSCRIPT regardless of whether
-            // mindwright has tracked this session before. Silently ignoring
-            // an explicit opt-in on already-tracked sessions used to leave
-            // users restarting Claude over and over wondering why their
-            // historical content never landed. Two branches:
-            //   - Fresh session (offset=0): just set the seed message and
-            //     leave offset at 0; the next PreToolUse pass chunks the
-            //     whole file from the top.
-            //   - Tracked session (offset>0): reset offset to 0 to re-ingest
-            //     prior content. Warn about likely duplicates — the next
-            //     /mindwright:dream's supersede-candidate detection
-            //     deduplicates semantically.
-            if (existing > 0) {
-              store.setOffset(sessionId, 0);
-              initOffsetMessage =
-                `MINDWRIGHT_SEED_TRANSCRIPT=1 — re-ingesting prior transcript from byte 0 (was ${existing}). ` +
-                `This may duplicate already-chunked turns; /mindwright:dream's supersede check deduplicates them.`;
-            } else {
-              initOffsetMessage =
-                `MINDWRIGHT_SEED_TRANSCRIPT=1 — ingesting prior transcript (${size} bytes) on next tool call`;
-            }
-          } else if (existing === 0) {
-            store.setOffset(sessionId, size);
-            if (size > RESUMED_SESSION_WARN_BYTES) {
-              // Resumed session that mindwright is meeting for the first
-              // time. Be explicit so the user knows their pre-existing
-              // history was deliberately skipped and how to ingest it.
-              // Record count gives the user a much better intuition than
-              // a raw byte count for "how much conversation am I about to
-              // miss / ingest?" — JSONL has one record per line.
-              const recordCount = await countTranscriptRecords(transcriptPath);
-              const sizeDesc = recordCount == null
-                ? `${size} bytes`
-                : `${size} bytes / ~${recordCount} records`;
-              initOffsetMessage =
-                `note: this transcript already contains ${sizeDesc} from before mindwright was tracking it. ` +
-                `Set MINDWRIGHT_SEED_TRANSCRIPT=1 and restart this session to ingest the prior content; ` +
-                `otherwise only new turns from here on are chunked into short-term.`;
-            }
-            // No message for the silent fresh-session case — initializing the
-            // offset to EOF is internal bookkeeping with no value to Claude or
-            // the user. Stays out of additionalContext so context budget
-            // isn't burned on debug info.
+          const existing = store.getOffset(sessionId);
+          if (size > 0 && existing > 0) {
+            store.setOffset(sessionId, 0);
+            initOffsetMessage =
+              `MINDWRIGHT_SEED_TRANSCRIPT=1 — re-ingesting prior transcript from byte 0 (was ${existing}). ` +
+              `This may duplicate already-chunked turns; /mindwright:dream's supersede check deduplicates them.`;
           }
-        } catch {
-          // best-effort; offset stays whatever it was if stat fails
         }
+      } catch (e) {
+        logHookError('session-start', 'offset init failed', e);
       }
       longCount = store.countByTier().long || 0;
 
@@ -228,16 +193,4 @@ async function main() {
       },
     }) + '\n'
   );
-}
-
-// Only run main() when this file is invoked directly by Claude Code (as a
-// hook script), not when imported for unit testing — the import path
-// would otherwise trigger a stdin read that blocks the test runner.
-const invokedDirectly =
-  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (invokedDirectly) {
-  main().catch((err) => {
-    logHookError('session-start', 'crashed', err);
-    process.stdout.write('{}\n');
-  });
 }

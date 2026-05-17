@@ -15,7 +15,6 @@
 // On any error, exit with `{}` so the session isn't disrupted.
 
 import { readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 import { openStore } from '../lib/store.js';
 import { flushTranscript } from '../lib/transcript-flush.js';
 import { evaluateNudgeTriggers, nudgeReason, suggestScopeAll } from '../lib/nudge.js';
@@ -168,7 +167,7 @@ function handleCapCheck(store, sessionId) {
   }
 }
 
-async function main() {
+export async function main() {
   let input;
   try {
     input = JSON.parse(readFileSync(0, 'utf8'));
@@ -221,16 +220,4 @@ async function main() {
   }
 
   process.stdout.write('{}\n');
-}
-
-// Only run main() when this file is invoked directly by Claude Code (as a
-// hook script), not when imported for unit testing — the import path
-// would otherwise trigger a stdin read that blocks the test runner.
-const invokedDirectly =
-  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (invokedDirectly) {
-  main().catch((err) => {
-    logHookError('stop', 'crashed', err);
-    process.stdout.write('{}\n');
-  });
 }

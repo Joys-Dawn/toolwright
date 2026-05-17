@@ -14,11 +14,12 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { openStore } from '../lib/store.js';
 import { projectRoot } from '../lib/paths.js';
 import { collectNativeMemory } from '../lib/native-memory.js';
 import { readActiveTicket } from '../mcp/daemon-ticket.mjs';
 import { DAEMON_TICKET_MAX_AGE_MS } from '../lib/constants.js';
+import { depsInstalled } from '../lib/ready.js';
+import { maybeAutoInstall, installLogPath } from '../lib/auto-setup.js';
 
 // Re-exported so callers (and tests) reference a single source-of-truth
 // constant. The actual value lives in lib/constants.js#DAEMON_TICKET_MAX_AGE_MS;
@@ -202,6 +203,21 @@ export function splitMarkdownSections(body, maxBytes = 4000) {
 }
 
 async function main() {
+  // Dependency gate: openStore() is the only native-dep import in this
+  // script. A marketplace plugin copy (or a post-update node_modules wipe)
+  // has no better-sqlite3, so check before importing it, kick off the
+  // single-flight background install, and return a structured "not ready"
+  // result instead of crashing at ESM load.
+  if (!depsInstalled()) {
+    maybeAutoInstall();
+    const msg = `mindwright native dependencies not installed yet — a one-time background install was triggered (log: ${installLogPath()}). Re-run /mindwright:seed-from-repo once it completes.`;
+    process.stderr.write(msg + '\n');
+    process.stdout.write(
+      JSON.stringify({ ok: false, error: 'deps_not_installed', short_rows_inserted: 0, detail: msg }) + '\n',
+    );
+    return;
+  }
+  const { openStore } = await import('../lib/store.js');
   const root = projectRoot();
   const includeAncestors = process.argv.slice(2).includes('--include-ancestors');
   const callingSessionId = await findCallingSessionId();

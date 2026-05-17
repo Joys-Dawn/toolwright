@@ -504,6 +504,19 @@ test('behavior-1 regression: the auto-seed gate passes at SessionStart-time but 
       //     short row — exactly what happens before the first Stop (PreToolUse
       //     and Stop's own flush write still more). This is the REAL hook.
       const liveTranscript = writeTranscript(sb.dir, sessionId, [userRec('do the work')]);
+      // In production SessionStart runs before UPS and writes this session's
+      // offsets row (its offset-init); the prompt is then appended and the
+      // first flush chunks it. Replicate ONLY that offset-row effect — not by
+      // running the real session-start.js, which would also fire maybeAutoSeed
+      // and spawn the seed loop, polluting this gate-timing assertion. Without
+      // it, Step 7's behavior-1 backstop would (correctly) default this unknown
+      // session to EOF and the live flush would chunk nothing — that backstop
+      // is independently covered by offset-init/transcript-flush tests; here we
+      // only need short-term populated to prove a Stop-hosted gate is too late.
+      {
+        const seed = openStore();
+        try { seed.setOffset(sessionId, 0); } finally { seed.close(); }
+      }
       runHook('user-prompt-submit.js', {
         session_id: sessionId,
         transcript_path: liveTranscript,

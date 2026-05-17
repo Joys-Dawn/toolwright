@@ -27,14 +27,17 @@
  *     0.5 + i*0.01). Lets the server-roundtrip test run without ONNX.
  */
 
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  ListToolsRequestSchema,
-  CallToolRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
+// MCP SDK is resolved from the persistent ${CLAUDE_PLUGIN_DATA}/node_modules
+// via lib/native-require.js (see that file's header). The SDK is CJS, so the
+// symbols live on the module.exports object — loadNativeDefault() returns it.
+// Top-level await is safe: this impl module is only ever loaded AFTER the
+// readiness gate, through the MCP shim.
+import { loadNativeDefault } from '../lib/native-require.js';
+const { Server } = await loadNativeDefault('@modelcontextprotocol/sdk/server/index.js');
+const { StdioServerTransport } = await loadNativeDefault('@modelcontextprotocol/sdk/server/stdio.js');
+const { ListToolsRequestSchema, CallToolRequestSchema } =
+  await loadNativeDefault('@modelcontextprotocol/sdk/types.js');
 import { utimesSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 
 import { bindOwnSession } from './session-bind.mjs';
 import { startPipeServer } from './daemon-pipe.mjs';
@@ -46,7 +49,7 @@ import { pipePath as derivePipePath } from '../lib/paths.js';
 import { startSweeperLoop } from '../lib/sweeper-loop.js';
 
 const SERVER_NAME = 'mindwright';
-const SERVER_VERSION = '0.1.0';
+const SERVER_VERSION = '0.2.0';
 const SWEEPER_INTERVAL_MS = 60_000;
 const SWEEPER_BATCH = 50;
 // Periodic ticket-touch interval. Honors the liveness contract documented
@@ -89,7 +92,7 @@ async function resolveBinding() {
   return bindOwnSession();
 }
 
-async function main() {
+export async function main() {
   const { embedFn, rerankFn } = pickModelFns();
 
   // Open the writable store FIRST so migrations have run by the time tool
@@ -300,17 +303,4 @@ export async function sweepOnce(store, embedFn) {
       try { store.bumpEmbedFailure(pending[i].id); } catch { /* */ }
     }
   }
-}
-
-// Only invoke main() when this file is executed directly by Claude Code,
-// not when imported by unit tests (which import sweepOnce).
-const invokedDirectly =
-  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (invokedDirectly) {
-  main().catch((err) => {
-    process.stderr.write(
-      `[mindwright/mcp] fatal: ${err && err.stack ? err.stack : err && err.message ? err.message : err}\n`
-    );
-    process.exit(1);
-  });
 }

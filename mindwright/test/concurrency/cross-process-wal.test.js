@@ -60,6 +60,25 @@ function writeTranscript(dir, sessionId, recs) {
   return path;
 }
 
+// Pre-seed the offsets row exactly as SessionStart does in production before
+// any flush runs. Step 7 added a behavior-1 backstop to flushTranscript: an
+// UNKNOWN session (no offsets row) has its offset defaulted to EOF so
+// pre-mindwright history is not retroactively ingested. In production
+// SessionStart always runs first and writes the row, so the flush no-ops the
+// backstop and chunks normally. These concurrency tests drive flushes
+// directly without that precursor; the behavior-1 path itself is covered by
+// offset-init/transcript-flush tests. Here we exercise WAL serialization /
+// pipe-down row writes, so we put each session in the tracked-from-byte-0
+// steady state (row = 0 ⇒ backstop no-ops ⇒ chunk from the top).
+function seedTrackedFromZero(sessionId) {
+  const store = openStore();
+  try {
+    store.setOffset(sessionId, 0);
+  } finally {
+    store.close();
+  }
+}
+
 function runHookSync(name, input, projectRoot) {
   return spawnSync(
     process.execPath,
@@ -113,6 +132,7 @@ test('daemon_dies_mid_write: hook completes its write with embedding=NULL when p
       userRec('hello'),
       thinkingRec('x'.repeat(2500)), // large thinking block — would normally trigger retrieval via the novelty gate
     ]);
+    seedTrackedFromZero(sessionId);
     const res = await runHookAsync('pre-tool-use.js', {
       session_id: sessionId,
       transcript_path: transcriptPath,
@@ -365,6 +385,12 @@ test('second_peer_writes: two peer sessions writing concurrently both land with 
     // already covered by other tests; we don't need to re-litigate it here.
     const initStore = openStore();
     initStore.close();
+
+    // Both peers are tracked-from-0 (the production SessionStart precondition);
+    // without this Step 7's behavior-1 backstop would default each unknown
+    // session to EOF and neither flush would chunk anything.
+    seedTrackedFromZero('peerA');
+    seedTrackedFromZero('peerB');
 
     const { flushTranscript } = await import('../../lib/transcript-flush.js');
 

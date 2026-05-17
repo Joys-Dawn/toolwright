@@ -6,34 +6,34 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { openStore } from '../lib/store.js';
 import { dataDir, dbPath, mirrorsDir, hfCacheDir, projectRoot, embedderCached } from '../lib/paths.js';
 import { isDaemonAlive } from '../lib/daemon-status.js';
+import { depsInstalled } from '../lib/ready.js';
+import { maybeAutoInstall, installLogPath } from '../lib/auto-setup.js';
 
-function main() {
-  const dbExists = existsSync(dbPath());
-  const out = {
-    project_root: projectRoot(),
-    data_dir: dataDir(),
-    db_path: dbPath(),
-    db_exists: dbExists,
-    mirrors_dir: mirrorsDir(),
-    hf_cache_dir: hfCacheDir(),
-    model_cached: embedderCached(),
-    reranker_cached: existsSync(join(hfCacheDir(), 'models--onnx-community--bge-reranker-v2-m3-ONNX')),
-    daemon_alive: isDaemonAlive(),
-  };
+async function main() {
+  // Dependency gate: better-sqlite3/sqlite-vec aren't installed by a
+  // marketplace plugin copy (nor after a plugin update wipes node_modules).
+  // openStore() is the only native-dep import here, so quarantine it behind a
+  // dep-free check and emit a status built only from dep-free signals; trigger
+  // the single-flight background install so a later /mindwright:status comes
+  // up fully on its own.
+  if (!depsInstalled()) {
+    maybeAutoInstall();
+    print({
+      ...baseStatus(),
+      ...zeroCounts(),
+      note: `native dependencies not installed yet — a one-time background install was triggered (log: ${installLogPath()}); memory features activate automatically once it completes`,
+    });
+    return;
+  }
+  const { openStore } = await import('../lib/store.js');
+  const out = baseStatus();
 
-  if (!dbExists) {
-    out.short_count = 0;
-    out.long_count = 0;
-    out.by_category = {};
-    out.by_category_scope = {};
-    out.last_consolidation = null;
-    out.pending_embeds = 0;
-    out.oldest_preference_at = null;
-    out.consolidators = [];
-    out.note = 'database has not been initialized yet — run any mindwright operation to create it';
+  if (!out.db_exists) {
+    Object.assign(out, zeroCounts(), {
+      note: 'database has not been initialized yet — run any mindwright operation to create it',
+    });
     print(out);
     return;
   }
@@ -65,6 +65,39 @@ function main() {
   }
 
   print(out);
+}
+
+// Single source of truth for the status payload shape. Both degraded
+// branches (deps-missing, db-not-initialized) and the live path build on
+// these so adding/renaming a status field is a one-site change instead of
+// a three-site change where the least-exercised copy silently drifts.
+// Dep-free by construction (paths.js / daemon-status.js / node:fs only) —
+// safe to call from the pre-dependency-gate branch.
+function baseStatus() {
+  return {
+    project_root: projectRoot(),
+    data_dir: dataDir(),
+    db_path: dbPath(),
+    db_exists: existsSync(dbPath()),
+    mirrors_dir: mirrorsDir(),
+    hf_cache_dir: hfCacheDir(),
+    model_cached: embedderCached(),
+    reranker_cached: existsSync(join(hfCacheDir(), 'models--onnx-community--bge-reranker-v2-m3-ONNX')),
+    daemon_alive: isDaemonAlive(),
+  };
+}
+
+function zeroCounts() {
+  return {
+    short_count: 0,
+    long_count: 0,
+    by_category: {},
+    by_category_scope: {},
+    last_consolidation: null,
+    pending_embeds: 0,
+    oldest_preference_at: null,
+    consolidators: [],
+  };
 }
 
 function print(out) {
@@ -104,4 +137,9 @@ function print(out) {
 // /mindwright:status skill), not when imported for unit testing.
 const invokedDirectly =
   process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (invokedDirectly) main();
+if (invokedDirectly) {
+  main().catch((err) => {
+    process.stderr.write(`mindwright status crashed: ${err.message}\n${err.stack || ''}\n`);
+    process.exit(1);
+  });
+}

@@ -106,6 +106,27 @@ function writeTranscript(dir, sessionId, recs) {
   return path;
 }
 
+// Pre-seed the offsets row exactly as SessionStart does in production before
+// any mid-session hook fires. Step 7 added a behavior-1 backstop to
+// flushTranscript: an UNKNOWN session (no offsets row) has its offset
+// defaulted to EOF so pre-mindwright history is not retroactively ingested.
+// In production SessionStart always runs first and writes the row, so
+// mid-session hooks no-op the backstop and flush normally. These tests run a
+// mid-session hook in isolation; without this the backstop would (correctly)
+// eat the offset to EOF and the hook would chunk nothing. The behavior-1 path
+// itself is covered by offset-init/transcript-flush tests — here we exercise
+// the hooks' own chunk-and-flush machinery, so we put the session in the
+// tracked-from-byte-0 steady state (row = 0 ⇒ backstop no-ops ⇒ chunk from
+// the top, byte-identical to pre-Step-7).
+function seedTrackedFromZero(sessionId) {
+  const store = openStore();
+  try {
+    store.setOffset(sessionId, 0);
+  } finally {
+    store.close();
+  }
+}
+
 // Mechanical setup shared by the three behavior-5 reconcile tests: seed the
 // project past CAP_EXCHANGES, then run one Stop with auto-spawn enabled (a
 // fake `claude` binary so spawnConsolidator succeeds and persists the
@@ -532,6 +553,7 @@ test('user-prompt-submit chunks the prompt from the transcript', () => {
   try {
     const prompt = 'where are the auth helpers defined?';
     const transcriptPath = writeTranscript(dir, 'sess-C', [userRec(prompt)]);
+    seedTrackedFromZero('sess-C');
     runHook('user-prompt-submit.js', {
       session_id: 'sess-C',
       transcript_path: transcriptPath,
@@ -654,6 +676,7 @@ test('pre-tool-use writes new chunks and advances offset', () => {
       assistantTextRec('hi'),
     ]);
     const sizeBefore = statSync(transcriptPath).size;
+    seedTrackedFromZero('sess-E');
 
     const { status } = runHook('pre-tool-use.js', {
       session_id: 'sess-E',
@@ -685,6 +708,7 @@ test('pre-tool-use gate case: no thinking block in new chunks → no retrieval',
       userRec('hello'),
       assistantTextRec('just text, no thinking'),
     ]);
+    seedTrackedFromZero('sess-G');
     const { stdout } = runHook('pre-tool-use.js', {
       session_id: 'sess-G',
       transcript_path: transcriptPath,
@@ -725,6 +749,7 @@ test('pre-tool-use gate case: thinking present but pipe down → silently skips 
       userRec('hello'),
       assistantThinkingRec(makeThinking(2500)),
     ]);
+    seedTrackedFromZero('sess-H');
     {
       const store = openStore();
       try { store.markDaemonDownWarned('sess-H'); } finally { store.close(); }
@@ -763,6 +788,7 @@ test('pre-tool-use emits the daemon-down warning once when the MCP daemon is unr
       userRec('hello'),
       assistantThinkingRec(makeThinking(2500)),
     ]);
+    seedTrackedFromZero('sess-daemon-down-ptu');
     const first = runHook('pre-tool-use.js', {
       session_id: 'sess-daemon-down-ptu',
       transcript_path: transcriptPath,
@@ -900,6 +926,7 @@ test('stop flushes tail content', () => {
       userRec('hello'),
       assistantTextRec('final answer'),
     ]);
+    seedTrackedFromZero('sess-J');
     runHook('stop.js', {
       session_id: 'sess-J',
       transcript_path: transcriptPath,
@@ -1774,6 +1801,7 @@ test('session-end flushes tail content without injecting context', () => {
       userRec('hello'),
       assistantTextRec('goodbye'),
     ]);
+    seedTrackedFromZero('sess-M');
     const { stdout } = runHook('session-end.js', {
       session_id: 'sess-M',
       transcript_path: transcriptPath,

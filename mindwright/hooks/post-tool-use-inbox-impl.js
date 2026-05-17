@@ -17,7 +17,6 @@
 // must not block the agent's turn.
 
 import { readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 import { openStore } from '../lib/store.js';
 import { embedderCached } from '../lib/paths.js';
 import { readSidecar, writeSidecar, diffRoles } from '../lib/role-sidecar.js';
@@ -25,7 +24,7 @@ import { getRolePromptsFor, getRoleUnassignNotices } from '../lib/role-prompts.j
 import { SELF_RECALL_RULE } from '../lib/constants.js';
 import { logHookError } from '../lib/hook-log.js';
 
-async function main() {
+export async function main() {
   let input;
   try {
     input = JSON.parse(readFileSync(0, 'utf8'));
@@ -109,13 +108,4 @@ async function main() {
       },
     }) + '\n'
   );
-}
-
-const invokedDirectly =
-  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (invokedDirectly) {
-  main().catch((err) => {
-    logHookError('post-tool-use-inbox', 'crashed', err);
-    process.stdout.write('{}\n');
-  });
 }

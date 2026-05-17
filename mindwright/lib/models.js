@@ -17,11 +17,18 @@
 //   and ONNX-runtime fails at first inference. Raw logits → manual sigmoid
 //   `1 / (1 + exp(-x))` (the ONNX port does NOT apply sigmoid itself).
 
-import {
-  pipeline,
-  AutoModelForSequenceClassification,
-  AutoTokenizer,
-} from '@huggingface/transformers';
+// transformers.js is resolved from the persistent ${CLAUDE_PLUGIN_DATA}/
+// node_modules via lib/native-require.js (see that file's header for why a
+// bare import can't reach it). createRequire().resolve() picks the package's
+// `require` condition → its webpack-bundled CJS build, whose named exports
+// the cjs-module-lexer can't see through, so the symbols live only on the
+// module.exports object — loadNativeDefault() returns exactly that. Top-level
+// await is safe: models.js is only ever loaded AFTER the readiness gate
+// (through the MCP daemon / sweeper / store path), never from a deps-less
+// hook process.
+import { loadNativeDefault } from './native-require.js';
+const { pipeline, AutoModelForSequenceClassification, AutoTokenizer } =
+  await loadNativeDefault('@huggingface/transformers');
 
 export const EMBEDDER_MODEL_ID = 'Xenova/bge-m3';
 export const RERANKER_MODEL_ID = 'onnx-community/bge-reranker-v2-m3-ONNX';

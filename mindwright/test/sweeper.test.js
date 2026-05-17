@@ -1,4 +1,4 @@
-// Coverage for mcp/server.mjs#sweepOnce — the daemon's recovery path for
+// Coverage for mcp/server-impl.mjs#sweepOnce — the daemon's recovery path for
 // short-term rows written with embedding=NULL while the daemon-pipe was
 // down. The orchestration has three failure modes that MUST be tolerated:
 // (1) embedFn rejection → bail without state change, no propagation;
@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore } from '../lib/store.js';
-import { sweepOnce } from '../mcp/server.mjs';
+import { sweepOnce } from '../mcp/server-impl.mjs';
 
 const EMBEDDING_DIM = 1024;
 

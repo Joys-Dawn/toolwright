@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, cpSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -477,4 +477,56 @@ test('describeNextStep: total>0 takes precedence over skippedFiles>0 (guard-clau
   // still reports the consolidate hint, never the skipped-files explainer.
   const msg = describeNextStep({ total: 2, droppedUnderCallingSession: true, skippedFiles: 9 });
   assert.equal(msg, 'Run /mindwright:dream to consolidate the seeded rows into long-term facts.');
+});
+
+test('deps-absent: emits the deps_not_installed structured result and never calls openStore', () => {
+  // A caller parses this stdout JSON to decide whether to retry, so the exact
+  // error code + shape is a contract. Every other test here spawns the real
+  // SCRIPT in the deps-present dev tree, so the deps-absent branch was never
+  // run. Reproduce a faithful marketplace copy: scripts/ + lib/ + mcp/ NO
+  // node_modules → the copy's depsInstalled() is false (paths.js derives
+  // PLUGIN_ROOT from its own location → the sandbox). store.js is copied but
+  // never imported (the branch returns before `await import('../lib/store.js')`).
+  // MINDWRIGHT_AUTO_INSTALL=false keeps maybeAutoInstall() from spawning a
+  // real npm install; the result contract is independent of that call.
+  const pluginCopy = mkdtempSync(join(tmpdir(), 'mindwright-seed-plugin-'));
+  const projectDir = mkdtempSync(join(tmpdir(), 'mindwright-seed-da-proj-'));
+  try {
+    cpSync(join(PLUGIN_ROOT, 'lib'), join(pluginCopy, 'lib'), { recursive: true });
+    cpSync(join(PLUGIN_ROOT, 'scripts'), join(pluginCopy, 'scripts'), { recursive: true });
+    // mcp/ is required: seed-from-repo.js's static dep-free graph reaches
+    // ../mcp/daemon-ticket.mjs. The dormancy invariant guarantees that whole
+    // graph is dep-free, so a node_modules-less copy hits the deps-absent
+    // branch rather than an ESM-resolution crash.
+    cpSync(join(PLUGIN_ROOT, 'mcp'), join(pluginCopy, 'mcp'), { recursive: true });
+
+    const res = spawnSync(process.execPath, [join(pluginCopy, 'scripts', 'seed-from-repo.js')], {
+      encoding: 'utf8',
+      timeout: 20000,
+      env: {
+        ...process.env,
+        MINDWRIGHT_PROJECT_ROOT: projectDir,
+        MINDWRIGHT_AUTO_INSTALL: 'false',
+        MINDWRIGHT_INSTALL_LOCK_DIR: pluginCopy,
+      },
+    });
+
+    assert.equal(res.status, 0, `branch returns cleanly (no process.exit); got status=${res.status} stderr=${res.stderr}`);
+    const parsed = JSON.parse(res.stdout.trim());
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.error, 'deps_not_installed');
+    assert.equal(parsed.short_rows_inserted, 0);
+    assert.equal(typeof parsed.detail, 'string');
+    assert.match(parsed.detail, /mindwright-install-.*\.log/, 'detail must reference installLogPath()');
+    assert.match(res.stderr, /native dependencies not installed yet/, 'the human message goes to stderr');
+    assert.equal(
+      existsSync(join(projectDir, '.claude', 'mindwright', 'mindwright.db')),
+      false,
+      'deps-absent branch must return before openStore (no DB file created)',
+    );
+  } finally {
+    for (const d of [pluginCopy, projectDir]) {
+      try { rmSync(d, { recursive: true, force: true }); } catch { /* tmp */ }
+    }
+  }
 });

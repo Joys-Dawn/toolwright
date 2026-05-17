@@ -254,6 +254,22 @@ export const TOP_K_DEFAULT = 8;
 // labels like `plan-reviewer`.
 export const ROLE_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
+// The ABI-locked native packages whose presence + loadability is the proxy
+// for "npm install ran against THIS plugin copy". better-sqlite3 is the SQLite
+// binding; sqlite-vec is the vector extension — both are statically imported
+// by the store/vec layer and both carry a compiled artifact whose ABI must
+// match the running Node. Single source of truth for the TWO readiness
+// predicates that compose depsInstalled(): lib/ready.js (node_modules dir
+// existence) and lib/health-marker.js (ABI marker version check). They MUST
+// agree on this list — a dir-check that passes for a dep the marker does not
+// vouch for (or vice-versa) yields a silently-wrong depsInstalled(). Lives
+// here, not in either predicate, because constants.js is zero-import / dep-free
+// and already in every dormant entrypoint's static graph via lib/paths.js, so
+// neither readiness module re-imports the other (no cycle: ready.js already
+// imports markerValid from health-marker.js). Frozen so a downstream
+// `.push`/reassign becomes a TypeError at write-time.
+export const NATIVE_DEPS = Object.freeze(['better-sqlite3', 'sqlite-vec']);
+
 // session_id whitelist. Defense-in-depth: session_id originates inside the
 // Claude Code trust boundary (UUIDs from hook input or env), but it flows
 // into filesystem paths (`pipePath`) and pipe-namespace strings. A traversal

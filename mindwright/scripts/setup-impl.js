@@ -6,11 +6,14 @@
 // transformers.js cache (~/.cache/huggingface/hub/ by default), then runs a
 // smoke test to confirm shapes and the sigmoid range.
 //
-// Designed to be run via `bash node ${CLAUDE_PLUGIN_ROOT}/scripts/setup.js`
-// from the /mindwright:setup skill. All progress goes to stderr; stdout is
-// reserved for the final success line so callers can parse it.
+// Loaded ONLY via dynamic import() from scripts/setup.js (the dependency-free
+// shim entrypoint) AFTER its synchronous dep-install gate — never invoked
+// directly: this file statically imports lib/models.js (→
+// @huggingface/transformers), which a deps-less plugin copy cannot resolve.
+// All progress goes to stderr (the log() helper); stdout carries only the
+// final machine-parseable success line (main()'s closing `mindwright:setup
+// ok …` write) so the /mindwright:setup skill can parse it.
 
-import { pathToFileURL } from 'node:url';
 import {
   EMBEDDING_DIM,
   EMBEDDER_MODEL_ID,
@@ -62,7 +65,7 @@ export function assertRerankScore(scores) {
   return score;
 }
 
-async function main() {
+export async function main() {
   log(`downloading + loading embedder: ${EMBEDDER_MODEL_ID}`);
   log(`  (transformers.js prints its own progress lines to stderr)`);
   const tStartEmb = Date.now();
@@ -88,16 +91,4 @@ async function main() {
   process.stdout.write(
     `mindwright:setup ok dtype=${dtype} embed_dim=${EMBEDDING_DIM} rerank=${Math.round(score * 1000) / 10}%\n`
   );
-}
-
-// Only run main() when this file is invoked directly by /mindwright:setup —
-// importing it from a test should not download 5GB of models. Same gate
-// pattern as mcp/server.mjs.
-const invokedDirectly =
-  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (invokedDirectly) {
-  main().catch((err) => {
-    process.stderr.write(`[mindwright:setup] FAILED: ${err && err.stack ? err.stack : err}\n`);
-    process.exit(1);
-  });
 }

@@ -1,12 +1,12 @@
 // Coverage for the pure smoke-test assertion helpers extracted from
-// scripts/setup.js so the threshold logic (Float32Array typecheck,
+// scripts/setup-impl.js so the threshold logic (Float32Array typecheck,
 // embedding dim, unit-norm tolerance, sigmoid range) is exercised
 // without the multi-GB model load the full setup script needs.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EMBEDDING_DIM } from '../../lib/models.js';
-import { assertEmbeddingShape, assertRerankScore } from '../../scripts/setup.js';
+import { assertEmbeddingShape, assertRerankScore } from '../../scripts/setup-impl.js';
 
 // Build a unit-normalized Float32Array of `dim` length so the norm-check
 // path passes deterministically without depending on the actual embedder.

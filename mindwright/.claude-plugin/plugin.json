@@ -1,6 +1,6 @@
 {
   "name": "mindwright",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Per-agent memory + cross-session learning for Claude Code multi-agent setups (wrightward family)",
   "author": {
     "name": "yiann"

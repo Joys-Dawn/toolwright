@@ -11,8 +11,42 @@ import { SESSION_ID_PATTERN } from './constants.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// The plugin root is the parent of lib/.
+// The plugin root is the parent of lib/. This is the EPHEMERAL install dir:
+// Claude Code's plugins-reference states it "changes when the plugin updates …
+// treat it as ephemeral and do not write state here." Used only to LOCATE
+// bundled, read-only plugin files (db/migrations, the bundled package.json).
 export const PLUGIN_ROOT = resolve(__dirname, '..');
+
+// The PERSISTENT plugin data dir. Claude Code exports ${CLAUDE_PLUGIN_DATA}
+// (resolved to ~/.claude/plugins/data/<id>/) into every hook process and MCP
+// subprocess; it "survives updates" and the docs explicitly recommend it for
+// installed dependencies such as node_modules. node_modules + the ABI marker
+// live HERE so they persist across plugin updates instead of being wiped every
+// update (the entire reason the old wipe-recovery subsystem existed).
+//
+// Fallback to PLUGIN_ROOT when the env var is absent — the dev tree and the
+// whole test suite run without it, so node_modules/marker/manifest resolve
+// exactly as before (PLUGIN_ROOT/node_modules). Production always has the env.
+export function pluginDataDir() {
+  return process.env.CLAUDE_PLUGIN_DATA || PLUGIN_ROOT;
+}
+
+// Where the native deps are installed and resolved from.
+export function nodeModulesDir() {
+  return join(pluginDataDir(), 'node_modules');
+}
+
+// Manifest-diff sentinel (the documented persistent-dir pattern): the bundled
+// package.json ships in the ephemeral PLUGIN_ROOT; a copy is written into the
+// persistent data dir after a successful install. When a plugin update changes
+// dependencies, the two differ ⇒ a reinstall is due (the ABI marker alone
+// cannot see this — node_modules still holds the OLD versions until reinstall).
+export function bundledManifestPath() {
+  return join(PLUGIN_ROOT, 'package.json');
+}
+export function installedManifestPath() {
+  return join(pluginDataDir(), 'package.json');
+}
 
 // The project root is whatever cwd the host process was launched from.
 // Tests and scripts can override via the MINDWRIGHT_PROJECT_ROOT env var.

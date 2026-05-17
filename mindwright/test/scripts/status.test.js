@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
-  mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync,
+  mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, cpSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -79,7 +79,8 @@ test('no-db short-circuit emits db_exists=false, zero counts, and a note', () =>
     assert.equal(out.pending_embeds, 0);
     assert.equal(out.oldest_preference_at, null, 'no preferences yet on a fresh project');
     assert.deepEqual(out.consolidators, [], 'no spawned consolidators on a fresh project');
-    assert.ok(typeof out.note === 'string' && out.note.length > 0, 'note should be set explaining DB absence');
+    assert.equal(typeof out.note, 'string', 'note should be set explaining DB absence');
+    assert.notEqual(out.note, '', 'note should be set explaining DB absence');
     // Sanity: the openStore() call must NOT have been made — if it had, the
     // db would now exist on disk because openStore runs migrations.
     assert.equal(
@@ -216,4 +217,67 @@ test('model_cached / reranker_cached reflect hfCacheDir contents', () => {
     assert.equal(out.model_cached, true);
     assert.equal(out.reranker_cached, true, 'reranker dir present → reranker_cached=true');
   });
+});
+
+test('deps-absent branch emits the degraded baseStatus()+zeroCounts() payload and never calls openStore', () => {
+  // /mindwright:status is the user's primary diagnostic precisely WHEN the
+  // plugin is dormant (a marketplace copy, or a plugin update that wiped
+  // node_modules). Every other test here runs in the deps-present dev tree,
+  // so the deps-absent payload shape was never exercised. Reproduce a
+  // faithful marketplace copy: scripts/ + lib/ with NO node_modules, so the
+  // copy's depsInstalled() is false (paths.js derives PLUGIN_ROOT from its
+  // own location → the sandbox). store.js is copied but never imported (the
+  // branch returns before `await import('../lib/store.js')`).
+  // MINDWRIGHT_AUTO_INSTALL=false keeps maybeAutoInstall() from spawning a
+  // real npm install; the payload contract is independent of that call.
+  const pluginCopy = mkdtempSync(join(tmpdir(), 'mindwright-status-plugin-'));
+  const projectDir = mkdtempSync(join(tmpdir(), 'mindwright-status-proj-'));
+  const homeDir = mkdtempSync(join(tmpdir(), 'mindwright-status-home-'));
+  try {
+    cpSync(join(PLUGIN_ROOT, 'lib'), join(pluginCopy, 'lib'), { recursive: true });
+    cpSync(join(PLUGIN_ROOT, 'scripts'), join(pluginCopy, 'scripts'), { recursive: true });
+
+    const res = spawnSync(process.execPath, [join(pluginCopy, 'scripts', 'status.js')], {
+      encoding: 'utf8',
+      timeout: 20000,
+      env: {
+        ...process.env,
+        MINDWRIGHT_PROJECT_ROOT: projectDir,
+        MINDWRIGHT_AUTO_INSTALL: 'false',
+        MINDWRIGHT_INSTALL_LOCK_DIR: pluginCopy,
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+      },
+    });
+
+    assert.equal(res.status, 0, `expected exit 0; got ${res.status}. stderr=${res.stderr}`);
+    const out = JSON.parse(res.stdout.trim().split('\n').pop());
+
+    // baseStatus() field (dep-free) present and false on a fresh project.
+    assert.equal(out.db_exists, false, 'fresh project → db_exists=false');
+    // Every zeroCounts() field at its zero value.
+    assert.equal(out.short_count, 0);
+    assert.equal(out.long_count, 0);
+    assert.deepEqual(out.by_category, {});
+    assert.deepEqual(out.by_category_scope, {});
+    assert.equal(out.last_consolidation, null);
+    assert.equal(out.pending_embeds, 0);
+    assert.equal(out.oldest_preference_at, null);
+    assert.deepEqual(out.consolidators, []);
+    // The deps-absent note must explain the background install + name the log.
+    assert.equal(typeof out.note, 'string', 'deps-absent note must be set');
+    assert.notEqual(out.note, '', 'deps-absent note must be set');
+    assert.match(out.note, /native dependencies not installed/);
+    assert.match(out.note, /mindwright-install-.*\.log/, 'note must reference installLogPath()');
+    // openStore() must NOT have run (it creates the DB via migrations).
+    assert.equal(
+      existsSync(join(projectDir, '.claude', 'mindwright', 'mindwright.db')),
+      false,
+      'deps-absent branch must return before openStore (no DB file)',
+    );
+  } finally {
+    for (const d of [pluginCopy, projectDir, homeDir]) {
+      try { rmSync(d, { recursive: true, force: true }); } catch { /* tmp */ }
+    }
+  }
 });

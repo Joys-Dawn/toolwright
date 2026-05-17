@@ -19,7 +19,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, cpSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -915,6 +916,60 @@ test('unknown tool name returns a structured error envelope', async () => {
       await client.close();
       await transport.close();
     }
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test('mcp/server.mjs stays silent on stdout and exits 0 when deps are absent (the JSON-RPC channel must not be half-spoken)', () => {
+  // The deps-absent branch runs for real on every plugin update that wipes
+  // node_modules. Its contract: write NOTHING to stdout (stdout is the
+  // JSON-RPC channel — any byte corrupts the MCP client), emit a recognizable
+  // stderr diagnostic that names the install log, and exit 0 so the client
+  // marks the server unavailable until a post-heal session. Every other test
+  // here runs in the deps-present dev tree, so this branch was never executed
+  // and the static-graph invariant does not assert this runtime constraint.
+  //
+  // Fixture: a faithful marketplace copy — the full mcp/ + lib/ tree with NO
+  // node_modules, so the copy's depsInstalled() is false (paths.js derives
+  // PLUGIN_ROOT from its own location → the sandbox). server-impl.mjs is
+  // copied but never imported (the branch process.exit(0)s before the dynamic
+  // import). MINDWRIGHT_AUTO_INSTALL=false makes maybeAutoInstall() a no-op so
+  // no real `npm install` is spawned; the stdout/stderr/exit contract is
+  // independent of that call.
+  const sb = setupSandbox('deps-absent');
+  try {
+    cpSync(join(PLUGIN_ROOT, 'lib'), join(sb.dir, 'lib'), { recursive: true });
+    cpSync(join(PLUGIN_ROOT, 'mcp'), join(sb.dir, 'mcp'), { recursive: true });
+
+    const r = spawnSync(process.execPath, [join(sb.dir, 'mcp', 'server.mjs')], {
+      cwd: sb.dir,
+      env: {
+        ...process.env,
+        MINDWRIGHT_AUTO_INSTALL: 'false',
+        MINDWRIGHT_INSTALL_LOCK_DIR: sb.dir,
+      },
+      encoding: 'utf8',
+      timeout: 20000,
+    });
+
+    assert.equal(
+      r.status,
+      0,
+      `expected clean exit 0; status=${r.status} signal=${r.signal} stderr=${r.stderr}`,
+    );
+    assert.equal(
+      r.stdout,
+      '',
+      `stdout MUST be byte-empty (JSON-RPC channel); got ${JSON.stringify(r.stdout)}`,
+    );
+    assert.match(r.stderr, /\[mindwright\/mcp\]/, 'a recognizable stderr diagnostic must be written');
+    assert.match(r.stderr, /native dependencies not installed/);
+    assert.match(
+      r.stderr,
+      /mindwright-install-.*\.log/,
+      'the diagnostic must reference the install log path',
+    );
   } finally {
     sb.cleanup();
   }

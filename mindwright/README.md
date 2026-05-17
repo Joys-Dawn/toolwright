@@ -10,11 +10,15 @@ Each Claude session in your project quietly accumulates short-term observations 
 /plugin install mindwright@Joys-Dawn/toolwright
 ```
 
-Then download the local embedder + cross-encoder (one-time, ~5 GB, ~5–15 min depending on your connection):
+Mindwright prepares its local dependencies automatically in the background — there is no `npm install` step, and it self-heals the same way after every plugin update. While that finishes (a minute or two on a fresh install), memory capture stays quietly dormant, then switches on by itself. Recall additionally needs a one-time model download.
+
+Then download the local embedder + cross-encoder — the one part that is *not* automatic (one-time, ~5 GB, ~5–15 min depending on your connection):
 
 ```
 /mindwright:setup
 ```
+
+If you run this right after installing, the background dependency prep may still be finishing — `/mindwright:setup` will tell you so and ask you to re-run it in a minute. That's expected, not a failure: the re-run proceeds to the model download once the dependencies are ready.
 
 That's it. Mindwright is now active. The first prompt you type in any session will start populating its short-term memory.
 
@@ -30,7 +34,7 @@ That's it. Mindwright is now active. The first prompt you type in any session wi
 - **Memory is auditable.** Every fact is mirrored to plain markdown under `.claude/mindwright/mirrors/` — `recent.md`, `preferences.md`, `project.md`, `episodes.md`, `agents/<role>/heuristics.md`. Read them. Diff them in git if you want.
 - **Drained short-term is archived.** When `/mindwright:dream` finalizes a drain, the raw short-term rows it discarded are copied to `.claude/mindwright/mirrors/dropped/<date>-<drain_id>.md` *before* the hard-delete runs. If the consolidator judged something not worth retaining, you can still grep the archive for it and hand-re-import. Set `MINDWRIGHT_DROPPED_ARCHIVE=off` to skip the archive entirely.
 - **A fresh install learns from your project's history.** Install mindwright into a project you've already been using Claude Code on, and on its first run with empty memory it quietly folds your existing conversation history into memory in the background. Nothing blocks — your session proceeds normally — and recall gets progressively richer as that history is distilled into long-term facts, each anchored to *when it actually happened* (a fact learned six months ago is recalled as six months old, not as "just now"). Set `MINDWRIGHT_AUTO_SEED=false` before launching to skip this entirely and start from a blank slate. This is independent of the cap nudge — silencing nudges (`MINDWRIGHT_NUDGE=off`) still bootstraps.
-- **Prior conversations are skipped by default.** If you install mindwright in the middle of a long-running project and resume an existing Claude session, mindwright sees the transcript already contains conversation it didn't track. By default it skips that prior content and starts fresh from the next turn — and the SessionStart message tells you so explicitly. If you want the historical content ingested instead, set `MINDWRIGHT_SEED_TRANSCRIPT=1` before launching, and the first tool call after start will chunk the whole prior transcript into short-term (then you can run `/mindwright:dream` to distill it). The flag is honored even on sessions mindwright has already partially tracked — it resets that session's offset back to byte 0 and re-ingests; you'll get a SessionStart warning that duplicates are likely, and `/mindwright:dream`'s supersede-candidate check deduplicates them. While `MINDWRIGHT_SEED_TRANSCRIPT=1` is set in the environment, mindwright suspends the auto-spawned consolidator and falls back to the manual "time to dream" nudge — re-ingest typically pushes short-term past the cap, and you should review the seeded content before consolidation runs and consumes subscription tokens.
+- **Prior conversations are skipped by default.** If you install mindwright in the middle of a long-running project and resume an existing Claude session, mindwright sees the transcript already contains conversation it didn't track. By default it skips that prior content and starts fresh from the next turn — resuming an existing session does not retroactively pull in the part of the conversation that predates the install. If you want the historical content ingested instead, set `MINDWRIGHT_SEED_TRANSCRIPT=1` before launching, and the first tool call after start will chunk the whole prior transcript into short-term (then you can run `/mindwright:dream` to distill it). The flag is honored even on sessions mindwright has already partially tracked — it resets that session's offset back to byte 0 and re-ingests; you'll get a SessionStart warning that duplicates are likely, and `/mindwright:dream`'s supersede-candidate check deduplicates them. While `MINDWRIGHT_SEED_TRANSCRIPT=1` is set in the environment, mindwright suspends the auto-spawned consolidator and falls back to the manual "time to dream" nudge — re-ingest typically pushes short-term past the cap, and you should review the seeded content before consolidation runs and consumes subscription tokens.
 
 ## Lifecycle
 
@@ -110,6 +114,7 @@ Set these in your shell before launching Claude Code. Each one is read at hook f
 | `MINDWRIGHT_SPAWN_DISABLE=1` | Disables the auto-spawned background `claude --bg` consolidator. Cap- and age-crossings fall back to the manual nudge instead. Use when you want every dream cycle to be explicit. |
 | `MINDWRIGHT_SEED_TRANSCRIPT=1` | Re-ingest the prior transcript on the next tool call (`What you'll notice` → "Prior conversations are skipped"). Also implicitly suspends auto-spawn for the duration the env is set — re-ingest typically pushes short-term past the cap, and you should review the seeded content before consolidation runs. |
 | `MINDWRIGHT_AUTO_SEED=false` | Opt out of the automatic first-run bootstrap. By default, installing into a project that already has Claude Code history folds that history into memory in the background (see `What you'll notice` → "A fresh install learns from your project's history"). Set this to skip it entirely and start from a blank slate. Independent of `MINDWRIGHT_NUDGE`. |
+| `MINDWRIGHT_AUTO_INSTALL=false` | Opt out of the automatic background install of the plugin's native dependencies. Use only if you manage the plugin's `node_modules` yourself; with this set and the deps missing, mindwright stays dormant instead of self-healing. |
 | `MINDWRIGHT_DROPPED_ARCHIVE=off` | Skip the post-drain `.claude/mindwright/mirrors/dropped/` archive that captures rows about to be hard-deleted. The audit copy is on by default — turn off only if disk usage matters more than recoverability. |
 
 ## Storage and audit
@@ -160,8 +165,8 @@ For the full architecture — the TEMPR retrieval pipeline, the dual-tier storag
 
 ## Requirements
 
-- Node.js ≥ 20.
-- Native npm dependencies: `better-sqlite3`, `sqlite-vec`, `@huggingface/transformers`, `@modelcontextprotocol/sdk`.
+- Node.js ≥ 20, with `npm` on `PATH`.
+- Native dependencies (`better-sqlite3`, `sqlite-vec`, `@huggingface/transformers`, `@modelcontextprotocol/sdk`) install automatically in the background on first use and re-heal after every plugin update — no manual `npm install`. `better-sqlite3` ships prebuilt binaries for common platforms; where one isn't available it compiles from source, which needs a C/C++ build toolchain.
 - A one-time ~5 GB local model download via `/mindwright:setup` (the `Xenova/bge-m3` embedder + `onnx-community/bge-reranker-v2-m3-ONNX` cross-encoder, cached at `~/.cache/huggingface/hub/`). No API calls; all retrieval is local.
 - `claude` on `PATH` is used by the auto-spawned background consolidator. Optional — without it, mindwright falls back to the manual "time to dream" nudge.
 

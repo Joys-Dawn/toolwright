@@ -23,13 +23,25 @@
 // just with real flow-control between batches.
 
 import { pathToFileURL } from 'node:url';
-import { openStore } from '../lib/store.js';
-import { runSeedLoop } from '../lib/seed-loop.js';
-import { makeSeedConsolidate } from '../lib/seed-consolidate.js';
-import { deriveHandle } from '../lib/handles.js';
 import { logHookError } from '../lib/hook-log.js';
+import { depsInstalled } from '../lib/ready.js';
 
 async function main() {
+  // Defensive dependency gate. This script is only spawned by maybeAutoSeed
+  // AFTER the SessionStart shim confirmed deps are present, so this branch
+  // should not normally fire — but a node_modules wipe racing the detached
+  // spawn must degrade to a clean no-op, never an ESM-load crash. (No
+  // maybeAutoInstall here: the caller path already owns triggering the
+  // install; this is purely a crash guard.)
+  if (!depsInstalled()) {
+    process.stdout.write(JSON.stringify({ ok: false, error: 'deps_not_installed' }) + '\n');
+    return;
+  }
+  const { openStore } = await import('../lib/store.js');
+  const { runSeedLoop } = await import('../lib/seed-loop.js');
+  const { makeSeedConsolidate } = await import('../lib/seed-consolidate.js');
+  const { deriveHandle } = await import('../lib/handles.js');
+
   // argv[2] is the triggering session's id (passed by SessionStart) so the
   // consolidator identity matches the one the cap-nudge path would resolve —
   // same (project, requesterHandle) ⇒ one consolidator, not two.
