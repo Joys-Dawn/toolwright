@@ -2,7 +2,7 @@
 
 > Per-agent memory and cross-session learning for Claude Code multi-agent setups. Each session quietly accumulates short-term observations as you work, then — automatically or on demand — distills them into long-term facts (preferences, conventions, role know-how, lessons learned). Future prompts pull from that memory by relevance; nothing is dumped at session start, nothing irrelevant is injected.
 
-**Version**: 0.1.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/mindwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/mindwright/README.md)
+**Version**: 0.2.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/mindwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/mindwright/README.md)
 
 ## Install
 
@@ -17,11 +17,11 @@ Then download the local embedder + cross-encoder (one-time, ~5 GB, ~5–15 min d
 /mindwright:setup
 ```
 
-Requires **Node.js ≥ 20**. Ships native npm dependencies (`better-sqlite3`, `sqlite-vec`, `@huggingface/transformers`, the MCP SDK). `claude` on `PATH` is used by the auto-spawned background consolidator — without it, mindwright falls back to a manual "time to dream" nudge. After `/mindwright:setup`, the first prompt in any session starts populating short-term memory.
+Requires **Node.js ≥ 20**. Ships native npm dependencies (`better-sqlite3`, `sqlite-vec`, `@huggingface/transformers`). `claude` on `PATH` is used by the auto-spawned background consolidator — without it, mindwright falls back to a manual "time to dream" nudge. After `/mindwright:setup`, the first prompt in any session starts populating short-term memory.
 
 ### Model supply-chain trust
 
-`/mindwright:setup` downloads two ONNX models from Hugging Face — `Xenova/bge-m3` (embedder) and `onnx-community/bge-reranker-v2-m3-ONNX` (cross-encoder). They run inside ONNX Runtime in the same Node process as mindwright, so a tampered model could in principle exfiltrate query text or bias retrieval. The download is HTTPS to Hugging Face's CDN — the trust root is HF infrastructure plus your system CA bundle. If your threat model includes a CA compromise or DNS hijack on the install machine, fetch the models manually on a trusted host, copy them into `~/.cache/huggingface/hub/`, and skip `/mindwright:setup` (the daemon picks up the on-disk cache). Model revision hashes are not pinned; an upstream update is picked up on the next setup.
+`/mindwright:setup` downloads two ONNX models from Hugging Face — `Xenova/bge-m3` (embedder) and `onnx-community/bge-reranker-v2-m3-ONNX` (cross-encoder). They run inside ONNX Runtime in a single machine-wide model daemon (one process per machine, shared by every session and project), so a tampered model could in principle exfiltrate query text or bias retrieval. The download is HTTPS to Hugging Face's CDN — the trust root is HF infrastructure plus your system CA bundle. If your threat model includes a CA compromise or DNS hijack on the install machine, fetch the models manually on a trusted host, copy them into `~/.cache/huggingface/hub/`, and skip `/mindwright:setup` (the model daemon picks up the on-disk cache). Model revision hashes are not pinned; an upstream update is picked up on the next setup.
 
 ## What you'll notice
 
@@ -30,8 +30,9 @@ Requires **Node.js ≥ 20**. Ships native npm dependencies (`better-sqlite3`, `s
 - **Auto-consolidation.** When short-term crosses the cap (50 rows by default), mindwright spawns a `claude --bg` background session that runs `/mindwright:dream` autonomously. If `claude` isn't on `PATH` (or the spawn fails), the manual "time to dream" nudge shows up instead.
 - **Memory is auditable.** Every fact is mirrored to plain markdown under `.claude/mindwright/mirrors/` — `recent.md`, `preferences.md`, `project.md`, `episodes.md`, `agents/<role>/heuristics.md`. Read them, diff them in git.
 - **Drained short-term is archived.** Before `/mindwright:dream` hard-deletes drained rows, they're copied to `.claude/mindwright/mirrors/dropped/<date>-<drain_id>.md`. Set `MINDWRIGHT_DROPPED_ARCHIVE=off` to skip the archive.
-- **A fresh install learns from your project's history.** Install into a project you've already used Claude Code on, and on its first run with empty memory it quietly folds existing conversation history into memory in the background. Nothing blocks; recall gets progressively richer as that history is distilled — each fact anchored to *when it actually happened* (a fact learned six months ago is recalled as six months old, not "just now"). Set `MINDWRIGHT_AUTO_SEED=false` before launching to skip it. Independent of the cap nudge — silencing nudges still bootstraps.
-- **Prior conversations are skipped by default.** Resume an existing session after installing and mindwright skips the already-present transcript, starting fresh from the next turn (the SessionStart message says so). Set `MINDWRIGHT_SEED_TRANSCRIPT=1` before launching to ingest the historical content instead; while that env is set the auto-spawned consolidator is suspended and the manual nudge is used (re-ingest typically pushes short-term past the cap — review before consolidating).
+- **Models load once per machine.** The embedder + cross-encoder live in a single machine-wide model daemon shared by every session across every project — ten open sessions load the ~1–2 GB of weights once, not ten times. Lazy-spawned on first need, singleton via a lock file, idle-exits after 15 min. Hooks and skills reach it over a fixed local socket and degrade cleanly when it's down (writes proceed; embeddings back-fill once it's up). No per-session memory server.
+- **Seeding is manual and explicit.** There is no automatic on-install bootstrap. Run `/mindwright:seed-from-repo` and mindwright folds `CLAUDE.md`, `README.md`, Claude Code's native per-project memory, **and your conversation transcript history** (every pre-install `*.jsonl`; the current live session excluded) into short-term in one bounded, resumable pass — each item anchored to *when it actually happened* — then run `/mindwright:dream` to distill it. No background process is spawned on your behalf.
+- **Prior conversations are skipped by default.** Resume an existing session after installing and mindwright skips the already-present transcript, starting fresh from the next turn (the SessionStart message says so). Use `/mindwright:seed-from-repo` to ingest history. For the narrower "re-ingest *this* resumed session's prior transcript" case, `MINDWRIGHT_SEED_TRANSCRIPT=1` before launching does that; while it's set the auto-spawned consolidator is suspended and the manual nudge is used (re-ingest typically pushes short-term past the cap — review before consolidating).
 
 ## Lifecycle
 
@@ -87,7 +88,7 @@ Working memory is the live context window the LLM reasons over. Mindwright write
 
 ## Config
 
-Defaults are baked into `lib/constants.js`; `DESIGN.md` lists the calibration evidence. There is no config file — to change a default, edit `lib/constants.js` and re-run. The knobs you're most likely to tune:
+Defaults are baked into `lib/constants.js`. There is no config file — to change a default, edit `lib/constants.js` and re-run. The knobs you're most likely to tune:
 
 | Knob | Default | Effect |
 |---|---|---|
@@ -105,8 +106,8 @@ Each is read at hook-firing time, so toggling mid-session works on the next even
 |---|---|
 | `MINDWRIGHT_NUDGE=off` | Full opt-out for cap-tracking on the Stop hook: no auto-spawned consolidator, no pending nudge, no state-machine updates. |
 | `MINDWRIGHT_SPAWN_DISABLE=1` | Disables the auto-spawned background consolidator. Cap/age crossings fall back to the manual nudge. |
-| `MINDWRIGHT_SEED_TRANSCRIPT=1` | Re-ingest the prior transcript on the next tool call. Also implicitly suspends auto-spawn while set. |
-| `MINDWRIGHT_AUTO_SEED=false` | Opt out of the automatic first-run bootstrap from existing Claude Code history. Independent of `MINDWRIGHT_NUDGE`. |
+| `MINDWRIGHT_SEED_TRANSCRIPT=1` | Re-ingest *this* resumed session's prior transcript on the next tool call (for full history seeding use `/mindwright:seed-from-repo`). Also implicitly suspends the auto-spawned consolidator while set. |
+| `MINDWRIGHT_MODEL_DAEMON_DISABLE=1` | Don't lazy-spawn the machine-wide model daemon; embed/rerank degrade to NULL-embedding writes back-filled by a later sweep. Only if you manage the daemon out-of-band. |
 | `MINDWRIGHT_DROPPED_ARCHIVE=off` | Skip the post-drain `dropped/` archive that captures rows about to be hard-deleted. |
 
 ## Storage and audit
@@ -121,7 +122,7 @@ Each is read at hook-firing time, so toggling mid-session works on the next even
 │   ├── episodes.md                     # active episodic rows (lessons, post-mortems)
 │   ├── agents/<role>/heuristics.md     # active procedural rows scoped to role:<role>
 │   └── dropped/<date>-<drain>.md       # rows discarded by /mindwright:dream (audit)
-└── tickets/                            # transient daemon discovery files
+└── tickets/                            # transient session-id files (SessionStart writes; scripts + liveness read)
 ```
 
 **`.claude/mindwright/` should be gitignored.** Mirrors regenerate on every consolidation, and tracking the DB pollutes diffs. Models cache to `~/.cache/huggingface/hub/` — they survive `/mindwright:reset` and project-level cleanup.
@@ -139,7 +140,7 @@ Every prompt, tool call, and reasoning block writes a short-term row (local SQLi
 
 The prompt text and each thinking block are embedded and compared against the previous retrieval's query embedding via cosine similarity. If similarity exceeds the novelty threshold (`0.85`), retrieval is skipped — no fresh injection of nearly-identical context. Otherwise the embedding becomes the retrieval query, mindwright pulls top-K candidates (K scales with query length: 3 / 5 / 8), filters against a per-session `injected_fact_ids` set so the same fact never re-injects, and the cross-encoder drops anything below the `0.10` sigmoid floor; if nothing survives, you see nothing.
 
-When you run `/mindwright:dream`, the calling session reads the oldest 70% of short-term in exchange-grouped batches, distills durable facts in its own context, categorizes each, marks contradictions against existing long-term, and writes the result through deterministic MCP helpers. The whole loop is reversible until the `mindwright_finalize_drain` call that hard-deletes the consumed rows.
+When you run `/mindwright:dream`, the calling session reads the oldest 70% of short-term in exchange-grouped batches, distills durable facts in its own context, categorizes each, marks contradictions against existing long-term, and writes the result through deterministic helper commands (`node scripts/mindwright.mjs <tool>`, the path every memory skill uses — there is no MCP server). The whole loop is reversible until the `finalize_drain` call that hard-deletes the consumed rows.
 
 ## Multi-agent / wrightward
 
@@ -147,9 +148,9 @@ Mindwright is built for [wrightward](wrightward.md)'s peer setup but works fine 
 
 The `consolidator` role is the natural fit for a peer dedicated to dreaming: assign it via `/mindwright:assign-role <peer-handle-or-session-id> consolidator` and mindwright auto-spawns a background session running `/mindwright:dream` on cue (keyed by `(project, requesting_handle)`, stable across boots, won't dogpile). The role argument also drives procedural-memory retrieval — `role:planner`, `role:reviewer`, `role:tester`, and any custom string all work.
 
-## Design
+## Architecture
 
-For the full architecture — the TEMPR retrieval pipeline, dual-tier storage, the daemon model, the calibration spike — read [DESIGN.md](https://github.com/Joys-Dawn/toolwright/blob/master/mindwright/DESIGN.md).
+A deterministic chunker writes short-term rows from the live transcript via Claude Code hooks. The **TEMPR** retrieval pipeline — 4-way candidate generation → RRF fusion → cross-encoder rerank → abstention floor — pulls relevance-ranked facts from both tiers back into context. `/mindwright:dream` drains short-term into long-term. Every memory operation runs through one CLI (`scripts/mindwright.mjs`, invoked by the skills) against a per-project SQLite store; embed/rerank go to the single machine-wide model daemon. There is no MCP server and no per-session model process. Source: [github.com/Joys-Dawn/toolwright/mindwright](https://github.com/Joys-Dawn/toolwright/tree/master/mindwright).
 
 ## License
 

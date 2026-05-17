@@ -21,4 +21,4 @@ Skills:
 - `/mindwright:unassign-role <session> <role>` — detach a role tag.
 - `/mindwright:reset` — destructive DB drop.
 
-See `DESIGN.md` for architecture and `README.md` for the steady-state flow.
+See `README.md` (the "Architecture" section) for the design and steady-state flow.
