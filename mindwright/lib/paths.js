@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
-import { SESSION_ID_PATTERN } from './constants.js';
+import { SESSION_ID_PATTERN, MODEL_DAEMON_PROTOCOL } from './constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -167,4 +167,44 @@ export function pipePath(sessionId) {
     return `\\\\.\\pipe\\mindwright-${sessionId}`;
   }
   return join(dataDir(), `daemon-${sessionId}.sock`);
+}
+
+// ── Machine-wide model daemon ─────────────────────────────────────────────
+// MACHINE-global, NOT per-project and NOT per-session: one model host serves
+// every Claude session across every project on the box. Rooted at the user's
+// home cache (same root as the HF model cache) so it survives cwd changes and
+// is shared no matter which repo a session is launched from.
+//
+// MINDWRIGHT_MODEL_DAEMON_SOCK overrides the socket path wholesale — the test
+// seam so the suite never binds a real socket under the user's home dir, and
+// an escape hatch for locked-down homes. When set, the lock/log derive from
+// it so all three stay co-located.
+function mindwrightCacheDir() {
+  return join(homedir(), '.cache', 'mindwright');
+}
+
+export function modelDaemonSocketPath() {
+  const override = process.env.MINDWRIGHT_MODEL_DAEMON_SOCK;
+  if (override) return override;
+  if (process.platform === 'win32') {
+    return `\\\\.\\pipe\\mindwright-modeld-v${MODEL_DAEMON_PROTOCOL}`;
+  }
+  return join(mindwrightCacheDir(), `modeld-v${MODEL_DAEMON_PROTOCOL}.sock`);
+}
+
+// Singleton-election lock. A would-be daemon O_EXCL-creates this; the winner
+// writes {pid, protocol, startedAt}. On Windows the socket is a named pipe
+// (no filesystem node), so the lock is the ONLY cross-process election
+// primitive — always a real file, derived from the cache dir (or alongside
+// the override path).
+export function modelDaemonLockPath() {
+  const override = process.env.MINDWRIGHT_MODEL_DAEMON_SOCK;
+  if (override) return `${override}.lock`;
+  return join(mindwrightCacheDir(), `modeld-v${MODEL_DAEMON_PROTOCOL}.lock`);
+}
+
+export function modelDaemonLogPath() {
+  const override = process.env.MINDWRIGHT_MODEL_DAEMON_SOCK;
+  if (override) return `${override}.log`;
+  return join(mindwrightCacheDir(), 'modeld.log');
 }

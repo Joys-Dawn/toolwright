@@ -287,6 +287,22 @@ export const SESSION_ID_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
 // vice-versa). Keep them in lockstep here.
 export const DAEMON_TICKET_MAX_AGE_MS = 10 * 60 * 1000;
 
+// Machine-wide model daemon. ONE process per machine owns the embedder +
+// reranker and serves every session/project over a fixed global socket — so
+// the ~1-2 GB of ONNX weights load exactly once on the box instead of once
+// per Claude session (the old per-session MCP model load that exhausted RAM).
+//
+// MODEL_DAEMON_PROTOCOL is baked into the socket/lock filename so a plugin
+// upgrade that changes the embed/rerank wire format rotates to a fresh daemon
+// instead of talking a half-broken protocol to a stale one. Bump on any wire
+// change.
+export const MODEL_DAEMON_PROTOCOL = 1;
+
+// Idle self-exit. With no embed/rerank request for this long the daemon frees
+// its ~1-2 GB and exits; the next client lazily respawns it. 15 min comfortably
+// outlives normal think/tool gaps within an active session.
+export const MODEL_DAEMON_IDLE_EXIT_MS = 15 * 60 * 1000;
+
 // Pipe-client RPC timeout. Local named-pipe / unix-socket round-trips for
 // embed/rerank settle in <100ms even on the slowest local SSD; 5s is a
 // generous ceiling that catches a wedged daemon without letting a hook

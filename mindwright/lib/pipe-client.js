@@ -13,7 +13,8 @@
 // "Daemon liveness" for the full degradation story.
 
 import net from 'node:net';
-import { pipePath } from './paths.js';
+import { modelDaemonSocketPath } from './paths.js';
+import { ensureModelDaemon } from './model-daemon-spawn.js';
 import { PIPE_DEFAULT_TIMEOUT_MS } from './constants.js';
 
 const DEFAULT_TIMEOUT_MS = PIPE_DEFAULT_TIMEOUT_MS;
@@ -105,10 +106,16 @@ function sendOne(path, payload, timeoutMs) {
 }
 
 /**
- * Build a pipe-client bound to a specific session's daemon. The returned
- * object is stateless; each method opens and closes its own connection.
+ * Build a client to the MACHINE-WIDE model daemon (one per box, shared by
+ * every session/project). The returned object is stateless; each method opens
+ * and closes its own connection. On any connect failure the method returns
+ * `null` (caller degrades) AND fire-and-forget respawns the daemon so the
+ * next call connects — the daemon's lock election dedupes concurrent spawns.
  *
- * @param {string} sessionId
+ * `sessionId` is accepted for call-site compatibility (hooks pass theirs) but
+ * is no longer part of the socket path — the daemon is not per-session.
+ *
+ * @param {string} [sessionId] ignored; kept for signature stability
  * @param {object} [opts]
  * @param {number} [opts.timeoutMs] per-call timeout in ms (default 5000)
  * @returns {{
@@ -118,8 +125,7 @@ function sendOne(path, payload, timeoutMs) {
  * }}
  */
 export function connectPipe(sessionId, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-  if (!sessionId) throw new Error('connectPipe: sessionId required');
-  const path = pipePath(sessionId);
+  const path = modelDaemonSocketPath();
 
   // Each method opens a FRESH socket, so there's no in-flight request to
   // correlate against — the connection itself is the correlation. The
@@ -140,7 +146,10 @@ export function connectPipe(sessionId, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) 
         { method: 'embed', params: texts },
         timeoutMs
       );
-      if (!Array.isArray(result)) return null;
+      if (!Array.isArray(result)) {
+        ensureModelDaemon(); // down/booting — bring it up for the next call
+        return null;
+      }
       try {
         return result.map(base64ToF32);
       } catch {
@@ -161,7 +170,10 @@ export function connectPipe(sessionId, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) 
         { method: 'rerank', params: { query, candidates } },
         timeoutMs
       );
-      if (!Array.isArray(result)) return null;
+      if (!Array.isArray(result)) {
+        ensureModelDaemon(); // down/booting — bring it up for the next call
+        return null;
+      }
       return result;
     },
 

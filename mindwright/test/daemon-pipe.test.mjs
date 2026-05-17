@@ -40,12 +40,26 @@ function stubRerank(query, candidates) {
 function setupIsolatedRoot() {
   const dir = mkdtempSync(join(tmpdir(), 'mindwright-daemon-test-'));
   const prev = process.env.MINDWRIGHT_PROJECT_ROOT;
+  const prevSock = process.env.MINDWRIGHT_MODEL_DAEMON_SOCK;
+  const prevDisable = process.env.MINDWRIGHT_MODEL_DAEMON_DISABLE;
   process.env.MINDWRIGHT_PROJECT_ROOT = dir;
+  // The client now talks to the MACHINE-wide model daemon socket, not a
+  // per-session one. Point it at an isolated tmp socket so the test's
+  // startPipeServer and connectPipe agree, and DISABLE the lazy respawn so a
+  // degrade-to-null assertion can't fork a real ONNX daemon.
+  const sock = join(dir, 'modeld.sock');
+  process.env.MINDWRIGHT_MODEL_DAEMON_SOCK = sock;
+  process.env.MINDWRIGHT_MODEL_DAEMON_DISABLE = '1';
   return {
     dir,
+    sock,
     cleanup() {
       if (prev === undefined) delete process.env.MINDWRIGHT_PROJECT_ROOT;
       else process.env.MINDWRIGHT_PROJECT_ROOT = prev;
+      if (prevSock === undefined) delete process.env.MINDWRIGHT_MODEL_DAEMON_SOCK;
+      else process.env.MINDWRIGHT_MODEL_DAEMON_SOCK = prevSock;
+      if (prevDisable === undefined) delete process.env.MINDWRIGHT_MODEL_DAEMON_DISABLE;
+      else process.env.MINDWRIGHT_MODEL_DAEMON_DISABLE = prevDisable;
       try {
         rmSync(dir, { recursive: true, force: true });
       } catch {
@@ -70,7 +84,7 @@ test('roundtrip: embed + rerank against in-process stub server', async () => {
   try {
     const { startPipeServer, connectPipe } = await importFresh();
     const { close } = await startPipeServer({
-      sessionId: 'roundtrip-1',
+      pipePath: process.env.MINDWRIGHT_MODEL_DAEMON_SOCK,
       embedFn: stubEmbed,
       rerankFn: stubRerank,
     });
@@ -100,7 +114,7 @@ test('embed returns null after server.close()', async () => {
   try {
     const { startPipeServer, connectPipe } = await importFresh();
     const { close } = await startPipeServer({
-      sessionId: 'close-1',
+      pipePath: process.env.MINDWRIGHT_MODEL_DAEMON_SOCK,
       embedFn: stubEmbed,
       rerankFn: stubRerank,
     });
@@ -157,7 +171,7 @@ test('server-side errors degrade to null AND surface the message on stderr', asy
       throw new Error('synthetic embed failure');
     };
     const { close } = await startPipeServer({
-      sessionId: 'errlog-1',
+      pipePath: process.env.MINDWRIGHT_MODEL_DAEMON_SOCK,
       embedFn: failEmbed,
       rerankFn: stubRerank,
     });
@@ -209,7 +223,7 @@ test('client returns null after the daemon is SIGKILL\'d (subprocess)', async ()
         return v;
       });
       const stubRerank = async (q, cs) => cs.map((_, i) => 0.5 + i * 0.01);
-      await startPipeServer({ sessionId: process.env.MW_TEST_SID, embedFn: stubEmbed, rerankFn: stubRerank });
+      await startPipeServer({ pipePath: process.env.MINDWRIGHT_MODEL_DAEMON_SOCK, embedFn: stubEmbed, rerankFn: stubRerank });
       process.stdout.write('READY\\n');
       // keep the loop alive
       setInterval(() => {}, 1 << 30);
@@ -274,7 +288,7 @@ test('daemon refuses unbounded no-newline input and closes the connection (CWE-7
     const { startPipeServer } = await importFresh();
     const MAX = 4096;
     const { server, path, close } = await startPipeServer({
-      sessionId: 'flood',
+      pipePath: process.env.MINDWRIGHT_MODEL_DAEMON_SOCK,
       embedFn: stubEmbed,
       rerankFn: stubRerank,
       maxBufferBytes: MAX,
