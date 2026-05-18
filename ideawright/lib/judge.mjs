@@ -65,6 +65,13 @@ export async function callJudge({
       '--append-system-prompt', system,
       '--model', model,
       '--permission-mode', 'dontAsk',
+      // Judge calls are single-shot and never resumed, and a daily run makes
+      // hundreds-to-thousands of them — all sharing one stable sandbox cwd.
+      // Without this, each call drops a fresh <session>.jsonl into that one
+      // ~/.claude/projects/<slug> dir, so it balloons with transcripts the
+      // judge never reads. --no-session-persistence (only valid with -p)
+      // skips the disk write entirely; the JSON result still returns on stdout.
+      '--no-session-persistence',
     ];
     const child = spawnFn('claude', args, { cwd: spawnCwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     let stdout = '';

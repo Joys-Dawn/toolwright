@@ -91,6 +91,23 @@ test('callJudge pipes the user prompt to stdin and passes model + flags as argv'
   assert.equal(args[args.indexOf('--append-system-prompt') + 1], 'SYS');
 });
 
+test('callJudge passes --no-session-persistence so judge calls do not leak transcripts', async () => {
+  // Regression: judge calls are single-shot, never resumed, and a daily run
+  // makes hundreds-to-thousands of them sharing one sandbox cwd. Without this
+  // flag each call writes a <session>.jsonl into the same
+  // ~/.claude/projects/<slug> dir, ballooning it with unread transcripts.
+  const h = spawnHarness();
+  const p = callJudge({ system: 's', user: 'u', _spawn: h._spawn });
+  h.child().stdout.emit('data', Buffer.from(JSON.stringify({ result: '{"v":1}' })));
+  h.child().emit('close', 0);
+  await p;
+
+  assert.ok(
+    h.calls[0].args.includes('--no-session-persistence'),
+    'judge spawn must include --no-session-persistence to avoid transcript-file accumulation',
+  );
+});
+
 test('callJudge unwraps outer.result through extractJson', async () => {
   const h = spawnHarness();
   const p = callJudge({ system: 's', user: 'u', _spawn: h._spawn });
