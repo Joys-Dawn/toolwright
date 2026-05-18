@@ -279,7 +279,8 @@ test('runHookShim degrades a THROWING notReadyStdout thunk to the {} no-op (best
 // one-fs-stat check, NOT a counter) → else optimistic (with the
 // embedderCached-gated model line). The options object is a real-impl-default
 // seam so npm / models / install state are injectable without an actual
-// `npm --version` spawn, a ~/.cache dependency, or a real install log on disk.
+// `npm --version` spawn, a real model-cache dependency, or a real install log
+// on disk.
 
 function withAutoInstall(value, fn) {
   const prev = process.env.MINDWRIGHT_AUTO_INSTALL;
@@ -320,9 +321,10 @@ test('installingNotice: npm present, no prior failed attempt → the optimistic 
 });
 
 test('installingNotice: optimistic branch OMITS the ~5 GB model line when models are already cached (behavior-1)', () => {
-  // A returning user who already ran /mindwright:setup has the embedder in
-  // ~/.cache/huggingface, which survives plugin updates. Telling them to redo
-  // a "~5 GB model download" is false for them — alarm or a needless re-run.
+  // A returning user who already ran /mindwright:setup has the embedder cached
+  // in the persistent plugin data dir (${CLAUDE_PLUGIN_DATA}/model-cache),
+  // which survives plugin updates. Telling them to redo a "~5 GB model
+  // download" is false for them — alarm or a needless re-run.
   withAutoInstall(undefined, () => {
     const ac = noticeAC({
       npmOk: () => true,
@@ -561,7 +563,12 @@ const ENTRYPOINTS = [
   'hooks/user-prompt-submit.js',
   'hooks/pre-tool-use.js',
   'hooks/post-tool-use-inbox.js',
-  'mcp/server.mjs',
+  // The MCP server is gone. Its replacements: the machine-wide model daemon
+  // (detached-spawned by clients) and the CLI every skill invokes. Both must
+  // stay statically dep-free — native code only via dynamic import() after
+  // the readiness gate, exactly like the hooks.
+  'scripts/model-daemon.mjs',
+  'scripts/mindwright.mjs',
   'scripts/setup.js',
   'scripts/status.js',
   'scripts/seed-from-repo.js',

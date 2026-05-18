@@ -307,62 +307,7 @@ useEffect(() => {
 
 ---
 
-## 6. Resource Leaks & Missing Cleanup
-
-### Event Listener Never Removed
-
-Adding a listener in a component's mount phase without removing it on unmount causes the handler to fire after the component is gone, often throwing on de-referenced state.
-
-**Violation:**
-```tsx
-useEffect(() => {
-  window.addEventListener("resize", handleResize);
-  // no cleanup — handleResize fires after unmount, references stale state
-}, []);
-```
-**Fix:**
-```tsx
-useEffect(() => {
-  window.addEventListener("resize", handleResize);
-  return () => window.removeEventListener("resize", handleResize);
-}, [handleResize]);
-```
-
-### Interval Not Cleared on Unmount
-
-A `setInterval` that is not cleared on unmount continues firing after the component is gone, wasting resources and updating state that is no longer rendered.
-
-**Violation:**
-```tsx
-useEffect(() => {
-  setInterval(tick, 1000); // interval ID discarded; can never be cleared
-}, []);
-```
-**Fix:**
-```tsx
-useEffect(() => {
-  const id = setInterval(tick, 1000);
-  return () => clearInterval(id);
-}, []);
-```
-
-### Growing Unbounded Cache
-
-An in-memory cache that is added to without eviction grows without bound and eventually exhausts memory.
-
-**Violation:**
-```ts
-const cache = new Map<string, Result>(); // module-level, grows forever
-function getCached(key: string) {
-  if (!cache.has(key)) cache.set(key, compute(key));
-  return cache.get(key)!;
-}
-```
-**Fix**: Add a max-size eviction policy (LRU), a TTL, or use a bounded cache library. At minimum, document that the key space must be finite and bounded.
-
----
-
-## 7. Edge Cases — Inputs
+## 6. Edge Cases — Inputs
 
 ### Empty String Assumptions
 
@@ -414,7 +359,7 @@ const avgScore = userCount === 0 ? 0 : totalScore / userCount;
 
 ---
 
-## 8. Edge Cases — External Data & Network
+## 7. Edge Cases — External Data & Network
 
 ### `fetch` Does Not Reject on HTTP Errors
 
@@ -464,7 +409,7 @@ try {
 
 ---
 
-## 9. Concurrency & Shared State
+## 8. Concurrency & Shared State
 
 ### Non-Atomic Read-Modify-Write
 
@@ -505,124 +450,3 @@ async function sync() {
 }
 ```
 **Fix**: The guard only works if `isSyncing = true` is set synchronously before the first `await`. The code above is actually fine for this reason — flag it only if there is a `await` before setting the flag. For distributed/multi-instance systems, an in-memory flag is insufficient and must be moved to a database or Redis.
-
----
-
-## 10. Scalability — Algorithmic Complexity
-
-### Linear Scan Inside a Loop — O(n²)
-
-Using `Array.includes()`, `Array.find()`, or `Array.indexOf()` inside a loop that iterates over a collection of size n performs n × n = n² operations.
-
-**Violation:**
-```ts
-// O(n²): for each item, scan all blockedIds
-const visible = items.filter(item => !blockedIds.includes(item.id));
-```
-**Fix:**
-```ts
-// O(n): one-time Set construction + O(1) lookups
-const blockedSet = new Set(blockedIds);
-const visible = items.filter(item => !blockedSet.has(item.id));
-```
-
-### Regex Recompilation in a Loop
-
-`new RegExp(pattern)` compiles the pattern every call. If called in a loop with a constant pattern, this is wasted work.
-
-**Violation:**
-```ts
-for (const line of lines) {
-  if (new RegExp("^ERROR:").test(line)) handle(line); // compiles every iteration
-}
-```
-**Fix:**
-```ts
-const errorPattern = /^ERROR:/; // compile once
-for (const line of lines) {
-  if (errorPattern.test(line)) handle(line);
-}
-```
-
----
-
-## 11. Scalability — Database & I/O
-
-### N+1 Queries
-
-Fetching a list, then issuing one query per row in a loop, is the most common database scalability bug. It turns one round-trip into N+1 round-trips.
-
-**Violation:**
-```ts
-const posts = await db.query("SELECT * FROM posts LIMIT 20");
-for (const post of posts) {
-  // 20 separate queries — one per post
-  post.author = await db.query("SELECT * FROM users WHERE id = $1", [post.author_id]);
-}
-```
-**Fix:**
-```ts
-const posts = await db.query("SELECT * FROM posts LIMIT 20");
-const authorIds = posts.map(p => p.author_id);
-const authors = await db.query("SELECT * FROM users WHERE id = ANY($1)", [authorIds]);
-const authorMap = new Map(authors.map(a => [a.id, a]));
-posts.forEach(p => { p.author = authorMap.get(p.author_id); });
-```
-
-### Unbounded Query
-
-A query with no `LIMIT` returns the entire table. Tables grow over time; this query will eventually time out, exhaust memory, or cause OOM.
-
-**Violation:**
-```ts
-const users = await db.query("SELECT * FROM users WHERE active = true");
-// returns 10 rows today; returns 100,000 rows in a year
-```
-**Fix:**
-```ts
-const users = await db.query(
-  "SELECT id, display_name FROM users WHERE active = true LIMIT $1 OFFSET $2",
-  [pageSize, page * pageSize]
-);
-```
-
----
-
-## 12. Scalability — Memory & Throughput
-
-### Loading Full Dataset Into Memory
-
-Reading an entire file, table, or collection into an array before processing. Memory usage grows linearly with data size.
-
-**Violation:**
-```ts
-const allEvents = await db.query("SELECT * FROM events"); // 10 million rows
-const processed = allEvents.map(transform);
-```
-**Fix**: Use cursor-based streaming or pagination:
-```ts
-let cursor = 0;
-while (true) {
-  const batch = await db.query("SELECT * FROM events WHERE id > $1 LIMIT 1000", [cursor]);
-  if (batch.length === 0) break;
-  batch.forEach(transform);
-  cursor = batch[batch.length - 1].id;
-}
-```
-
-### In-Memory Coordination State That Breaks on Scale-Out
-
-A module-level `Map`, `Set`, or variable used as a cache, rate limiter, or deduplication store is **not shared** between multiple server instances or worker processes. When the service scales out or restarts, the state is lost or silently per-instance.
-
-**Violation:**
-```ts
-// Works on one instance; breaks when there are two
-const rateLimitCache = new Map<string, number>(); // module-level
-
-function checkRateLimit(userId: string): boolean {
-  const count = rateLimitCache.get(userId) ?? 0;
-  rateLimitCache.set(userId, count + 1);
-  return count < 10;
-}
-```
-**Fix**: Move shared state to a database (Redis, PostgreSQL) that all instances can access. Flag this whenever module-level mutable state is used for coordination in a server context.

@@ -1,33 +1,13 @@
-// SQLite + sqlite-vec + FTS5 store. One module owns every read/write path.
-//
-// Concurrency: WAL mode + busy_timeout=5000 lets the daemon and N hooks all
-// open their own writer connections; SQLite serializes them. Each call here
-// opens one connection — callers should reuse the returned `Store` per-process.
-//
-// Open-cost budget: openStore() runs (a) better-sqlite3 native init, (b) three
-// pragma sets, (c) sqliteVec.load (extension load — the only non-trivial cost
-// at a few ms), (d) runMigrations which short-circuits via a meta SELECT once
-// the schema is current. Per-firing cost on a warm machine is < 50ms p99
-// (smoke-tested locally — Phase 0 of the planning checklist). Each hook is a
-// fresh Node process so there is no cross-firing connection to reuse, by
-// design; that's the cost of writes from short-lived scripts rather than
-// going through the daemon. Long-running clients (the MCP server itself,
-// scripts/setup.js, scripts/status.js) open once and reuse the Store.
-//
-// Int8 vectors: transformers.js produces Float32Array (CLS-pooled + L2-normalized
-// so each component sits in [-1, 1]). We quantize client-side by * 127 + round,
-// then bind the resulting Int8Array buffer through `vec_int8(?)` — the bare
-// buffer is rejected as float32 (smoke-tested 2026-05-12).
-//
-// rowid binding: vec_index demands an integer primary key. better-sqlite3 binds
-// JS `Number` as float64 which sqlite-vec rejects. Pass rowids as `BigInt`
-// (smoke-tested 2026-05-12).
+// SQLite + sqlite-vec + FTS5 store; owns every read/write path.
+// Int8 vectors: embeddings are L2-normalized Float32 in [-1, 1]; quantize by
+// *127+round and bind through vec_int8(?) (a bare buffer is rejected as
+// float32). Rowids bind as BigInt (better-sqlite3 binds JS Number as float64,
+// which sqlite-vec rejects).
 
-// Native deps are resolved from the persistent ${CLAUDE_PLUGIN_DATA}/
-// node_modules via lib/native-require.js (see that file), NOT a bare import
-// (which would resolve against the ephemeral PLUGIN_ROOT that has no
-// node_modules). Top-level await is safe: store.js is only ever reached by a
-// dynamic import() AFTER the readiness gate, so deps are present by here.
+// Native deps resolve from the persistent node_modules via native-require.js,
+// not a bare import (which would resolve against the ephemeral PLUGIN_ROOT that
+// has no node_modules). Top-level await is safe: store.js is only reached by a
+// dynamic import() after the readiness gate.
 import { loadNative, loadNativeDefault } from './native-require.js';
 const Database = await loadNativeDefault('better-sqlite3');
 const sqliteVec = await loadNative('sqlite-vec');
@@ -50,21 +30,12 @@ export function quantizeToInt8(float32Vec) {
 
 export function openStore({ path = dbPath(), readonly = false, sessionId = null } = {}) {
   const dir = dirname(path);
-  // Owner-only mode (0o700) on POSIX so a co-located local user can't read
-  // the DB (which embeds prompt history, peer messages, distilled facts) or
-  // the markdown mirrors that share this directory. The daemon-pipe already
-  // applies the same defense at 0o600 to its unix socket — extending it
-  // here closes the matching file-mode side door. Harmless on Windows
-  // (Node's chmod equivalent is a no-op; Windows ACLs handle access).
-  // CWE-732 / CWE-276 defense in depth.
+  // Owner-only (0o700) on POSIX so a co-located local user can't read the DB
+  // or the markdown mirrors sharing this dir. Windows uses ACLs.
   const isNew = !existsSync(dir);
   if (isNew) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   } else if (process.platform !== 'win32') {
-    // Windows uses ACLs, not unix permission bits — Node's chmod is a no-op
-    // there, so skip entirely. On POSIX a failure here means the
-    // owner-only defense is lost; log stderr so an operator can spot the
-    // pattern instead of silently losing the file-mode boundary.
     try { chmodSync(dir, 0o700); } catch (e) {
       process.stderr.write(
         `[mindwright/store] chmod(${dir}, 0o700) failed — owner-only defense not active: ${e && e.message ? e.message : e}\n`,
@@ -73,8 +44,7 @@ export function openStore({ path = dbPath(), readonly = false, sessionId = null 
   }
 
   const db = new Database(path, { readonly });
-  // Lock the DB file itself to owner-only — Database() doesn't take a mode,
-  // so we tighten after the fact. Same Windows / POSIX split as above.
+  // Database() takes no mode, so tighten the DB file to owner-only after open.
   if (!readonly && process.platform !== 'win32') {
     try { chmodSync(path, 0o600); } catch (e) {
       process.stderr.write(
@@ -93,16 +63,8 @@ export function openStore({ path = dbPath(), readonly = false, sessionId = null 
   return new Store(db, { sessionId });
 }
 
-// ── meta key-value plumbing ───────────────────────────────────────────────
-// `meta` is a single (key PRIMARY KEY, value TEXT NOT NULL, updated_at) table.
-// The upsert and the point-read were copy-pasted byte-identically across ~18
-// call sites, each re-deriving its own timestamp (best-practices-1). These
-// two helpers own the SQL and the timestamp; every caller goes through them.
-// Per-caller JSON.parse / base64 / shape-validation stays in the caller —
-// only the SQL string and the `new Date().toISOString()` are centralized.
-// Module-level (not just Store methods) because runMigrations runs before
-// `new Store()` and holds only the raw `db` handle; the Store methods
-// `_metaSet`/`_metaGet` thinly delegate here.
+// Module-level (not Store methods) because runMigrations runs before
+// `new Store()` with only the raw `db` handle.
 function metaSet(db, key, value) {
   db.prepare(`
     INSERT INTO meta(key, value, updated_at) VALUES (?, ?, ?)
@@ -110,10 +72,7 @@ function metaSet(db, key, value) {
   `).run(key, value, new Date().toISOString());
 }
 
-// Raw stored value string, or null when the key is absent. `meta.key` is the
-// table's PRIMARY KEY so .get() returns the single row (≡ the old
-// `.all()[0]`), and `value` is NOT NULL so a null return unambiguously means
-// "no row". The caller owns any decoding and the absent-vs-present meaning.
+// `value` is NOT NULL, so a null return unambiguously means "no row".
 function metaGet(db, key) {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get(key);
   return row ? row.value : null;
@@ -129,9 +88,8 @@ function runMigrations(db) {
     throw e;
   }
 
-  // Read the initial applied-set BEFORE looping so we know which files to
-  // even attempt. The meta table may not exist yet on first run (0001 creates
-  // it), so we tolerate a missing table on the bootstrap read.
+  // meta may not exist yet on first run (0001 creates it), so tolerate a
+  // missing table here.
   let applied = new Set();
   try {
     const v = metaGet(db, SCHEMA_VERSION_KEY);
@@ -140,22 +98,10 @@ function runMigrations(db) {
     // meta doesn't exist yet — nothing applied
   }
 
-  // Per-migration transaction wraps both the DDL and the meta upsert so a
-  // mid-statement crash leaves nothing half-applied — the next run re-tries
-  // the whole migration from a clean meta state.
-  //
-  // Concurrent first-run race (cross-process WAL): two openStore() callers
-  // can each read meta and see an empty applied set, both queue their 0001
-  // transactions, SQLite serializes them via the write lock, and the SECOND
-  // process then re-applies migrations the first already committed —
-  // producing "duplicate column name" on ALTER TABLE statements that have no
-  // `IF NOT EXISTS` syntax in SQLite.
-  //
-  // Fix: use BEGIN IMMEDIATE (better-sqlite3 transaction(...).immediate()) so
-  // the write lock is acquired at BEGIN, then re-read the applied set INSIDE
-  // the transaction. If a peer just committed this file, we observe it and
-  // skip. The outer pre-loop read is kept only to know which files are
-  // candidates to try at all — the in-txn re-read is the source of truth.
+  // Cross-process WAL race: two callers can both see an empty applied set and
+  // re-apply 0001, producing "duplicate column name" on ALTER TABLE (no IF NOT
+  // EXISTS in SQLite). .immediate() takes the write lock at BEGIN so the in-txn
+  // re-read of the applied set is authoritative and a peer's commit is seen.
   for (const file of files) {
     if (applied.has(file)) continue;
     const sql = readFileSync(join(dir, file), 'utf8');
@@ -168,7 +114,7 @@ function runMigrations(db) {
         // meta still doesn't exist — must be the very first migration
       }
       if (inTxnApplied.has(file)) {
-        // Peer committed this one while we were waiting on the write lock.
+        // Peer committed this one while we waited on the write lock.
         applied.add(file);
         return;
       }
@@ -178,8 +124,6 @@ function runMigrations(db) {
       metaSet(db, SCHEMA_VERSION_KEY, value);
       applied = inTxnApplied;
     });
-    // .immediate() → BEGIN IMMEDIATE: acquire the write lock at BEGIN so we
-    // never read meta before another process has finished writing it.
     applyTxn.immediate();
   }
 }
@@ -190,12 +134,6 @@ class Store {
     this.sessionId = sessionId;
   }
 
-  // Late-bind the owning session id. The MCP server resolves its session id
-  // asynchronously (after the SDK handshake), so the store is constructed
-  // before the id is known. Callers that need it on retain helpers should
-  // prefer passing `sessionId` to the helper directly; this setter is a
-  // convenience for the daemon path where the same store handle services
-  // every tool invocation.
   setSessionId(sessionId) {
     this.sessionId = sessionId || null;
   }
@@ -204,11 +142,7 @@ class Store {
     this.db.close();
   }
 
-  // INSERT a new entry. If `embedding` is provided (Float32Array, length 1024),
-  // we quantize and write to vec_index in the same transaction. Returns the
-  // new entry id.
-  //
-  // Tier-shape contract (enforced by the DB CHECK):
+  // Tier-shape contract (also enforced by the DB CHECK):
   //   - tier='short': category null/'raw', scope null.
   //   - tier='long':  category in {procedural,episodic,fact}, scope in
   //                   {user,project,role:<role>}.
@@ -220,13 +154,9 @@ class Store {
     content,
     sourceRef = null,
     sessionId,
-    // Optional provenance/event time (ISO string). Default NULL → the row
-    // behaves exactly as before this column existed: retrieval recency
-    // COALESCEs to created_at. Only transcript-derived paths (live flush,
-    // retainFact's representative stamp, native-memory seed rows) pass it.
-    // GOVERNING INVARIANT: this only ever feeds recency ranking — created_at
-    // alone drives drain/finalize/safety-net lifecycle. Never thread eventTs
-    // into any lifecycle query.
+    // INVARIANT: event_ts feeds recency ranking only; created_at alone drives
+    // drain/finalize/safety-net lifecycle. Never thread it into a lifecycle
+    // query. NULL → recency COALESCEs to created_at.
     eventTs = null,
     supersedes = null,
     confidence = null,
@@ -248,11 +178,9 @@ class Store {
     return txn();
   }
 
-  // Write or replace the embedding for an existing entry. The deferred-embed
-  // sweeper reads pending ids, awaits the embedder (slow), then calls back
-  // here — a concurrent hardDeleteShortTerm between those steps can wipe the
-  // entries row. Guarding the insert behind an existence check inside one
-  // transaction prevents an orphan vec_index row that has no matching entry.
+  // Existence check + insert in one transaction so a concurrent
+  // hardDeleteShortTerm can't leave an orphan vec_index row (the sweeper
+  // awaits the slow embedder between reading pending ids and calling here).
   writeEmbedding(entryId, embedding) {
     if (!(embedding instanceof Float32Array)) {
       throw new Error('embedding must be a Float32Array');
@@ -267,7 +195,7 @@ class Store {
         'SELECT 1 FROM entries WHERE id = ?',
       ).get(rowid);
       if (!stillExists) return false;
-      // DELETE-then-INSERT for replace semantics; vec0 tables don't support UPSERT.
+      // DELETE-then-INSERT: vec0 tables don't support UPSERT.
       this.db.prepare('DELETE FROM vec_index WHERE rowid = ?').run(rowid);
       this.db.prepare(
         'INSERT INTO vec_index(rowid, embedding) VALUES (?, vec_int8(?))',
@@ -281,18 +209,9 @@ class Store {
     return this.db.prepare('SELECT * FROM entries WHERE id = ?').get(id);
   }
 
-  // Semantic NN search. Returns [{id, distance}] ordered by ascending distance.
-  // tier (optional): 'short' | 'long' filter applied via the JOIN against
-  // entries. Semantic note — this is NOT exactly-k for tier-filtered queries:
-  // vec_index MATCH first picks the k cosine-closest neighbors across ALL
-  // tiers, then the JOIN drops the rows whose tier doesn't match. Result is
-  // "up to k tier-matching rows, fewer if vec_index's k-closest spans both
-  // tiers." The downstream RRF + rerank pass only consumes top-20 anyway, so
-  // partial recall here is absorbed; if the consumer needs exactly-k it must
-  // over-request itself (caller-supplied k > target_k).
-  // roles (optional): when provided (array, possibly empty), scopes long-tier
-  // rows by `scope LIKE 'role:%'` per `scopeFilterClause`. User-scoped and
-  // project-scoped facts pass through regardless.
+  // NOT exactly-k for tier-filtered queries: vec_index MATCH picks the k
+  // cosine-closest across ALL tiers, then the JOIN drops non-matching rows, so
+  // a tier filter yields ≤ k rows. Callers needing exactly-k must over-request.
   semanticSearch(queryFloat32, k, tier = null, roles = null) {
     const int8 = quantizeToInt8(queryFloat32);
     const ts = tierScopeClause(tier, roles);
@@ -306,7 +225,7 @@ class Store {
     `).all(Buffer.from(int8.buffer), k, ...ts.params);
   }
 
-  // BM25 keyword search via FTS5. Returns [{id, rank}] (rank is BM25 score, more-negative = better).
+  // rank is the BM25 score (more-negative = better).
   bm25Search(queryText, k, tier = null, roles = null) {
     const ts = tierScopeClause(tier, roles);
     return this.db.prepare(`
@@ -319,14 +238,8 @@ class Store {
     `).all(queryText, ...ts.params, k);
   }
 
-  // Most-recent active rows. Recency = COALESCE(event_ts, created_at):
-  // a row distilled/seeded from a historical transcript carries the true
-  // event time in event_ts and must rank by THAT, not by its seed-run
-  // created_at. event_ts is NULL for every live-captured row, so COALESCE
-  // falls back to created_at — byte-identical to pre-change ordering for
-  // them. The (…, e.id DESC) tiebreak is unchanged. This is a
-  // relevance-ranking read ONLY; the governing invariant forbids event_ts
-  // from any lifecycle/drain/finalize SQL.
+  // Recency = COALESCE(event_ts, created_at) so a row seeded from a historical
+  // transcript ranks by its true event time, not its seed-run created_at.
   temporalSearch(k, tier = null, roles = null) {
     const ts = tierScopeClause(tier, roles);
     return this.db.prepare(`
@@ -337,26 +250,19 @@ class Store {
     `).all(...ts.params, k);
   }
 
-  // Soft-archive: flip active to 0.
   softArchive(id) {
     this.db.prepare('UPDATE entries SET active = 0 WHERE id = ?').run(id);
   }
 
-  // Restore a previously soft-archived row by flipping active back to 1.
-  // Inverse of softArchive — used by /mindwright:restore to recover from
-  // typo-/mindwright:forget on the wrong fact id. Safe by construction:
-  // soft-archive never deletes data, so the row + embedding + entity links
-  // are intact and the flip is sufficient.
+  // Safe by construction: soft-archive never deletes, so the row + embedding +
+  // entity links are intact and the active flip suffices.
   restore(id) {
     this.db.prepare('UPDATE entries SET active = 1 WHERE id = ?').run(id);
   }
 
-  // Mark an old fact superseded by a new one. Both ids must exist. The full
-  // (new_id, old_id) edge is written to entry_supersedes so a merge of two
-  // originals into one new row records BOTH parents (the entries.supersedes
-  // column would silently lose one). The column is also updated for the
-  // simple 1:1 case so downstream consumers that read it directly still see
-  // a parent — last-wins for merges, but the join table is the truth.
+  // The (new_id, old_id) edge goes to entry_supersedes so a merge of two
+  // originals records BOTH parents; the entries.supersedes column would lose
+  // one (last-wins) — the join table is the truth.
   markSuperseded(oldId, newId, reason = null) {
     const txn = this.db.transaction(() => {
       this.db.prepare('UPDATE entries SET active = 0 WHERE id = ?').run(oldId);
@@ -370,27 +276,22 @@ class Store {
     txn();
   }
 
-  // Return every old_id that a given new_id supersedes (full audit chain
-  // including merges, which the entries.supersedes column can't represent).
+  // Full audit chain including merges, which the entries.supersedes column
+  // can't represent.
   supersedeParents(newId) {
     return this.db.prepare(
       'SELECT old_id, created_at, reason FROM entry_supersedes WHERE new_id = ? ORDER BY created_at ASC',
     ).all(newId);
   }
 
-  // Hard-delete short-term rows after a consolidation drain.
   hardDeleteShortTerm(ids) {
     if (!ids.length) return;
-    // Chunk to stay under SQLite's compile-time variable cap (defaults to
-    // 32766 on modern builds, but 999 on bundles built with the older
-    // default — playing it safe keeps a long-running daemon's project-scope
-    // consolidation from blowing up mid-drain). Apply the same chunking to
-    // vec_index DELETEs so a 5000-row drain doesn't pay 5000 prepared-statement
-    // executions on the vec table while entries is already batched at 10.
+    // Chunk to stay under SQLite's compile-time variable cap (999 on bundles
+    // built with the old default).
     const CHUNK = 500;
     const bigIds = ids.map((id) => (typeof id === 'bigint' ? id : BigInt(id)));
-    // entries triggers will sync FTS; vec_index needs explicit cleanup. Run
-    // everything in one transaction so partial failure rolls back cleanly.
+    // entries triggers sync FTS; vec_index needs explicit cleanup. One
+    // transaction so partial failure rolls back cleanly.
     const txn = this.db.transaction(() => {
       for (let i = 0; i < bigIds.length; i += CHUNK) {
         const vecSlice = bigIds.slice(i, i + CHUNK);
@@ -406,20 +307,15 @@ class Store {
     txn();
   }
 
-  // Per-session transcript offset accessors.
   getOffset(sessionId) {
     const row = this.db.prepare('SELECT last_read_byte FROM offsets WHERE session_id = ?').get(sessionId);
     return row ? row.last_read_byte : 0;
   }
 
-  // EXISTENCE, not value. getOffset() conflates "no row" and "row with
-  // last_read_byte = 0" (both return 0) — so it cannot answer "has mindwright
-  // ever made an offset decision for this session?". The trigger-agnostic
-  // offset-init latch (lib/offset-init.js) needs exactly that: a fresh-opt-in
-  // session is deliberately left at offset 0, and the EOF-default backstop
-  // must fire once per UNKNOWN session and never again — value-0 vs no-row is
-  // the only thing that distinguishes "already initialized to 0 on purpose"
-  // from "never seen". Returns true iff an offsets row exists for sessionId.
+  // EXISTENCE, not value: getOffset() returns 0 for both "no row" and
+  // last_read_byte=0, so it can't tell "deliberately left at 0" from "never
+  // seen". The offset-init latch (lib/offset-init.js) needs that distinction
+  // to fire its EOF-default backstop exactly once per unknown session.
   hasOffsetRow(sessionId) {
     return !!this.db.prepare('SELECT 1 FROM offsets WHERE session_id = ?').get(sessionId);
   }
@@ -432,12 +328,10 @@ class Store {
     `).run(sessionId, byte, now);
   }
 
-  // Entries with no embedding yet (created in write-only degraded mode). The
-  // daemon sweeper picks these up when it boots and back-fills.
-  // Rows whose embed_failures counter has exceeded the threshold are
-  // excluded — they are poison content that reliably crashes the tokenizer,
-  // and re-trying them every 60s blocks the head of the queue. Skip count
-  // is exposed via countPoisonEmbeds() for mindwright_status visibility.
+  // Entries with no embedding yet (written in degraded mode), back-filled by
+  // the daemon sweeper. Rows past the embed_failures threshold are excluded:
+  // they are poison content that reliably crashes the tokenizer and would
+  // otherwise block the head of the queue on every retry.
   pendingEmbedSweep(limit, { maxFailures = 5 } = {}) {
     return this.db.prepare(`
       SELECT e.id, e.content
@@ -449,17 +343,12 @@ class Store {
     `).all(maxFailures, limit);
   }
 
-  // Bump the embed-failure counter for a row by 1. Called by the sweeper
-  // on per-row embed exceptions.
   bumpEmbedFailure(entryId) {
     const rowid = typeof entryId === 'bigint' ? entryId : BigInt(entryId);
     this.db.prepare('UPDATE entries SET embed_failures = embed_failures + 1 WHERE id = ?').run(rowid);
   }
 
-  // Cheap count for status displays. The full sweep returns row payloads and
-  // is capped by `limit`; this returns the true outstanding total without
-  // paying the wire cost or the LIMIT cap. Pending = no embedding yet AND
-  // still under the retry threshold.
+  // True outstanding total (no LIMIT cap, unlike pendingEmbedSweep).
   countPendingEmbeds({ maxFailures = 5 } = {}) {
     return this.db.prepare(`
       SELECT COUNT(*) AS n
@@ -469,8 +358,8 @@ class Store {
     `).get(maxFailures).n;
   }
 
-  // Rows past the retry threshold — visible to status so persistent poison
-  // content is observable rather than silently degrading recall.
+  // Rows past the retry threshold — surfaced so persistent poison content is
+  // observable rather than silently degrading recall.
   countPoisonEmbeds({ maxFailures = 5 } = {}) {
     return this.db.prepare(`
       SELECT COUNT(*) AS n
@@ -488,16 +377,14 @@ class Store {
     `).run(sessionId, now, drainedCount, drainedBytes, producedCount).lastInsertRowid;
   }
 
-  // Counts for cap-check and status display.
   countShortTermFor(sessionId) {
     return this.db.prepare(
       'SELECT COUNT(*) AS n FROM entries WHERE tier = ? AND session_id = ? AND active = 1',
     ).get('short', sessionId).n;
   }
 
-  // Short-term rows under OTHER bound sessions (excluding the synthetic
-  // UNBOUND_SESSION_ID bucket). Used by drainBatch's cross-session hint to
-  // tell a solo user "your past sessions have unconsolidated content."
+  // Short-term rows under OTHER bound sessions, excluding the synthetic
+  // UNBOUND_SESSION_ID bucket.
   countShortTermInOtherSessions(currentSessionId) {
     return this.db.prepare(
       `SELECT COUNT(*) AS n FROM entries
@@ -507,25 +394,19 @@ class Store {
     ).get(currentSessionId, UNBOUND_SESSION_ID).n;
   }
 
-  // Project-wide short-term count, across every session. Used by the nudge
-  // evaluator so a quiet user running many short sessions still gets a
-  // "time to dream" surface when project-wide rows accumulate past
-  // CAP_EXCHANGES — per-session caps would otherwise let hundreds of rows
-  // pile up across days because no single session crossed the threshold.
+  // Project-wide count: the nudge evaluator triggers on this so many short
+  // sessions can't each stay under the per-session cap while rows pile up
+  // project-wide.
   countShortTermAllSessions() {
     return this.db.prepare(
       'SELECT COUNT(*) AS n FROM entries WHERE tier = ? AND active = 1',
     ).get('short').n;
   }
 
-  // Project-wide active short-term content size, in UTF-8 BYTES. The seed
-  // loop's between-batch backpressure (lib/seed-consolidate.js) blocks until
-  // this drops back under SEED_BATCH_BUDGET_BYTES, so it must measure the SAME
-  // unit the loop accumulates (Buffer.byteLength(content,'utf8')). LENGTH() on
-  // a TEXT value is the UTF-16 character count; CAST(content AS BLOB) makes
-  // LENGTH() the true UTF-8 byte length. COALESCE handles the empty-table case
-  // (SUM over zero rows is NULL). Recency-only invariant is irrelevant here —
-  // this is a size measure, never an ordering/lifecycle predicate.
+  // UTF-8 BYTES, not chars: must match the unit the seed-loop backpressure
+  // accumulates (Buffer.byteLength utf8). CAST(content AS BLOB) makes LENGTH()
+  // the byte length (LENGTH() on TEXT is the UTF-16 char count); COALESCE
+  // handles the empty-table NULL.
   shortTermBytes() {
     return this.db.prepare(
       `SELECT COALESCE(SUM(LENGTH(CAST(content AS BLOB))), 0) AS b
@@ -533,28 +414,25 @@ class Store {
     ).get().b;
   }
 
-  // Active rows parked under the synthetic UNBOUND_SESSION_ID —
-  // these land when the MCP server boots without a SessionStart ticket.
-  // Surfaced by mindwright_status as a warning so the user knows to drain.
+  // Active rows parked under the synthetic UNBOUND_SESSION_ID — these land
+  // when the CLI runs with no --session-id. Surfaced by mindwright_status as
+  // a warning so the user knows to drain.
   countUnboundActive() {
     return this.db.prepare(
       'SELECT COUNT(*) AS n FROM entries WHERE session_id = ? AND active = 1',
     ).get(UNBOUND_SESSION_ID).n;
   }
 
-  // Unbound short-term subset of countUnboundActive — used by drainBatch's
-  // cross-session hint where only the short-term tier is relevant.
+  // Short-term subset of countUnboundActive.
   countUnboundShortTerm() {
     return this.db.prepare(
       "SELECT COUNT(*) AS n FROM entries WHERE session_id = ? AND active = 1 AND tier = 'short'",
     ).get(UNBOUND_SESSION_ID).n;
   }
 
-  // Oldest active short-term row's `created_at` for the safety-net check.
-  // Returns the ISO8601 string or null when the session has no short-term
-  // rows. The Stop hook compares this against SAFETY_NET_DAYS to fire a
-  // force-dream nudge on a quiet session where the row count never crosses
-  // CAP_EXCHANGES but content has been aging unconsolidated.
+  // Oldest active short-term created_at (ISO8601 or null). The Stop hook
+  // checks this against SAFETY_NET_DAYS so a quiet session below CAP_EXCHANGES
+  // still drains aging content.
   oldestShortTermCreatedAt(sessionId) {
     const row = this.db.prepare(
       'SELECT MIN(created_at) AS oldest FROM entries WHERE tier = ? AND session_id = ? AND active = 1',
@@ -562,9 +440,8 @@ class Store {
     return row && row.oldest ? row.oldest : null;
   }
 
-  // Project-wide oldest short-term row, across every session. Pairs with
-  // countShortTermAllSessions: the safety-net trigger fires globally so a
-  // stale row in session B nudges session A on its next Stop.
+  // Project-wide oldest short-term row: the safety-net trigger fires globally
+  // so a stale row in session B nudges session A on its next Stop.
   oldestShortTermAcrossAllSessions() {
     const row = this.db.prepare(
       'SELECT MIN(created_at) AS oldest FROM entries WHERE tier = ? AND active = 1',
@@ -572,10 +449,8 @@ class Store {
     return row && row.oldest ? row.oldest : null;
   }
 
-  // Oldest active long-term user-scoped fact's created_at. Used by
-  // mindwright_status to warn about stale preferences — preferences don't
-  // auto-decay, so a 6-month-old row looks identical to a 2-day-old one in
-  // retrieval. Returns the ISO8601 string or null when no rows match.
+  // Oldest active long-term user-scoped fact's created_at (ISO8601 or null).
+  // Preferences don't auto-decay, so status warns when this gets stale.
   oldestUserPreference() {
     const row = this.db.prepare(
       `SELECT created_at FROM entries
@@ -600,22 +475,17 @@ class Store {
     ).all('long');
   }
 
-  // Per (category, scope) bucket count for mindwright_status display. Surfaces
-  // the orthogonal-axis split (e.g. fact/user vs fact/project, procedural/role:planner
-  // vs procedural/role:tester) that countByCategory alone can't show.
+  // Per (category, scope) bucket count: surfaces the orthogonal-axis split
+  // (e.g. fact/user vs fact/project) that countByCategory alone can't show.
   countByCategoryScope() {
     return this.db.prepare(
       'SELECT category, scope, COUNT(*) AS n FROM entries WHERE tier = ? AND active = 1 AND category IS NOT NULL AND scope IS NOT NULL GROUP BY category, scope',
     ).all('long');
   }
 
-  // Mirror-rendering accessors. Each returns the column subset
-  // lib/mirrors.js needs to render its per-tier markdown file. Ordering is
-  // DESC (newest first) so mirrors read like a reverse-chronological journal,
-  // not a stable-diff-friendly log. Kept on Store so raw db.prepare doesn't
-  // leak into mirrors.js (single-source-of-truth for SQL).
-
-  // renderRecent — last N short-term observations, newest first.
+  // Mirror-rendering accessors for lib/mirrors.js. DESC (newest first) so
+  // mirrors read like a reverse-chronological journal, not a diff-friendly
+  // log. Kept on Store so raw db.prepare doesn't leak into mirrors.js.
   listShortTermRecent(limit) {
     return this.db.prepare(
       `SELECT id, kind, content, session_id, created_at
@@ -626,8 +496,6 @@ class Store {
     ).all(limit);
   }
 
-  // renderPreferences / renderProjectFacts / renderHeuristics — active
-  // long-tier rows filtered by (category, scope). Order: DESC.
   listLongTermByCategoryScope(category, scope) {
     return this.db.prepare(
       `SELECT id, content, confidence, created_at, session_id
@@ -637,8 +505,8 @@ class Store {
     ).all(category, scope);
   }
 
-  // renderEpisodes — active long-tier episodic rows. No scope filter (episodes
-  // can carry any scope); we select `scope` so the renderer can show it.
+  // No scope filter: episodes can carry any scope, so select it for the
+  // renderer.
   listLongTermEpisodes() {
     return this.db.prepare(
       `SELECT id, content, scope, created_at, session_id
@@ -648,9 +516,8 @@ class Store {
     ).all();
   }
 
-  // renderAll's heuristics fan-out — distinct role names currently carrying
-  // any active procedural row. Strips the 'role:' prefix; callers should
-  // still gate writes through the role whitelist (defense in depth).
+  // Strips the 'role:' prefix; callers must still gate writes through the
+  // role whitelist (defense in depth).
   listActiveProceduralRoles() {
     return this.db.prepare(
       `SELECT DISTINCT substr(scope, 6) AS role
@@ -666,7 +533,6 @@ class Store {
     ).get();
   }
 
-  // Entity linkage helpers.
   upsertEntity(name, kind) {
     this.db.prepare(`
       INSERT INTO entities(name, kind) VALUES (?, ?)
@@ -682,14 +548,11 @@ class Store {
     `).run(entryId, entityId);
   }
 
-  // Thin delegators to the module-level meta plumbing (best-practices-1).
-  // Every meta upsert/point-read in this class goes through these two so the
-  // SQL + timestamp live in exactly one place; per-caller encoding stays in
-  // the caller.
+  // Every meta access in this class goes through these two so the SQL +
+  // timestamp live in exactly one place.
   _metaSet(key, value) { metaSet(this.db, key, value); }
   _metaGet(key) { return metaGet(this.db, key); }
 
-  // Role assignments (per-session).
   setRoles(sessionId, roles) {
     this._metaSet(`roles:${sessionId}`, JSON.stringify([...new Set(roles)]));
   }
@@ -699,15 +562,14 @@ class Store {
     return v != null ? JSON.parse(v) : [];
   }
 
-  // Pending nudge (per-session). Stop can't surface additionalContext (Claude
-  // Code only honors it from UserPromptSubmit / SessionStart / PreToolUse —
-  // verified in DESIGN.md "Verified facts"), so cap-reached etc. is staged
-  // here and the next UserPromptSubmit hook drains it.
+  // Stop can't surface additionalContext (Claude Code only honors it from
+  // UserPromptSubmit / SessionStart / PreToolUse), so the nudge is staged here
+  // and the next UserPromptSubmit hook drains it.
   setPendingNudge(sessionId, message) {
     this._metaSet(`pending_nudge:${sessionId}`, message);
   }
 
-  // Returns the pending message and clears it atomically. Returns null if none.
+  // Read-and-clear in one transaction. Returns null if none.
   takePendingNudge(sessionId) {
     const key = `pending_nudge:${sessionId}`;
     const tx = this.db.transaction(() => {
@@ -719,22 +581,10 @@ class Store {
     return tx();
   }
 
-  // Project-wide edge-trigger state for the cap-reached nudge. Without it,
-  // the Stop hook would re-stage the same reminder every single turn until
-  // the user runs /mindwright:dream — which is hostile (the user told
-  // mindwright "later"; mindwright keeps shouting on every prompt). Values
-  // come from NUDGE_STATES in constants.js: NUDGE_STATES.ARMED (next cap
-  // crossing fires the nudge) | NUDGE_STATES.FIRED (already nudged this trip
-  // — wait for count to drop below cap before re-arming). Returns null when
-  // no value is set (caller treats as ARMED — first run on this DB).
-  //
-  // PROJECT-WIDE (not per-session): mindwright's triggers are project-wide
-  // (countShortTermAllSessions / oldestShortTermAcrossAllSessions). Keying
-  // nudge_state per-session caused a re-fire whenever a different session
-  // opened on the same cap-crossed state — violating the README promise of
-  // "once per cap crossing." A single shared key fixes that. Stale per-
-  // session keys from older builds (`nudge_state:<uuid>`) are harmless
-  // leftovers in `meta`; the next reset / migration sweep removes them.
+  // Project-wide (NOT per-session) edge-trigger state for the cap-reached
+  // nudge — a single shared key, because the triggers are project-wide; a
+  // per-session key would re-fire each time a new session opened on the same
+  // cap-crossed state. Values are NUDGE_STATES; null ⟺ ARMED (first run).
   getNudgeState() {
     return this._metaGet('nudge_state');
   }
@@ -743,13 +593,10 @@ class Store {
     this._metaSet('nudge_state', state);
   }
 
-  // Per-session tool_use_id → tool_name map for the chunker. The transcript
-  // writes a tool_use block in one assistant record and its matching
-  // tool_result in a later user record; hook passes typically only see one of
-  // them, so the map MUST persist across passes — otherwise a tool_result
-  // arriving after the tool_use was consumed in a prior pass cannot be
-  // classified and inbox events get silently dropped. Stored as JSON in
-  // meta keyed by `tool_map:<sessionId>`.
+  // Per-session tool_use_id → tool_name map for the chunker. tool_use and its
+  // matching tool_result land in different transcript records seen by
+  // different hook passes, so the map MUST persist across passes or a late
+  // tool_result can't be classified and its inbox event is silently dropped.
   loadToolMap(sessionId) {
     const v = this._metaGet(`tool_map:${sessionId}`);
     if (v == null) return new Map();
@@ -757,10 +604,8 @@ class Store {
       const obj = JSON.parse(v);
       if (obj && typeof obj === 'object') return new Map(Object.entries(obj));
     } catch (e) {
-      // Unparseable tool_map indicates DB corruption or a hand-edit. We
-      // recover by resetting (next saveToolMap overwrites cleanly), but log
-      // to stderr so an operator can spot the pattern — a quiet "next pass
-      // works" hides repeated parse failures that point at a real defect.
+      // Reset recovers, but log so repeated parse failures (a real defect)
+      // aren't hidden behind a quiet "next pass works".
       process.stderr.write(
         `[mindwright/store] tool_map for session ${sessionId} unparseable, resetting: ${e && e.message ? e.message : e}\n`,
       );
@@ -773,26 +618,8 @@ class Store {
     this._metaSet(`tool_map:${sessionId}`, JSON.stringify(Object.fromEntries(map)));
   }
 
-  // ──────────────────────────────────────────────────────────────────────
-  // Per-session retrieval-injection state
-  //
-  // Two pieces of session-scoped state drive the novelty-gated proactive
-  // recall in PreToolUse plus the cross-path dedup in PreToolUse +
-  // UserPromptSubmit + mindwright_recall:
-  //
-  //   - meta:injected_fact_ids:<sessionId> — JSON array of fact ids already
-  //     surfaced in the session's additionalContext, FIFO-capped (the cap
-  //     itself lives in lib/constants.js — INJECTED_FACT_IDS_CAP).
-  //
-  //   - meta:last_retrieval_query_emb:<sessionId> — base64-encoded
-  //     Float32Array(1024) of the embedding that drove the most recent
-  //     retrieval fire. Used to detect novelty: a new thinking-block
-  //     embedding whose cosine to this one is ≥ NOVELTY_THRESHOLD is
-  //     suppressed.
-  //
-  // SessionStart clears both rows so a fresh boot starts cold.
-  // ──────────────────────────────────────────────────────────────────────
-
+  // Per-session retrieval-injection state (injected_fact_ids + last query
+  // embedding). SessionStart clears both rows so a fresh boot starts cold.
   getInjectedFactIds(sessionId) {
     const v = this._metaGet(`injected_fact_ids:${sessionId}`);
     if (v == null) return [];
@@ -804,9 +631,7 @@ class Store {
     }
   }
 
-  // Append ids to the injected-fact-id set, dedup + FIFO-trim to `cap`.
-  // The new ids land at the tail; the head is dropped first. Returns the
-  // resulting size.
+  // Dedup + FIFO-trim to `cap` (new ids at the tail, head dropped first).
   appendInjectedFactIds(sessionId, ids, cap) {
     if (!Array.isArray(ids) || ids.length === 0) {
       return this.getInjectedFactIds(sessionId).length;
@@ -835,15 +660,14 @@ class Store {
     this.db.prepare('DELETE FROM meta WHERE key = ?').run(`injected_fact_ids:${sessionId}`);
   }
 
-  // Float32Array → base64 round-trip via the underlying byte buffer.
   getLastQueryEmb(sessionId) {
     const v = this._metaGet(`last_retrieval_query_emb:${sessionId}`);
     if (v == null) return null;
     try {
       const buf = Buffer.from(v, 'base64');
       if (buf.byteLength !== 1024 * 4) return null;
-      // Copy into a fresh ArrayBuffer so the returned view isn't tied to Buffer's
-      // internal pool slice (which would let an unrelated write corrupt it).
+      // Copy into a fresh ArrayBuffer: a view onto Buffer's shared pool slice
+      // could be corrupted by an unrelated write.
       const ab = new ArrayBuffer(buf.byteLength);
       const dst = new Uint8Array(ab);
       dst.set(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength));
@@ -870,18 +694,11 @@ class Store {
     this.db.prepare('DELETE FROM meta WHERE key = ?').run(`last_retrieval_query_emb:${sessionId}`);
   }
 
-  // ──────────────────────────────────────────────────────────────────────
-  // Per-session "daemon-down warned" latch
-  //
-  // When the MCP daemon is unreachable, pipe.embed() returns null and the
-  // retrieval hooks (UPS + PreToolUse) silently degrade to no-recall. Without
-  // a user-visible signal, the user can't tell that retrieval was attempted-
-  // and-failed vs no-relevant-facts-existed. We surface a single warning per
-  // session via additionalContext the first time a hook sees the daemon down;
-  // this latch is cleared by SessionStart so a fresh boot starts un-warned.
-  // ──────────────────────────────────────────────────────────────────────
+  // Per-session latch so the "model daemon unreachable" warning surfaces
+  // exactly once per session (degraded recall is otherwise indistinguishable
+  // from no-relevant-facts). SessionStart clears it so a fresh boot re-warns.
   wasDaemonDownWarned(sessionId) {
-    // `value` is NOT NULL, so a non-null _metaGet ⟺ the row exists (≡ !!row).
+    // `value` is NOT NULL, so a non-null _metaGet ⟺ the row exists.
     return this._metaGet(`daemon_down_warned:${sessionId}`) !== null;
   }
 
@@ -893,16 +710,9 @@ class Store {
     this.db.prepare('DELETE FROM meta WHERE key = ?').run(`daemon_down_warned:${sessionId}`);
   }
 
-  // ──────────────────────────────────────────────────────────────────────
-  // Consolidator-spawner persistence
-  //
-  // meta:consolidator_for:<requester_handle> stores the deterministic UUID
-  // of the consolidator session spawned for a particular requester+project
-  // pair. Cross-session: persists forever (or until /mindwright:reset).
-  // We persist only the UUID; the wrightward handle is recomputed at
-  // display time via deriveHandle(uuid) from lib/handles.js.
-  // ──────────────────────────────────────────────────────────────────────
-
+  // meta:consolidator_for:<requester_handle> persists the consolidator
+  // session UUID per requester+project until /mindwright:reset. Only the UUID
+  // is stored; the handle is recomputed at display time via deriveHandle().
   getConsolidatorFor(requesterHandle) {
     const v = this._metaGet(`consolidator_for:${requesterHandle}`);
     if (v == null) return null;
@@ -915,11 +725,8 @@ class Store {
     return null;
   }
 
-  // List every consolidator-for record. Returns an array of
-  // { requester_handle, session_id, first_seen, last_spawn } objects.
-  // Used by the diagnostic /mindwright:status script, which (unlike the
-  // MCP tool) has no caller handle and so cannot filter to a single
-  // consolidator — listing all rows is the next-best diagnostic.
+  // Every consolidator-for record. /mindwright:status has no caller handle to
+  // filter by, so it lists all rows.
   listConsolidators() {
     const rows = this.db.prepare(
       `SELECT key, value FROM meta WHERE key LIKE 'consolidator_for:%'`,
@@ -939,9 +746,8 @@ class Store {
     return out;
   }
 
-  // Upsert the consolidator-for record. Callers should pass at minimum
-  // { session_id, first_seen }; last_spawn is optional and tracked by
-  // spawnConsolidator on each new spawn attempt.
+  // Callers pass at minimum { session_id, first_seen }; last_spawn is
+  // optional and tracked by spawnConsolidator per spawn attempt.
   setConsolidatorFor(requesterHandle, value) {
     if (!value || typeof value.session_id !== 'string') {
       throw new Error('setConsolidatorFor: value must include session_id');

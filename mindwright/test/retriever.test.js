@@ -10,7 +10,7 @@ import { retrieve } from '../lib/retriever.js';
 
 async function withStore(fn) {
   // Snapshot/restore MINDWRIGHT_PROJECT_ROOT so the env var doesn't leak
-  // across tests (matches the pattern used in daemon-status.test.js,
+  // across tests (matches the pattern used in session-liveness.test.js,
   // end-to-end.test.js, and cross-process-wal.test.js).
   const prevProjectRoot = process.env.MINDWRIGHT_PROJECT_ROOT;
   const dir = mkdtempSync(join(tmpdir(), 'mindwright-pipe-'));

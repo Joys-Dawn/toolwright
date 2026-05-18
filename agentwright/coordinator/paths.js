@@ -63,6 +63,36 @@ function getManagedSnapshotRoot(cwd) {
   return path.join(os.tmpdir(), SNAPSHOT_ROOT_NAME, projectSnapshotKey(cwd));
 }
 
+// Claude Code stores each session's transcript under
+// <config dir>/projects/<slug-of-cwd>/. The config dir is CLAUDE_CONFIG_DIR
+// when set, otherwise ~/.claude (both verified empirically against the
+// installed CLI). Spawned auditors run with cwd = a snapshot dir, so each
+// run leaves a transcript dir here that Claude Code's own GC only reaps
+// after 30 days — hence the cleanup hooks in run-ledger / snapshot-manager.
+function getClaudeProjectsDir() {
+  const configDir = (process.env.CLAUDE_CONFIG_DIR || '').trim() || path.join(os.homedir(), '.claude');
+  return path.join(configDir, 'projects');
+}
+
+// Claude Code derives a project's transcript dir name by replacing every
+// non-alphanumeric character of the absolute cwd with '-'. Verified
+// first-party against on-disk ~/.claude/projects entries: case is preserved,
+// consecutive separators are NOT collapsed (':' then '\' -> '--'), and '_'
+// is replaced ('AI_engineering' -> 'AI-engineering'). agentwright snapshot
+// paths are well under Claude Code's 200-char slug cap, so no hash suffix.
+function claudeProjectSlug(absPath) {
+  return String(absPath).replace(/[^a-zA-Z0-9]/g, '-');
+}
+
+// Slug prefix shared by every spawned-auditor transcript dir for THIS
+// project. The managed snapshot root contains the literal
+// 'agentwright-snapshots' segment plus a per-project sha256, so a dir whose
+// slug starts with this prefix is unambiguously one of our auditor
+// transcripts — it cannot collide with a real user project or another tool.
+function managedSnapshotProjectSlugPrefix(cwd) {
+  return claudeProjectSlug(getManagedSnapshotRoot(cwd)) + '-';
+}
+
 function expectedGroupSnapshotPath(cwd, runId, groupIndex) {
   return path.join(getManagedSnapshotRoot(cwd), `${validateRunId(runId)}-group-${groupIndex}`);
 }
@@ -122,6 +152,9 @@ module.exports = {
   assertPathWithin,
   projectSnapshotKey,
   getManagedSnapshotRoot,
+  getClaudeProjectsDir,
+  claudeProjectSlug,
+  managedSnapshotProjectSlugPrefix,
   expectedGroupSnapshotPath,
   ensureAuditBase,
   runDir,

@@ -80,37 +80,30 @@ function withStubModels(value, fn) {
   }
 }
 
-// Run fn() with HOME/USERPROFILE pointed at a throwaway dir (so the
-// homedir()-derived hfCacheDir() that modelsReady()→embedderCached() consults
-// is fully controlled) and stub mode OFF (so the real existsSync model-presence
-// check is what decides, not the escape hatch). `planted` controls whether the
-// bge-m3 repo dir exists under that fake home. This is the same proven,
-// zero-production-change mechanism test/paths.test.js uses for embedderCached;
-// no injectable cache-root seam is needed. Restores all env + removes the dir.
-function withFakeHome(planted, fn) {
-  const prevHome = process.env.HOME;
-  const prevUserprofile = process.env.USERPROFILE;
+// Run fn() with MINDWRIGHT_MODEL_CACHE_DIR pointed at a throwaway dir (so the
+// modelCacheDir() that modelsReady()→embedderCached() consults is fully
+// controlled, without perturbing pluginDataDir()-derived dependency
+// resolution) and stub mode OFF (so the real existsSync model-presence check
+// is what decides, not the escape hatch). `planted` controls whether the
+// bge-m3 repo dir exists in that cache. Restores all env + removes the dir.
+function withModelCache(planted, fn) {
+  const prevCacheDir = process.env.MINDWRIGHT_MODEL_CACHE_DIR;
   const prevStub = process.env.MINDWRIGHT_USE_STUB_MODELS;
-  const fakeHome = mkdtempSync(join(tmpdir(), 'mw-ready-home-'));
+  const cacheDir = mkdtempSync(join(tmpdir(), 'mw-ready-cache-'));
   if (planted) {
-    mkdirSync(
-      join(fakeHome, '.cache', 'huggingface', 'hub', 'models--Xenova--bge-m3'),
-      { recursive: true },
-    );
+    // transformers.js <org>/<name> layout — NOT the Python-hub models--org--name.
+    mkdirSync(join(cacheDir, 'Xenova', 'bge-m3'), { recursive: true });
   }
-  process.env.HOME = fakeHome;
-  process.env.USERPROFILE = fakeHome;
+  process.env.MINDWRIGHT_MODEL_CACHE_DIR = cacheDir;
   delete process.env.MINDWRIGHT_USE_STUB_MODELS;
   try {
     return fn();
   } finally {
-    if (prevHome === undefined) delete process.env.HOME;
-    else process.env.HOME = prevHome;
-    if (prevUserprofile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = prevUserprofile;
+    if (prevCacheDir === undefined) delete process.env.MINDWRIGHT_MODEL_CACHE_DIR;
+    else process.env.MINDWRIGHT_MODEL_CACHE_DIR = prevCacheDir;
     if (prevStub === undefined) delete process.env.MINDWRIGHT_USE_STUB_MODELS;
     else process.env.MINDWRIGHT_USE_STUB_MODELS = prevStub;
-    rmSync(fakeHome, { recursive: true, force: true });
+    rmSync(cacheDir, { recursive: true, force: true });
   }
 }
 
@@ -207,16 +200,16 @@ test('modelsReady honors the MINDWRIGHT_USE_STUB_MODELS=1 escape hatch', () => {
 
 test('modelsReady is false when the bge-m3 cache is absent and stubs disabled', () => {
   // The real not-ready decision the gate exists for — not just "is a boolean".
-  // No planted cache under the fake home → must report false.
-  withFakeHome(false, () => {
+  // No planted cache in the throwaway model-cache dir → must report false.
+  withModelCache(false, () => {
     assert.equal(modelsReady(), false);
   });
 });
 
 test('modelsReady is true when the bge-m3 cache is present and stubs disabled', () => {
-  // Planted models--Xenova--bge-m3 under the fake home, stub mode OFF, so this
-  // exercises the real existsSync path rather than the escape hatch.
-  withFakeHome(true, () => {
+  // Planted Xenova/bge-m3 in the throwaway model-cache dir, stub mode OFF, so
+  // this exercises the real existsSync path rather than the escape hatch.
+  withModelCache(true, () => {
     assert.equal(modelsReady(), true);
   });
 });

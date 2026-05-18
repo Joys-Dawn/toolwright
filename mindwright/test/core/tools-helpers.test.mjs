@@ -1,11 +1,11 @@
-// Direct unit tests for the helpers in mcp/tools.mjs that don't need an MCP
+// Direct unit tests for the helpers in lib/tools.mjs that don't need an MCP
 // roundtrip — stripScopeQualifier specifically. resolve-contradiction.test
 // .mjs covers ONE happy path (scope with `(CI)` inside); this file walks the
 // paren-depth + prefix branches in isolation.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { __internal } from '../../mcp/tools.mjs';
+import { __internal } from '../../lib/tools.mjs';
 const { stripScopeQualifier } = __internal;
 
 test('stripScopeQualifier — text without trailing `)` is returned unchanged', () => {

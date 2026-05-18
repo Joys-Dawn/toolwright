@@ -48,24 +48,54 @@ const HOOKS_DIR = join(PLUGIN_ROOT, 'hooks');
 function setupIsolatedRoot({ withModelCache = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'mindwright-hooks-'));
   const homeDir = mkdtempSync(join(tmpdir(), 'mindwright-home-'));
+  const cacheDir = mkdtempSync(join(tmpdir(), 'mindwright-cache-'));
   const prev = process.env.MINDWRIGHT_PROJECT_ROOT;
+  const prevCache = process.env.MINDWRIGHT_MODEL_CACHE_DIR;
+  const prevSock = process.env.MINDWRIGHT_MODEL_DAEMON_SOCK;
+  const prevDaemonDisable = process.env.MINDWRIGHT_MODEL_DAEMON_DISABLE;
   // Set parent-process env so verify-side openStore() lands in the same dir
   // as the hook subprocess's openStore().
   process.env.MINDWRIGHT_PROJECT_ROOT = dir;
-  // Default behavior: plant a fake model cache so SessionStart's not-cached
-  // hint does NOT fire during unrelated assertions. Tests that specifically
-  // exercise the missing-model hint opt out with withModelCache:false.
+  // Pin the embedder probe (embedderCached → modelCacheDir) to a throwaway
+  // dir for BOTH this process and every runHook child (inherited via
+  // ...process.env), so the now-populated real dev-tree model-cache can never
+  // leak in and flip embedderCached() true during the not-cached assertions.
+  // Default: plant the transformers.js <org>/<name> embedder repo so
+  // SessionStart's not-cached hint does NOT fire during unrelated assertions;
+  // tests that specifically exercise the missing-model hint opt out with
+  // withModelCache:false (cacheDir stays empty → embedderCached() is false).
+  process.env.MINDWRIGHT_MODEL_CACHE_DIR = cacheDir;
   if (withModelCache) {
-    mkdirSync(join(homeDir, '.cache', 'huggingface', 'hub', 'models--Xenova--bge-m3'), { recursive: true });
+    mkdirSync(join(cacheDir, 'Xenova', 'bge-m3'), { recursive: true });
   }
+  // Isolate the MACHINE-WIDE model daemon (same parent-env-inheritance trick).
+  // On win32 modelDaemonSocketPath() is the FIXED, homedir-independent pipe
+  // `\\.\pipe\mindwright-modeld-v1`, so a HOME redirect does NOT isolate it:
+  // without this override a hook subprocess connects to whatever real daemon
+  // is live on the dev box, gets real embeddings, and the daemon-down
+  // assertions can never be satisfied (and a stray ensureModelDaemon() respawn
+  // would leak a detached machine-global node process out of the test run).
+  // Point the socket at a path with no listener (connect fails fast → embed
+  // returns null → the degrade path the hooks are unit-tested for) and
+  // hard-disable the lazy respawn — the canonical daemon-isolation idiom (see
+  // daemon-pipe.test.mjs / _cli-harness.mjs).
+  process.env.MINDWRIGHT_MODEL_DAEMON_SOCK = join(cacheDir, 'no-daemon-here.sock');
+  process.env.MINDWRIGHT_MODEL_DAEMON_DISABLE = '1';
   return {
     dir,
     homeDir,
     cleanup() {
       if (prev === undefined) delete process.env.MINDWRIGHT_PROJECT_ROOT;
       else process.env.MINDWRIGHT_PROJECT_ROOT = prev;
+      if (prevCache === undefined) delete process.env.MINDWRIGHT_MODEL_CACHE_DIR;
+      else process.env.MINDWRIGHT_MODEL_CACHE_DIR = prevCache;
+      if (prevSock === undefined) delete process.env.MINDWRIGHT_MODEL_DAEMON_SOCK;
+      else process.env.MINDWRIGHT_MODEL_DAEMON_SOCK = prevSock;
+      if (prevDaemonDisable === undefined) delete process.env.MINDWRIGHT_MODEL_DAEMON_DISABLE;
+      else process.env.MINDWRIGHT_MODEL_DAEMON_DISABLE = prevDaemonDisable;
       try { rmSync(dir, { recursive: true, force: true }); } catch { /* tmp */ }
       try { rmSync(homeDir, { recursive: true, force: true }); } catch { /* tmp */ }
+      try { rmSync(cacheDir, { recursive: true, force: true }); } catch { /* tmp */ }
     },
   };
 }
@@ -73,8 +103,11 @@ function setupIsolatedRoot({ withModelCache = true } = {}) {
 function runHook(name, input, projectRoot, homeDir = null, extraEnv = {}) {
   const env = { ...process.env, MINDWRIGHT_PROJECT_ROOT: projectRoot, ...extraEnv };
   if (homeDir) {
-    // Redirect Node's homedir() in the child so hfCacheDir() lands under a
-    // tmp we control. HOME (POSIX) + USERPROFILE (Windows) covers both.
+    // Redirect Node's homedir() in the child so the Claude transcript/
+    // native-memory dirs under ~/.claude stay under a tmp we control. HOME
+    // (POSIX) + USERPROFILE (Windows) covers both. The model cache and the
+    // machine-wide model daemon are isolated separately (and unconditionally)
+    // via MINDWRIGHT_MODEL_CACHE_DIR / MINDWRIGHT_MODEL_DAEMON_SOCK.
     env.HOME = homeDir;
     env.USERPROFILE = homeDir;
   }

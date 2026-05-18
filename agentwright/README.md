@@ -50,7 +50,7 @@ Run `/agentwright:config-init` to drop a fully-defaulted `.claude/agentwright.js
 /audit-step security src/auth/          # single stage on a directory
 ```
 
-**Default pipeline** (when no pipeline is specified): `implementation → correctness → best-practices → behavior → test-coverage`
+**Default pipeline** (when no pipeline is specified): `implementation → correctness → performance → best-practices → behavior → test-coverage`
 
 **Full pipeline** (`/audit-run full`): default plus `security`, `migration`, `ui`, and `test-quality`.
 
@@ -60,7 +60,7 @@ The Rust audits (`rust-correctness`, `rust-security`, `rust-best-practices`) are
 
 ## Skills
 
-39 vendored skills (plus one internal coordinator step, `check-deltas`, not listed here):
+40 vendored skills (plus one internal coordinator step, `check-deltas`, not listed here):
 
 ### Audit lifecycle skills
 
@@ -81,9 +81,10 @@ Slash commands that drive or configure an audit run. Documented in detail under 
 
 | Skill | Focus |
 |-------|-------|
-| **correctness-audit** | Logic errors, null handling, async races, type coercion, resource leaks, N+1 queries |
+| **correctness-audit** | Logic errors, null/undefined, async & promise bugs, type coercion, stale closures, input & network edge cases, concurrency/TOCTOU |
 | **security-audit** | OWASP Top 10 2025, API Security Top 10, CWE, GDPR, PCI-DSS |
 | **best-practices-audit** | DRY, SOLID, KISS, YAGNI, Clean Code, naming, coupling, anti-patterns |
+| **performance-audit** | Scale & resource behavior under load/multiplicity/time: process & instance multiplicity, native-resource lifecycle, leaks & unbounded growth, hot-path/startup amplification, backpressure, algorithmic complexity, DB/I-O scale, contention |
 | **rust-correctness-audit** | Rust runtime bugs: debug-panic vs release-wrap overflow, panics, `Option`/`Result` mishandling, ownership/lifetime footguns, concurrency, async (tokio). Opt-in (not in any built-in pipeline) — `/audit-step rust-correctness` or a custom pipeline |
 | **rust-security-audit** | Rust memory-unsafety the generic security audit can't see: `unsafe`/UB soundness, `Send`/`Sync`, FFI, supply chain (RUSTSEC), deserialization DoS, crypto/secret misuse. Opt-in — `/audit-step rust-security` or a custom pipeline |
 | **rust-best-practices-audit** | Rust idioms & design: error-handling design, ownership/borrowing idioms, trait/API conventions (C-* guidelines), Clippy lint groups, performance, module hygiene. Opt-in — `/audit-step rust-best-practices` or a custom pipeline |
@@ -183,8 +184,8 @@ Create `.claude/agentwright.json` in your project to customize pipelines and ret
 ```json
 {
   "pipelines": {
-    "default": ["implementation", "correctness", "best-practices", "behavior", "test-coverage"],
-    "full": ["implementation", "correctness", "security", "best-practices", ["migration", "ui"], "behavior", "test-coverage", "test-quality"]
+    "default": ["implementation", "correctness", "performance", "best-practices", "behavior", "test-coverage"],
+    "full": ["implementation", "correctness", "performance", "security", "best-practices", ["migration", "ui"], "behavior", "test-coverage", "test-quality"]
   },
   "customStages": {
     "perf": { "type": "skill", "skillId": "performance-investigation" },

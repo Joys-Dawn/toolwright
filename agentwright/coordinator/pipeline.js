@@ -7,6 +7,7 @@ const BUILTIN_STAGES = {
   correctness: { type: 'skill', skillId: 'correctness-audit' },
   security: { type: 'skill', skillId: 'security-audit' },
   'best-practices': { type: 'skill', skillId: 'best-practices-audit' },
+  performance: { type: 'skill', skillId: 'performance-audit' },
   'rust-correctness': { type: 'skill', skillId: 'rust-correctness-audit' },
   'rust-security': { type: 'skill', skillId: 'rust-security-audit' },
   'rust-best-practices': { type: 'skill', skillId: 'rust-best-practices-audit' },
@@ -19,10 +20,11 @@ const BUILTIN_STAGES = {
 };
 
 const DEFAULT_PIPELINES = {
-  default: ['implementation', 'correctness', 'best-practices', 'behavior', 'test-coverage'],
+  default: ['implementation', 'correctness', 'performance', 'best-practices', 'behavior', 'test-coverage'],
   full: [
     'implementation',
     'correctness',
+    'performance',
     'security',
     'best-practices',
     ['migration', 'ui'],

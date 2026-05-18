@@ -1,19 +1,10 @@
 #!/usr/bin/env node
-// UserPromptSubmit hook. Two jobs (DESIGN.md "Trigger sources"):
-//   1) Sweep new transcript content from the last offset and let the
-//      chunker write any chunks it finds (including the cli_prompt row for
-//      this prompt if Claude has already landed it in the transcript).
-//      The chunker is the single source of truth for cli_prompt writes —
-//      whatever UPS doesn't catch here lands via the next PreToolUse/Stop
-//      hook, since the prompt is appended to the transcript before the
-//      next chunker pass.
-//   2) Run turn-start retrieval keyed on the prompt text and inject top-K
-//      via `hookSpecificOutput.additionalContext`. If the pipe-client is
-//      down (daemon gone), skip retrieval silently — the row will still
-//      reach the DB via the chunker.
-//
-// On any error: emit empty `{}` and exit. Memory features must not block
-// prompt submission.
+// UserPromptSubmit hook. Two jobs: (1) sweep new transcript content and let
+// the chunker write any chunks it finds (single source of truth for
+// cli_prompt writes); (2) run turn-start retrieval keyed on the prompt text
+// and inject top-K via additionalContext, skipping silently if the pipe is
+// down. On any error: emit `{}` and exit — memory must not block prompt
+// submission.
 
 import { readFileSync } from 'node:fs';
 import { openStore } from '../lib/store.js';
@@ -61,18 +52,14 @@ export async function main() {
   const pipe = connectPipe(sessionId);
   let additionalContext = '';
 
-  // Overall retrieval budget for this hook. Per-call PIPE_DEFAULT_TIMEOUT_MS
-  // caps each individual embed/rerank; this cap protects against the
-  // worst-case SUM (slow embed + slow rerank) burning turn-start latency.
+  // Overall retrieval budget: per-call timeouts cap each embed/rerank; this
+  // caps the worst-case SUM so a slow embed+rerank can't burn turn latency.
   const { timeoutPromise: overallTimeout, isTimedOut } = createTimeoutBudget();
 
   try {
-    // 1) Try to embed the prompt — used as the retrieval query below.
-    //    The pipe-client returns null on the expected pipe-down path, so a
-    //    thrown error here means something unexpected (malformed JSON-RPC
-    //    payload, unhandled IO error). Log it to stderr so silent retrieval
-    //    failure doesn't hide a real bug — the user-facing behavior still
-    //    degrades to "no recall this turn" either way.
+    // 1) Embed the prompt for the retrieval query. pipe-client returns null
+    //    on the expected pipe-down path, so a thrown error here is unexpected
+    //    — log it so a real bug isn't hidden behind the degrade-to-no-recall.
     let promptEmb = null;
     try {
       const out = await Promise.race([pipe.embed([prompt]), overallTimeout]);
@@ -86,25 +73,18 @@ export async function main() {
       promptEmb = null;
     }
 
-    // Daemon-down: embed returned null without timing out → MCP daemon is
-    // unreachable. Surface a once-per-session warning so the user knows
-    // recall is degraded for the rest of this session instead of silently
-    // returning [] on every retrieval attempt.
+    // Daemon-down: embed returned null without timing out → model daemon
+    // unreachable. Surface a once-per-session warning so degraded recall
+    // isn't silent for the rest of the session.
     if (!isTimedOut() && !promptEmb) {
       const warning = emitDaemonDownWarningIfFirst(store, sessionId);
       if (warning) additionalContext = warning;
     }
 
-    // 2) Sweep new transcript content. The chunker emits a cli_prompt
-    //    chunk for the user record once it lands in the transcript — UPS
-    //    catches it here if Claude wrote it pre-hook, otherwise the next
-    //    PreToolUse/Stop chunk pass catches it. No direct insert: keeping
-    //    a single writer (the chunker) avoids the duplicate that two
-    //    write paths produced (inflated countShortTermFor, dup retrieval
-    //    hits, dup exchanges into the consolidator).
-    //    Capture insertedIds so retrieval below excludes the just-flushed
-    //    cli_prompt — otherwise it scores near-perfect against itself via
-    //    bm25/temporal and the user's own prompt echoes back as recall.
+    // 2) Sweep new transcript content. Single writer (the chunker) avoids
+    //    the duplicates two write paths produced. Capture insertedIds so
+    //    retrieval below excludes the just-flushed cli_prompt — else it
+    //    scores near-perfect against itself and the prompt echoes back.
     let justFlushedIds = [];
     if (transcriptPath) {
       const flushed = flushTranscript({ store, sessionId, transcriptPath });
@@ -115,7 +95,7 @@ export async function main() {
       }
     }
 
-    // 3) Retrieval (only if we got a query embedding AND the pipe is up for rerank).
+    // 3) Retrieval (only with a query embedding AND pipe up for rerank).
     if (promptEmb && !isTimedOut()) {
       const result = await fetchRecallContext({
         store,
@@ -140,14 +120,11 @@ export async function main() {
       if (result.additionalContext) additionalContext = result.additionalContext;
     }
 
-    // 4) Drain any pending nudge staged by an earlier Stop-hook firing
-    //    (cap-reached or safety-net). Re-check BOTH conditions before
-    //    surfacing — if /mindwright:dream ran between the staging Stop and
-    //    now the trigger may no longer hold, and surfacing a stale
-    //    "run /mindwright:dream" prompt right after the user did exactly
-    //    that is hostile. Drop it silently in that case and re-arm so the
-    //    next real trigger fires a fresh nudge. Mirror of stop.js's gate so
-    //    a nudge staged by EITHER trigger stays valid until BOTH clear.
+    // 4) Drain any pending nudge staged by an earlier Stop firing. Re-check
+    //    BOTH triggers before surfacing — if dream ran since staging, the
+    //    trigger may no longer hold and re-nudging right after the user ran
+    //    dream is hostile; drop it silently and re-arm. Mirrors stop.js's
+    //    gate so a nudge stays valid until BOTH triggers clear.
     try {
       const nudge = store.takePendingNudge(sessionId);
       if (nudge) {
@@ -155,8 +132,8 @@ export async function main() {
         if (triggers.capCrossed || triggers.ageCrossed) {
           additionalContext = additionalContext ? `${nudge}\n\n${additionalContext}` : nudge;
         } else {
-          // Both triggers cleared (likely by /mindwright:dream) before this
-          // nudge surfaced. Reset the edge-trigger so a future trip re-fires.
+          // Both triggers cleared before this nudge surfaced. Reset the
+          // edge-trigger so a future trip re-fires.
           try { store.setNudgeState(NUDGE_STATES.ARMED); } catch { /* */ }
         }
       }

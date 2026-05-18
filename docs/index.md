@@ -32,7 +32,7 @@ Or run `/plugin` and browse the **Discover** tab.
 - Node.js ≥ 18 for agentwright / wrightward / timewright; **≥ 20 for gripewright / mindwright**; **≥ 22.5 for ideawright** (uses the built-in `node:sqlite`).
 - Git — only timewright needs it (uses `git worktree`/plumbing for snapshots). The other plugins work in any directory; wrightward simply adds its state dir to an existing `.gitignore` when one is present and never creates one.
 - `claude` on `PATH` (agentwright's headless auditor and ideawright's LLM judge both spawn it; mindwright's auto-spawned consolidator uses it too, falling back to a manual nudge if absent).
-- mindwright ships native npm dependencies (better-sqlite3, sqlite-vec, `@huggingface/transformers`, MCP SDK) and pulls a one-time ~5 GB local model set via `/mindwright:setup` before memory features activate. The other six are dependency-free and work the moment they're installed.
+- mindwright ships native npm dependencies (better-sqlite3, sqlite-vec, `@huggingface/transformers`) and pulls a one-time ~5 GB local model set via `/mindwright:setup` before memory features activate. The other six are dependency-free and work the moment they're installed.
 - A Discord bot token — only for wrightward's optional Discord bridge.
 
 ## Using them together

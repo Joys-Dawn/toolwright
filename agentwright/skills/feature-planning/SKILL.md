@@ -129,6 +129,19 @@ Produce a plan that covers each of the following sections. Skip a section only i
 - Identify which steps can be done in parallel.
 - **Include test steps** — writing tests is not a separate phase; test steps should be interleaved with the implementation steps they verify.
 
+#### 4h. Resource & Concurrency Model
+
+Required when the feature loads/holds a heavy or bounded resource (model, index, cache, pool, connection, child process, large buffer, GPU context), runs per-session/request/worker, spawns processes, or consumes unbounded/externally-sized input. Otherwise state `N/A — <one-line reason>` and skip.
+
+When it applies, state concretely:
+- **Per-instance footprint**: memory / fds / connections / threads one instance holds (steady + peak).
+- **Multiplicity × count vs ceiling**: what spawns another copy (per request/session/project/worker/CPU/tab), a defensible peak count, footprint × count, and the target machine/runtime ceiling it must fit under. If the product exceeds the ceiling, fix the design here — not in review.
+- **Lifecycle**: who owns the resource; what releases it on every exit path (normal, error, SIGINT/SIGTERM).
+- **Hot-path / startup amplification**: work on a per-request/render/session-start path, and whether N concurrent units each trigger it (×N) with no shared/single-flight path.
+- **Producer/consumer capacity**: if work is enqueued — the bound, the drain rate, and the backpressure/shedding behavior when the producer outpaces the consumer.
+
+This is the design-time form of the `agentwright:performance-audit` Resource Budget. Getting it wrong here is exactly the failure class a line-scoped review cannot catch later.
+
 ### 5. Verify External Contracts (mandatory)
 
 If the design depends on any external contract — third-party API, SDK call, public library function, network protocol, file format, or anything outside this repository — verify current correct usage before finalizing the plan. Training knowledge is not sufficient: APIs and library surfaces change, and incorrect usage becomes a correctness or security flaw baked into the plan rather than something the implementer can catch later.
@@ -151,7 +164,7 @@ Dimensions to check (skip any that don't apply):
 - **Correctness**: logic bugs, null/undefined gaps, async pitfalls, concurrency/TOCTOU — per `correctness-audit` dimensions 1–9
 - **Edge cases**: empty states, boundary values, network failures, reentrant usage, unvalidated external data
 - **Security**: map new design elements to `security-audit` domains (auth, authorization, input validation, RLS, rate limiting, SSRF, data privacy)
-- **Scalability**: unbounded queries, N+1 patterns, in-memory coordination that breaks at scale
+- **Scale & resources**: per-instance footprint × multiplicity over the target ceiling, leaks/unbounded growth, hot-path or startup amplification under N concurrent units, missing backpressure, N+1/unbounded queries — per the Resource & Concurrency Model (4h) and `performance-audit` dimensions
 - **Design**: SOLID violations, circular dependencies, unnecessary abstraction, YAGNI
 
 For each risk found, state: what the risk is, which dimension it falls under, and how to mitigate it. Also flag open questions, product risks, and unconfirmed assumptions here.
@@ -193,6 +206,9 @@ Write the plan to the plan file with this structure:
 
 ### State Management
 [State shape, transitions, sync]
+
+### Resource & Concurrency Model
+[Per-instance footprint, multiplicity × realistic count vs target ceiling, lifecycle/disposal on all exit paths, hot-path/startup amplification under N concurrent units, producer/consumer capacity — or "N/A — reason"]
 
 ### Testing Strategy
 [What to test, at which layer, which test skill applies, specific behaviors to verify]

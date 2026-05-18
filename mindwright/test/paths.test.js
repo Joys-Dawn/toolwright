@@ -1,7 +1,5 @@
-// Defense-in-depth tests for lib/paths.js. session_id originates inside the
-// Claude Code trust boundary, but pipePath() interpolates it into a real
-// filesystem path on POSIX — reject traversal payloads before they ever
-// reach `path.join`.
+// Tests for lib/paths.js: the embedder-cache probe and the cwd→transcript-dir
+// slug encoding (and its composition into transcriptsDir / nativeMemoryDir).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,7 +7,6 @@ import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  pipePath,
   embedderCached,
   projectSlug,
   claudeProjectsDir,
@@ -17,92 +14,55 @@ import {
   nativeMemoryDir,
 } from '../lib/paths.js';
 
-test('pipePath accepts a UUIDv4-shaped session_id', () => {
-  const out = pipePath('16971ff3-0143-4488-9962-94d333bfffe8');
-  assert.ok(typeof out === 'string' && out.length > 0);
-});
-
-test('pipePath accepts a short synthetic id like the tests use', () => {
-  const out = pipePath('sess-A');
-  assert.ok(typeof out === 'string' && out.length > 0);
-});
-
-test('pipePath rejects path-traversal payloads', () => {
-  assert.throws(() => pipePath('../../../tmp/evil'), /not path-safe/i);
-  assert.throws(() => pipePath('a/b'), /not path-safe/i);
-  assert.throws(() => pipePath('a\\b'), /not path-safe/i);
-  assert.throws(() => pipePath('a\0b'), /not path-safe/i);
-});
-
-test('pipePath rejects non-string input', () => {
-  assert.throws(() => pipePath(null), /not path-safe/i);
-  assert.throws(() => pipePath(undefined), /not path-safe/i);
-  assert.throws(() => pipePath(42), /not path-safe/i);
-});
-
-test('pipePath rejects empty and overlong session_ids', () => {
-  assert.throws(() => pipePath(''), /not path-safe/i);
-  assert.throws(() => pipePath('x'.repeat(129)), /not path-safe/i);
-});
-
 test('embedderCached returns true under MINDWRIGHT_USE_STUB_MODELS=1', () => {
   const prevStub = process.env.MINDWRIGHT_USE_STUB_MODELS;
-  const prevHome = process.env.HOME;
-  const prevUserprofile = process.env.USERPROFILE;
-  const fakeHome = mkdtempSync(join(tmpdir(), 'mw-paths-stub-'));
-  process.env.HOME = fakeHome;
-  process.env.USERPROFILE = fakeHome;
+  const prevCacheDir = process.env.MINDWRIGHT_MODEL_CACHE_DIR;
+  const cacheDir = mkdtempSync(join(tmpdir(), 'mw-paths-stub-'));
+  process.env.MINDWRIGHT_MODEL_CACHE_DIR = cacheDir;
   process.env.MINDWRIGHT_USE_STUB_MODELS = '1';
   try {
-    // No bge-m3 dir under the fake home; stub mode should still return true.
+    // Empty cache dir; stub mode must still short-circuit to true.
     assert.equal(embedderCached(), true);
   } finally {
     if (prevStub === undefined) delete process.env.MINDWRIGHT_USE_STUB_MODELS;
     else process.env.MINDWRIGHT_USE_STUB_MODELS = prevStub;
-    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
-    if (prevUserprofile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = prevUserprofile;
-    rmSync(fakeHome, { recursive: true, force: true });
+    if (prevCacheDir === undefined) delete process.env.MINDWRIGHT_MODEL_CACHE_DIR;
+    else process.env.MINDWRIGHT_MODEL_CACHE_DIR = prevCacheDir;
+    rmSync(cacheDir, { recursive: true, force: true });
   }
 });
 
-test('embedderCached returns false when bge-m3 dir is absent and stubs disabled', () => {
+test('embedderCached returns false when the bge-m3 dir is absent and stubs disabled', () => {
   const prevStub = process.env.MINDWRIGHT_USE_STUB_MODELS;
-  const prevHome = process.env.HOME;
-  const prevUserprofile = process.env.USERPROFILE;
-  const fakeHome = mkdtempSync(join(tmpdir(), 'mw-paths-nocache-'));
-  process.env.HOME = fakeHome;
-  process.env.USERPROFILE = fakeHome;
+  const prevCacheDir = process.env.MINDWRIGHT_MODEL_CACHE_DIR;
+  const cacheDir = mkdtempSync(join(tmpdir(), 'mw-paths-nocache-'));
+  process.env.MINDWRIGHT_MODEL_CACHE_DIR = cacheDir;
   delete process.env.MINDWRIGHT_USE_STUB_MODELS;
   try {
     assert.equal(embedderCached(), false);
   } finally {
     if (prevStub !== undefined) process.env.MINDWRIGHT_USE_STUB_MODELS = prevStub;
-    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
-    if (prevUserprofile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = prevUserprofile;
-    rmSync(fakeHome, { recursive: true, force: true });
+    if (prevCacheDir === undefined) delete process.env.MINDWRIGHT_MODEL_CACHE_DIR;
+    else process.env.MINDWRIGHT_MODEL_CACHE_DIR = prevCacheDir;
+    rmSync(cacheDir, { recursive: true, force: true });
   }
 });
 
-test('embedderCached returns true when bge-m3 dir is present (planted) and stubs disabled', () => {
+test('embedderCached returns true when the bge-m3 dir is present (planted) and stubs disabled', () => {
   const prevStub = process.env.MINDWRIGHT_USE_STUB_MODELS;
-  const prevHome = process.env.HOME;
-  const prevUserprofile = process.env.USERPROFILE;
-  const fakeHome = mkdtempSync(join(tmpdir(), 'mw-paths-cached-'));
-  mkdirSync(join(fakeHome, '.cache', 'huggingface', 'hub', 'models--Xenova--bge-m3'),
-    { recursive: true });
-  process.env.HOME = fakeHome;
-  process.env.USERPROFILE = fakeHome;
+  const prevCacheDir = process.env.MINDWRIGHT_MODEL_CACHE_DIR;
+  const cacheDir = mkdtempSync(join(tmpdir(), 'mw-paths-cached-'));
+  // transformers.js <org>/<name> layout — NOT the Python-hub models--org--name.
+  mkdirSync(join(cacheDir, 'Xenova', 'bge-m3'), { recursive: true });
+  process.env.MINDWRIGHT_MODEL_CACHE_DIR = cacheDir;
   delete process.env.MINDWRIGHT_USE_STUB_MODELS;
   try {
     assert.equal(embedderCached(), true);
   } finally {
     if (prevStub !== undefined) process.env.MINDWRIGHT_USE_STUB_MODELS = prevStub;
-    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
-    if (prevUserprofile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = prevUserprofile;
-    rmSync(fakeHome, { recursive: true, force: true });
+    if (prevCacheDir === undefined) delete process.env.MINDWRIGHT_MODEL_CACHE_DIR;
+    else process.env.MINDWRIGHT_MODEL_CACHE_DIR = prevCacheDir;
+    rmSync(cacheDir, { recursive: true, force: true });
   }
 });
 

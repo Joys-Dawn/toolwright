@@ -34,10 +34,10 @@ If you find a contradiction, classify the finding as `invalid` and skip steps C/
 - File-list verifiability (D4) findings where the cited path is wrong: correct the path to the verified one.
 - Reinventing the wheel (D8) findings where the agent named a specific battle-tested alternative that fits the project: replace the proposed custom code with the named alternative in the plan, including a one-line justification.
 - Constraint awareness (D11) findings where a load-bearing claim is verifiably false: rewrite the affected section to respect the actual constraint.
-- Missing test plan / risk section / out-of-scope section where the project clearly wants one and the structure is templated by sibling planning skills: add it using the project's evident conventions.
+- Missing test plan / risk section / out-of-scope section / Resource & Concurrency Model where the change triggers it and the structure is templated by sibling planning skills: add it using the project's evident conventions. For the Resource & Concurrency Model, only fix it here when the correct model is unambiguous (genuinely `N/A` with a one-line reason, or a clear shared-service/pool/bound correction the plan obviously intended). If filling it in reveals footprint × multiplicity over the stated ceiling, that is a design defect — defer to Step D.
 - Vague implementation step that should be split into concrete sub-steps the implementer can checkpoint: rewrite it.
 
-**Step D — Defer judgment calls**. Only when the finding flags a real trade-off and no option is obviously better: i.e. design dimensions (D7 unnecessary indirection, D9 naive design, D10 disproportionate complexity) where the agent's alternative is plausible but the original may also be valid.
+**Step D — Defer judgment calls**. Only when the finding flags a real trade-off and no option is obviously better: i.e. design dimensions (D7 unnecessary indirection, D9 naive design, D10 disproportionate/under-provisioned complexity) where the agent's alternative is plausible but the original may also be valid — and D3 scale findings where the resource model is over the ceiling but the right restructuring (shared service vs. pool vs. cap vs. load shedding) is a genuine design decision rather than a mechanical fix.
 
 ## Final report
 

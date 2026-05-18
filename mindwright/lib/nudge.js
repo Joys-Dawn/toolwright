@@ -1,17 +1,10 @@
-// Shared "is consolidation due?" evaluator for the nudge surface. The Stop
-// hook stages a nudge when EITHER trigger crosses; the UserPromptSubmit hook
-// drops the staged nudge if BOTH have cleared between Stop and the next
-// prompt (because /mindwright:dream ran and pulled the rows below cap and
-// past the age window). Keeping both call sites on one helper avoids the
-// drift where one knows about the cap and the other knows about the age.
+// Shared "is consolidation due?" evaluator. Stop stages a nudge when EITHER
+// trigger crosses; UserPromptSubmit drops it when BOTH clear. One helper so
+// the two call sites can't disagree on cap vs age.
 //
-// Both triggers are evaluated PROJECT-WIDE, not per-session. Mindwright
-// presents memory as project-wide (README:5), and a typical Claude Code
-// user runs many short sessions over days. A per-session cap would let
-// hundreds of rows accumulate without ever crossing 50 in a single session,
-// and the user would never get a "time to dream" surface. The per-session
-// edge-trigger state (nudge_state:<sessionId>) still scopes how often any
-// one session re-fires — that anti-spam guarantee is unchanged.
+// Triggers are PROJECT-WIDE, not per-session: a per-session cap would let
+// rows pile up across many short sessions without ever crossing in one. The
+// per-session edge state still scopes anti-spam re-fire.
 
 import {
   CAP_EXCHANGES,

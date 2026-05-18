@@ -12,6 +12,9 @@ const {
   validateStageName,
   assertPathWithin,
   getManagedSnapshotRoot,
+  getClaudeProjectsDir,
+  claudeProjectSlug,
+  managedSnapshotProjectSlugPrefix,
   expectedGroupSnapshotPath,
   ensureAuditBase,
   runDir,
@@ -115,6 +118,29 @@ function mutateRun(cwd, runId, callback) {
   });
 }
 
+// Spawned auditors run with cwd = the group snapshot dir, so Claude Code
+// creates a transcript dir at <projects>/<slug-of-snapshot-dir>/ that
+// outlives the snapshot (Claude Code's own GC is 30 days out). Delete it
+// alongside the snapshot. Guarded three ways — the slug must carry our
+// managed-snapshot prefix (embeds 'agentwright-snapshots' + per-project
+// sha256), the target must resolve inside the projects dir, and the whole
+// thing is best-effort so hygiene never breaks run teardown.
+function removeAuditorTranscript(cwd, auditorCwd) {
+  if (!auditorCwd) return;
+  try {
+    const slug = claudeProjectSlug(auditorCwd);
+    if (!slug.startsWith(managedSnapshotProjectSlugPrefix(cwd))) return;
+    const projectsDir = getClaudeProjectsDir();
+    const target = path.join(projectsDir, slug);
+    if (!fs.existsSync(target)) return;
+    assertPathWithin(projectsDir, target, 'Claude project transcript');
+    removePath(target);
+  } catch (_) {
+    // best-effort hygiene — a stuck transcript dir is swept later by
+    // cleanupOrphanedSnapshots' projects-dir prefix sweep.
+  }
+}
+
 function removeSnapshotFromFile(cwd, snapshotFilePath) {
   const snapshot = readJson(snapshotFilePath);
   const managedRoot = getManagedSnapshotRoot(cwd);
@@ -151,6 +177,7 @@ function removeSnapshotFromFile(cwd, snapshotFilePath) {
     removePath(expectedPath);
   }
   try { fs.unlinkSync(snapshotFilePath); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  removeAuditorTranscript(cwd, (snapshot && snapshot.path) || expectedPath);
 }
 
 function removeGroupSnapshot(cwd, runId, groupIndex) {

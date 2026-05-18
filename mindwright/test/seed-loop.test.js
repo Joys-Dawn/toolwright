@@ -227,6 +227,61 @@ test('runSeedLoop resumes after a mid-corpus interruption (per-transcript offset
   });
 });
 
+test('maxBytesPerInvocation stops at a transcript boundary; offsets make the next run resume', async () => {
+  await withStore(async (store, txDir) => {
+    // Deterministic file order: sort() ⇒ [SESS_A.jsonl, SESS_B.jsonl].
+    writeTranscript(txDir, SESS_A, [
+      userRec('first slice transcript body', '2024-06-01T00:00:00.000Z', 'u-a'),
+    ]);
+    writeTranscript(txDir, SESS_B, [
+      userRec('second slice transcript body', '2024-06-02T00:00:00.000Z', 'u-b'),
+    ]);
+
+    // A 1-byte cap trips at the transcript boundary AFTER the first transcript
+    // commits (the check runs post-commit, between transcripts — never mid-
+    // file), so exactly one transcript seeds and stoppedEarly tells the caller
+    // to re-run. The loop breaks before the second transcript is even scanned.
+    const r1 = await runSeedLoop({ store, transcriptsDir: txDir, maxBytesPerInvocation: 1 });
+    assert.equal(r1.transcriptsSeeded, 1, 'cap stops after one transcript');
+    assert.equal(r1.transcriptsScanned, 1, 'broke at the boundary — 2nd not scanned');
+    assert.equal(r1.stoppedEarly, true, 'stoppedEarly ⇒ caller must re-run');
+    assert.deepEqual(
+      store.db.prepare(
+        `SELECT DISTINCT session_id s FROM entries WHERE tier='short' AND active=1`,
+      ).all().map((x) => x.s),
+      [SESS_A],
+      'only the first transcript landed',
+    );
+    assert.ok(store.getOffset(SESS_A) > 0, 'committed transcript advanced its offset');
+    assert.equal(store.getOffset(SESS_B), 0, 'untouched transcript stays resumable');
+
+    // Resume with the SAME cap (mirrors the real skill, which always passes
+    // SEED_BATCH_BUDGET_BYTES): SESS_A is skipped via its offsets row, SESS_B
+    // seeds, and the cap trips again at SESS_B's boundary even though it was
+    // the last transcript. stoppedEarly:true here is BY DESIGN — the terminal
+    // signal is NOT "stoppedEarly on the last-seeding run"; it is the FOLLOWING
+    // run that seeds nothing (asserted next). seed-from-repo.js + SKILL.md
+    // depend on that one extra "drains only" invocation to detect completion.
+    const r2 = await runSeedLoop({ store, transcriptsDir: txDir, maxBytesPerInvocation: 1 });
+    assert.equal(r2.skipped, 1, 'the already-offset transcript is skipped');
+    assert.equal(r2.transcriptsSeeded, 1, 'the remaining transcript seeds');
+    assert.equal(r2.stoppedEarly, true, 'cap trips at the last boundary too (intentional)');
+
+    // Terminal run: every transcript now has an offsets row, so nothing seeds,
+    // bytesIngested stays 0, the cap never trips → stoppedEarly:false. This is
+    // the only more_remaining:false the skill loop stops on.
+    const r3 = await runSeedLoop({ store, transcriptsDir: txDir, maxBytesPerInvocation: 1 });
+    assert.equal(r3.transcriptsSeeded, 0, 'nothing left to seed');
+    assert.equal(r3.skipped, 2, 'both transcripts skipped via offsets');
+    assert.equal(r3.stoppedEarly, false, 'no bytes ingested ⇒ terminal more_remaining:false');
+
+    const distinct = store.db.prepare(
+      `SELECT COUNT(DISTINCT session_id) n FROM entries WHERE tier='short' AND active=1`,
+    ).get().n;
+    assert.equal(distinct, 2, 'both transcripts represented exactly once across the runs');
+  });
+});
+
 test('runSeedLoop returns a zeroed summary when the transcripts dir is absent', async () => {
   await withStore(async (store) => {
     const missing = join(tmpdir(), `mindwright-seedloop-missing-${process.pid}-${Date.now()}`);
@@ -238,6 +293,7 @@ test('runSeedLoop returns a zeroed summary when the transcripts dir is absent', 
       rowsInserted: 0,
       bytesIngested: 0,
       consolidations: 0,
+      stoppedEarly: false,
     });
   });
 });

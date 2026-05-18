@@ -1,11 +1,11 @@
 ---
 name: correctness-audit
-description: Reviews code for correctness bugs, uncaught edge cases, and scalability problems. Use when reviewing code changes, performing code audits, or when the user asks for a review or quality check. For security vulnerabilities use `agentwright:security-audit`; for design, maintainability, and principle violations use `agentwright:best-practices-audit`.
+description: Reviews code for correctness bugs and uncaught edge cases. Use when reviewing code changes, performing code audits, or when the user asks for a review or quality check. For security vulnerabilities use `agentwright:security-audit`; for design, maintainability, and principle violations use `agentwright:best-practices-audit`.
 ---
 
 # Code Quality Review
 
-Perform a systematic review focused on **correctness** and **runtime concerns**: will this code work correctly under all realistic inputs and load? Every finding must cite the file, line(s), dimension, and a concrete fix. For security vulnerabilities, use `agentwright:security-audit`. For principle violations (DRY, SOLID, Clean Code), use `agentwright:best-practices-audit`.
+Perform a systematic review focused on **correctness**: will this code produce the right result under all realistic inputs? Every finding must cite the file, line(s), dimension, and a concrete fix. For security vulnerabilities, use `agentwright:security-audit`. For principle violations (DRY, SOLID, Clean Code), use `agentwright:best-practices-audit`.
 
 ## Scope
 
@@ -58,7 +58,6 @@ Evaluate code against each dimension. Skip dimensions with no findings. See [REF
 - **`Promise.all` vs `Promise.allSettled`**: using `Promise.all` when any single rejection should not abort all others; vs. using `Promise.allSettled` when the caller actually needs to fail fast
 - **Async function returning void unintentionally**: a function signature of `async (): Promise<void>` that actually should return a value the caller uses
 - **Race between async operations**: two concurrent async paths writing to the same location (state, DB row, file) without synchronization
-- **Uncleaned async resources**: `setInterval`, `setTimeout`, event listeners, or subscriptions started inside a component/class that are never cleaned up when the scope is destroyed
 
 ### 5. Stale Closures & Captured State
 
@@ -68,15 +67,7 @@ Evaluate code against each dimension. Skip dimensions with no findings. See [REF
 - **Event listener capturing stale props**: a DOM event listener added once in a `useEffect` that captures `props.onEvent` at mount time, missing all future updates
 - **Memoization with wrong keys**: `useMemo` / `useCallback` / `React.memo` used with a dependency array that doesn't actually capture everything the computation depends on
 
-### 6. Resource Leaks & Missing Cleanup
-
-- **Event listeners never removed**: `addEventListener` called on mount, no corresponding `removeEventListener` on unmount
-- **Intervals/timeouts never cleared**: `setInterval` / `setTimeout` not captured in a ref or cancelled on component unmount
-- **Subscriptions not cancelled**: Realtime, WebSocket, or observable subscriptions opened but never `.unsubscribe()` / `.close()` called
-- **File/stream handles not closed**: `fs.open`, database connections, or readable streams that are opened but not closed on all exit paths (including error paths)
-- **Growing in-memory collections**: caches, queues, or maps that are added to but never evicted from, unbounded over time
-
-### 7. Uncaught Edge Cases — Inputs
+### 6. Uncaught Edge Cases — Inputs
 
 - **Empty string**: functions that receive a user-provided string and assume it is non-empty (`.split()`, `.charAt(0)`, regex matching)
 - **Empty array or object**: loops or transforms on collections that assume at least one element
@@ -84,9 +75,9 @@ Evaluate code against each dimension. Skip dimensions with no findings. See [REF
 - **Numeric boundaries**: values at or near `Number.MAX_SAFE_INTEGER`, `Number.MIN_SAFE_INTEGER`, `Infinity`, `-Infinity`, `NaN`
 - **Unicode and emoji**: string `.length` counts UTF-16 code units, not characters; a single emoji is 2 code units — truncation, substring, and split operations can corrupt multi-code-unit characters
 - **Null bytes and control characters**: untrusted strings containing `\0`, `\r`, `\n` passed to file paths, log messages, or downstream systems
-- **Very long inputs**: strings or arrays far larger than typical — does the code O(n) scale gracefully, or does it load everything into memory?
+- **Very long inputs**: strings or arrays far larger than typical — boundary, truncation, and overflow handling stays correct
 
-### 8. Uncaught Edge Cases — External Data & Network
+### 7. Uncaught Edge Cases — External Data & Network
 
 - **Non-200 HTTP responses not handled**: `fetch` resolves (does not reject) on 4xx/5xx — the caller must explicitly check `response.ok` or `response.status`
 - **Partial or truncated responses**: streaming or chunked data where the full payload may not arrive
@@ -96,40 +87,13 @@ Evaluate code against each dimension. Skip dimensions with no findings. See [REF
 - **Unexpected API shape**: downstream API fields assumed to be present and correctly typed without validation; treat all external data as `unknown`
 - **Stale or cached data returned on error**: error handlers that silently return the last-known-good cached value without signalling the failure to the caller
 
-### 9. Concurrency & Shared State
+### 8. Concurrency & Shared State
 
 - **Check-then-act (TOCTOU)**: reading a value, checking a condition, then acting — another concurrent operation can change the value between check and act
 - **Non-atomic read-modify-write**: incrementing a counter or appending to a list stored outside the current execution context without a lock or atomic operation
 - **Reentrant function calls**: an async function that can be called again before its first invocation completes, with both invocations sharing mutable state
 - **Global/module-level mutable state**: variables at module scope that accumulate or change across requests (dangerous in server contexts where module scope is shared between requests in the same isolate)
 - **Event ordering assumptions**: code that assumes async events will arrive in a specific order (e.g., "message A always before message B") without enforcement
-
-### 10. Scalability — Algorithmic Complexity
-
-- **O(n²) or worse nested loops**: an inner loop that iterates over the same or a related collection for every outer iteration; grows quadratically
-- **Linear scan where constant lookup exists**: using `Array.includes()`, `Array.find()`, or `Array.indexOf()` inside a loop where converting to a `Set` or `Map` would make lookups O(1)
-- **Repeated sorting**: sorting the same array on each render or request when it could be sorted once and cached
-- **Unnecessary full-collection passes**: multiple `.filter().map().reduce()` chains on the same array that could be combined into a single pass
-- **Regex recompilation**: constructing `new RegExp(pattern)` inside a loop when the pattern is constant — compile once outside the loop
-
-### 11. Scalability — Database & I/O
-
-- **N+1 queries**: fetching a list of N records, then issuing a separate query for each one in a loop — should be a single join or an `IN (...)` query
-- **Unbounded queries**: `SELECT * FROM table` or `.findAll()` without `LIMIT` — returns the entire table; grows unbounded as data grows
-- **Missing pagination**: API endpoints that return all results instead of pages; clients and servers both suffer as dataset grows
-- **Fetching more columns than needed**: `SELECT *` when only 2-3 columns are used; pulls unnecessary data across the network and into memory
-- **Queries inside render or hot paths**: database or API calls triggered on every render cycle or in tight loops rather than cached or batched
-- **Sequential queries that could be parallel**: `await db.query(A); await db.query(B)` where A and B are independent — use `Promise.all`
-- **Missing index implied by access pattern**: code that filters or sorts on a column that will clearly require a full table scan without an index (flag based on the access pattern — don't claim to know the schema unless you can read it)
-
-### 12. Scalability — Memory & Throughput
-
-- **Loading full dataset into memory**: reading an entire file, table, or collection into an array when streaming or cursor-based processing would avoid the memory spike
-- **Unbounded `Promise.all`**: `Promise.all(items.map(asyncFn))` where `items` can be very large — spawns thousands of concurrent operations, exhausting connections or memory
-- **No backpressure on queues**: pushing work into a queue faster than it can be consumed, with no throttling or rejection when the queue is full
-- **In-memory coordination state**: using a module-level `Map` or `Set` as a cache, queue, or lock that is not shared between process replicas — breaks on horizontal scale-out
-- **No connection pooling**: creating a new database connection per request instead of using a pool
-- **Repeated expensive computation**: calling an expensive pure function with the same inputs repeatedly without memoization or caching the result
 
 ## Static Analysis Tools
 
@@ -173,7 +137,7 @@ Issues that will cause incorrect behavior, data loss, or crashes in production.
 **Fix**: Specific, actionable code change.
 
 ## Warning
-Issues likely to cause bugs under realistic inputs or load, or that will cause failures during future changes.
+Issues likely to cause bugs under realistic inputs, or that will cause failures during future changes.
 
 (same structure)
 

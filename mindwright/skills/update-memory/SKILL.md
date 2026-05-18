@@ -5,7 +5,15 @@ description: Replace the content of an existing long-term fact, preserving the s
 
 # /mindwright:update-memory
 
-Call `mindwright_update_memory` with:
+Run:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" update_memory --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+{"fact_id": 123, "new_content": "..."}
+MINDWRIGHT_ARGS
+```
+
+JSON args (stdin):
 - `fact_id`: the id of the existing fact.
 - `new_content`: the replacement text.
 

@@ -207,9 +207,9 @@ test('seed-from-repo WITHOUT --include-ancestors does NOT ingest an ancestor CLA
   });
 });
 
-test('seed-from-repo binds rows to the live ticket session_id when a fresh ticket is present', () => {
+test('seed-from-repo binds rows to the live ticket session_id when a live-PID ticket is present', () => {
   // The script reads the most recent ticket via daemon-ticket.mjs#readActiveTicket
-  // and, if one is fresh, stamps that session_id on every seeded row so the
+  // and, if its claude_pid is alive, stamps that session_id on every seeded row so the
   // calling Claude session's default `/mindwright:dream` (scope=session)
   // drains them. Without this test, a regression in the bind (wrong field
   // plumbed into insertEntry, or argv parsing eating the session id) would
@@ -220,16 +220,14 @@ test('seed-from-repo binds rows to the live ticket session_id when a fresh ticke
     const liveSessionId = `live-test-session-${process.pid}-${Date.now()}`;
     // Plant a ticket file directly. Format mirrors daemon-ticket.mjs#writeTicket:
     // filename "<claudePid>-<hookPid>.json" under <projectRoot>/.claude/mindwright/tickets/.
-    // The ticket reader uses file mtime (not created_at) for freshness, so a
-    // sync write here is automatically fresh.
+    // readActiveTicket gates on claude_pid LIVENESS (no mtime, no age window):
+    // claude_pid = process.ppid (the test runner) is alive for the duration of
+    // this test, so the ticket is eligible and — being the only one — wins.
     const ticketsDir = join(dir, '.claude', 'mindwright', 'tickets');
     mkdirSync(ticketsDir, { recursive: true });
     const ticketPath = join(ticketsDir, `${process.ppid}-${process.pid}.json`);
     writeFileSync(ticketPath, JSON.stringify({
       session_id: liveSessionId,
-      pipe_path: process.platform === 'win32'
-        ? `\\\\.\\pipe\\mindwright-${liveSessionId}`
-        : `/tmp/mindwright-${liveSessionId}.sock`,
       claude_pid: process.ppid,
       hook_pid: process.pid,
       created_at: Date.now(),
@@ -479,11 +477,58 @@ test('describeNextStep: total>0 takes precedence over skippedFiles>0 (guard-clau
   assert.equal(msg, 'Run /mindwright:dream to consolidate the seeded rows into long-term facts.');
 });
 
+// ----- transcript branch: the incremental seed→consolidate→resume loop -----
+// Transcript rows seed under each transcript's ORIGINAL session id, so a
+// default session-scoped dream skips them — the message must steer the user
+// to scope="all" and tell them whether to re-run for another slice.
+
+test('describeNextStep: transcript rows, nothing more remaining → scope="all" + "all seeded"', () => {
+  const msg = describeNextStep({
+    total: 0, droppedUnderCallingSession: false, skippedFiles: 0,
+    transcriptRows: 12, moreRemaining: false,
+  });
+  assert.match(msg, /Consolidate this slice now/);
+  assert.match(msg, /scope="all"/);
+  assert.match(msg, /12 transcript row\(s\) seeded under their original session ids/);
+  assert.match(msg, /repeating dream passes until short-term is drained/);
+  assert.match(msg, /All transcript history has now been seeded\.$/);
+  assert.ok(!/re-run \/mindwright:seed-from-repo/.test(msg),
+    `nothing-remaining message must NOT ask for a re-run; got: ${msg}`);
+});
+
+test('describeNextStep: transcript rows, more remaining → scope="all" + re-run hint', () => {
+  const msg = describeNextStep({
+    total: 0, droppedUnderCallingSession: false, skippedFiles: 0,
+    transcriptRows: 7, moreRemaining: true,
+  });
+  assert.match(msg, /scope="all"/);
+  assert.match(msg, /7 transcript row\(s\)/);
+  assert.match(msg, /re-run \/mindwright:seed-from-repo for the next slice/);
+  assert.match(msg, /more transcript history remains\.$/);
+  assert.ok(!/All transcript history has now been seeded/.test(msg),
+    `more-remaining message must NOT claim everything is seeded; got: ${msg}`);
+});
+
+test('describeNextStep: transcriptRows>0 takes precedence over total>0 AND skippedFiles>0', () => {
+  // The transcript guard is FIRST: a slice that also seeded markdown rows and
+  // skipped some files under a live session still gets the scope="all"
+  // transcript guidance — a session-scoped dream would silently skip the
+  // transcript rows, so the other two messages would mislead.
+  const msg = describeNextStep({
+    total: 5, droppedUnderCallingSession: true, skippedFiles: 9,
+    transcriptRows: 3, moreRemaining: false,
+  });
+  assert.match(msg, /scope="all"/);
+  assert.notEqual(msg, 'Run /mindwright:dream to consolidate the seeded rows into long-term facts.');
+  assert.ok(!/already have un-consolidated/.test(msg),
+    `transcript branch must win over the skipped-files explainer; got: ${msg}`);
+});
+
 test('deps-absent: emits the deps_not_installed structured result and never calls openStore', () => {
   // A caller parses this stdout JSON to decide whether to retry, so the exact
   // error code + shape is a contract. Every other test here spawns the real
   // SCRIPT in the deps-present dev tree, so the deps-absent branch was never
-  // run. Reproduce a faithful marketplace copy: scripts/ + lib/ + mcp/ NO
+  // run. Reproduce a faithful marketplace copy: scripts/ + lib/ NO
   // node_modules → the copy's depsInstalled() is false (paths.js derives
   // PLUGIN_ROOT from its own location → the sandbox). store.js is copied but
   // never imported (the branch returns before `await import('../lib/store.js')`).
@@ -492,13 +537,12 @@ test('deps-absent: emits the deps_not_installed structured result and never call
   const pluginCopy = mkdtempSync(join(tmpdir(), 'mindwright-seed-plugin-'));
   const projectDir = mkdtempSync(join(tmpdir(), 'mindwright-seed-da-proj-'));
   try {
+    // lib/ + scripts/ only (no node_modules): seed-from-repo.js's static
+    // import graph (incl. lib/daemon-ticket.mjs) is dep-free, so the copy's
+    // depsInstalled() is false and it hits the deps-absent branch rather
+    // than an ESM-resolution crash.
     cpSync(join(PLUGIN_ROOT, 'lib'), join(pluginCopy, 'lib'), { recursive: true });
     cpSync(join(PLUGIN_ROOT, 'scripts'), join(pluginCopy, 'scripts'), { recursive: true });
-    // mcp/ is required: seed-from-repo.js's static dep-free graph reaches
-    // ../mcp/daemon-ticket.mjs. The dormancy invariant guarantees that whole
-    // graph is dep-free, so a node_modules-less copy hits the deps-absent
-    // branch rather than an ESM-resolution crash.
-    cpSync(join(PLUGIN_ROOT, 'mcp'), join(pluginCopy, 'mcp'), { recursive: true });
 
     const res = spawnSync(process.execPath, [join(pluginCopy, 'scripts', 'seed-from-repo.js')], {
       encoding: 'utf8',

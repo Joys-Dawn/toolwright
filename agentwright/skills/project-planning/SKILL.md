@@ -213,9 +213,10 @@ Note which scaffold commands create which files (so the user knows what's auto-g
 Flag anything that could go wrong or that you're uncertain about:
 - Technology choices that depend on unconfirmed requirements
 - Framework features you recommended but didn't verify against current docs
-- Scaling concerns for the chosen architecture
 - Cost projections that could surprise the user
 - Missing requirements that weren't discussed
+
+**Resource & Concurrency Model** (required): state the intended runtime topology so the architecture does not bake in a model that cannot scale — the concurrency/process model (single process, per-request workers, shared resident services for heavy resources), how any heavy or bounded resource (model, index, cache, pool, connection) is shared rather than duplicated per unit, the disposal story, and the target deployment ceiling the design must fit under. Exact numbers are not expected greenfield; the *shape* and the ceiling assumption are. See `agentwright:performance-audit` for the dimensions this must satisfy.
 
 ## Output Format
 
@@ -258,6 +259,9 @@ Write the plan to the plan file with this structure:
 ## Scaffolding Steps
 1. [Exact command]
 2. ...
+
+## Resource & Concurrency Model
+[Intended concurrency/process topology; how heavy/bounded resources are shared rather than duplicated per unit; disposal story; target deployment ceiling the design must fit under]
 
 ## Risks & Open Questions
 - [Risk with mitigation or decision needed]

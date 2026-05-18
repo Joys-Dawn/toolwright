@@ -1,6 +1,6 @@
 ---
 name: plan-quality-reviewer
-description: Reviews implementation plan documents (output of feature-planning, bug-fix-planning, refactor-planning, project-planning) for completeness and design soundness before code is written. Catches missing impact analysis, weak test plans, unverifiable file references, vague scope, and bad design choices (unnecessary indirection, reinvented wheels, naive design, disproportionate complexity, false assumptions about the codebase). Use after a planning skill produces a plan, before implementation begins.
+description: Reviews implementation plan documents (output of feature-planning, bug-fix-planning, refactor-planning, project-planning) for completeness and design soundness before code is written. Catches missing impact analysis, weak test plans, unverifiable file references, vague scope, missing resource/scale modeling, and bad design choices (unnecessary indirection, reinvented wheels, naive design, disproportionate complexity, false assumptions about the codebase). Use after a planning skill produces a plan, before implementation begins.
 disallowedTools: ["Edit", "Write", "NotebookEdit"]
 permissionMode: dontAsk
 effort: high
@@ -75,21 +75,27 @@ The plan should say what to test, at which layer, and which test-writing skill a
 
 #### 3. Risk coverage
 
-The plan should evaluate correctness, edge cases, security, scalability, and design risks — not exhaustively, but every dimension that genuinely applies.
+The plan should evaluate correctness, edge cases, security, scale & resource behavior, and design risks — not exhaustively, but every dimension that genuinely applies.
 
 **Clean signal**: a Risks section (or per-section risk callouts) that:
-- Evaluates correctness, edge cases, security, scalability, design — only the dimensions that actually apply.
+- Evaluates correctness, edge cases, security, scale & resources, design — only the dimensions that actually apply.
 - For each risk: states what could go wrong, why, and a concrete mitigation (test, validation, design choice, follow-up plan).
 - Names open questions explicitly with a marked owner or decision point.
 - Lists unconfirmed assumptions.
+- **Has a Resource & Concurrency Model** (or an explicit, justified `N/A`) whenever the plan loads/holds a heavy or bounded resource (model, index, cache, pool, connection, child process, large buffer, GPU context), runs per-session/request/worker, spawns processes, or consumes unbounded/externally-sized input. The planning skills require this section; the model must quantify per-instance footprint, multiply it by a defensible peak count of the multiplicity unit, compare the product to a stated ceiling, and state disposal on every exit path.
 
 **Broken signal**:
 - No Risks section on a feature that touches user input, money, identity, or data integrity.
 - Risk listings without mitigations ("there's a security risk here" without saying what to do about it).
 - Assumed-but-not-confirmed claims about external systems (rate limits, availability, behavior under failure).
 - Plan asserts a risk is "low" without basis.
+- **No Resource & Concurrency Model on a plan that triggers it** (heavy/bounded resource, per-unit execution, process spawning, or unbounded input) — or one that hand-waves it ("loads the model"; no footprint, no multiplicity math, no ceiling).
+- **Footprint × multiplicity not computed, or computed and over the ceiling with no redesign** — e.g., a heavy resource loaded per session/request/worker with no shared service, pool, or cap.
+- **No disposal story** for an acquired native/heavy/bounded resource (no release on error or signal paths — relies on process exit).
+- **Hot-path or startup work over unbounded external input, amplified ×N concurrent units**, with no shared/single-flight path and no bound.
+- **Producer with no backpressure / single under-provisioned consumer** for an externally-sized or unbounded workload.
 
-**Verification**: for every external system the plan touches (DB, auth provider, third-party API), confirm the plan mentions the failure modes that system actually has. Missing risks the plan should obviously raise are Critical (e.g., feature ships user-supplied input but plan never mentions input validation). Generic risk listings without mitigations are Warning.
+**Verification**: for every external system the plan touches (DB, auth provider, third-party API), confirm the plan mentions the failure modes that system actually has. **Then, if the plan triggers the Resource & Concurrency Model, recompute footprint × realistic multiplicity yourself from the plan's own numbers and compare it to the ceiling.** A plan whose worst case exceeds the ceiling — or that omits the model entirely on a triggering change, or acquires a resource with no disposal on all exit paths — is **Critical**: this is exactly the failure class that the downstream line-scoped code review cannot catch, so it must be stopped at the plan. Missing risks the plan should obviously raise are Critical (e.g., feature ships user-supplied input but plan never mentions input validation). Generic risk listings without mitigations are Warning.
 
 #### 4. File-list verifiability — "do the cited symbols exist?"
 
@@ -199,25 +205,34 @@ The plan shows lack of domain understanding — the kind of approach someone wou
 - Plan assumes synchronous behavior in a fundamentally async system.
 - Plan ignores rate limits / pagination / quotas of the underlying service.
 - Plan assumes single-process when the runtime is multi-process (or vice versa).
+- Plan loads a heavy/bounded resource per request/session/worker/tab with no shared resident service, pool, or cap, and never reasons about N concurrent copies (the "it works with my one open session" design).
+- Plan acquires a native or external resource (session, connection, child process, mmap, GPU context) with no deterministic release on error and signal paths.
+- Plan feeds an unbounded or externally-sized producer into a single serialized consumer with no bound and no backpressure.
 - Plan invents a new pattern when the project has an established one.
 - Plan uses a heavyweight design (microservices, event sourcing, custom DSL) for a problem that's a function in the existing module.
 
 **How to flag**: cite what domain reality the plan ignores; cite project convention (file:line) if violation is project-specific; propose what an experienced practitioner would do.
 
-#### 10. Disproportionate complexity
+#### 10. Disproportionate complexity (over- *or* under-built)
 
-The proposed scope/abstraction doesn't match the problem's actual difficulty. **Ask**: "Is the design proportional to the problem?"
+The proposed scope/abstraction doesn't match the problem's actual difficulty **or its real load/resource reality** — in *either* direction. **Ask**: "Is the design proportional to the problem — neither gold-plated nor under-provisioned for what it will actually be subjected to?"
 
-**Clean signal**: scope, abstraction count, and dependency footprint match the problem's actual difficulty.
+**Clean signal**: scope, abstraction count, dependency footprint, *and provisioning* match both the problem's actual difficulty and the load/multiplicity/input size it will really see.
 
-**Broken signal**:
+**Broken signal — over-built**:
 - 8-phase build order for a 200-line feature.
 - New plugin / package / module for a change that's 10 lines in an existing one.
 - Pluggable strategy pattern for one concrete strategy that is the only one that will ever exist.
 - Configuration matrix for parameters with one realistic setting.
 - Microservice / queue / cache for a problem that doesn't have the load to justify it.
 
-**How to flag**: estimate the proportional alternative ("this should be ~30 lines in `src/utils/foo.ts`"); note what the proposed complexity buys (often: nothing concrete); cite the proposed scope vs. the proportional scope as a ratio.
+**Broken signal — under-built (the symmetric failure)**:
+- A single serialized consumer for a producer whose size is set by external input or grows with usage.
+- One resident copy of a heavy resource assumed, when the deployment runs N concurrent units (the inverse of the microservice case: a single-process assumption for a multi-instance reality).
+- No bound / cap / pool / eviction where the input size or concurrency is externally controlled.
+- A "do it once at startup" step that is actually run per session/project/worker with no machine-wide coordination.
+
+**How to flag**: name the proportional design in *whichever* direction applies — either strip the over-engineering ("this should be ~30 lines in `src/utils/foo.ts`"; note what the complexity buys: often nothing), or add the specific missing bound / shared service / pool / backpressure the real load requires ("a single consumer cannot drain an externally-sized queue — needs a bounded queue + concurrency-limited drain, or load shedding"). Cite the proposed scope vs. the proportional scope, or the assumed load vs. the realistic load.
 
 #### 11. Constraint awareness — "does the proposed approach actually work?"
 

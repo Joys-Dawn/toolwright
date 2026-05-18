@@ -12,6 +12,9 @@ const {
   assertPathWithin,
   projectSnapshotKey,
   getManagedSnapshotRoot,
+  getClaudeProjectsDir,
+  claudeProjectSlug,
+  managedSnapshotProjectSlugPrefix,
   expectedGroupSnapshotPath,
   ensureAuditBase,
   runDir,
@@ -141,6 +144,59 @@ describe('paths', () => {
     it('throws when called without a cwd', () => {
       assert.throws(() => getManagedSnapshotRoot(), /requires a cwd/);
       assert.throws(() => getManagedSnapshotRoot(null), /requires a cwd/);
+    });
+  });
+
+  describe('getClaudeProjectsDir', () => {
+    const ORIGINAL = process.env.CLAUDE_CONFIG_DIR;
+    afterEach(() => {
+      if (ORIGINAL === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = ORIGINAL;
+    });
+
+    it('honors CLAUDE_CONFIG_DIR when set', () => {
+      process.env.CLAUDE_CONFIG_DIR = path.join(tmpDir, 'cfg');
+      assert.equal(getClaudeProjectsDir(), path.join(tmpDir, 'cfg', 'projects'));
+    });
+
+    it('falls back to ~/.claude/projects when unset or blank', () => {
+      delete process.env.CLAUDE_CONFIG_DIR;
+      assert.equal(getClaudeProjectsDir(), path.join(os.homedir(), '.claude', 'projects'));
+      process.env.CLAUDE_CONFIG_DIR = '   ';
+      assert.equal(getClaudeProjectsDir(), path.join(os.homedir(), '.claude', 'projects'));
+    });
+  });
+
+  describe('claudeProjectSlug', () => {
+    it('replaces every non-alphanumeric char with a dash', () => {
+      // Verified first-party against on-disk ~/.claude/projects entries.
+      assert.equal(claudeProjectSlug('C:\\Users\\y\\AI_engineering'), 'C--Users-y-AI-engineering');
+    });
+
+    it('does NOT collapse consecutive separators (": \\" -> "--")', () => {
+      assert.equal(claudeProjectSlug('C:\\a'), 'C--a');
+    });
+
+    it('preserves case and treats underscore as non-alphanumeric', () => {
+      assert.equal(claudeProjectSlug('HxH_DnD'), 'HxH-DnD');
+    });
+  });
+
+  describe('managedSnapshotProjectSlugPrefix', () => {
+    it('is the slug of the managed snapshot root plus a trailing dash', () => {
+      const expected = claudeProjectSlug(getManagedSnapshotRoot(tmpDir)) + '-';
+      assert.equal(managedSnapshotProjectSlugPrefix(tmpDir), expected);
+    });
+
+    it('embeds the agentwright-snapshots marker so it cannot match a user project', () => {
+      const prefix = managedSnapshotProjectSlugPrefix(tmpDir);
+      assert.ok(prefix.includes('agentwright-snapshots'));
+      assert.ok(prefix.endsWith('-'));
+    });
+
+    it('a group snapshot dir slug starts with the prefix', () => {
+      const snapDir = expectedGroupSnapshotPath(tmpDir, '2026-01-01T00-00-00-000Z-abcd1234', 0);
+      assert.ok(claudeProjectSlug(snapDir).startsWith(managedSnapshotProjectSlugPrefix(tmpDir)));
     });
   });
 

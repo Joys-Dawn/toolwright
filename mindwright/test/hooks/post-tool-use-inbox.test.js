@@ -27,21 +27,31 @@ const HOOK_SCRIPT = join(PLUGIN_ROOT, 'hooks', 'post-tool-use-inbox.js');
 function setupIsolatedRoot() {
   const dir = mkdtempSync(join(tmpdir(), 'mindwright-pti-'));
   const homeDir = mkdtempSync(join(tmpdir(), 'mindwright-pti-home-'));
+  const cacheDir = mkdtempSync(join(tmpdir(), 'mindwright-pti-cache-'));
   const prev = process.env.MINDWRIGHT_PROJECT_ROOT;
+  const prevCache = process.env.MINDWRIGHT_MODEL_CACHE_DIR;
   process.env.MINDWRIGHT_PROJECT_ROOT = dir;
   // The hook's SELF_RECALL_RULE emission is gated on
-  // (embedderCached() && long_count > 0). Plant a fake model cache here so
-  // the embedder gate is satisfied; tests that exercise the re-injection
-  // path additionally plant a long-tier fact via plantLongFact() below.
-  mkdirSync(join(homeDir, '.cache', 'huggingface', 'hub', 'models--Xenova--bge-m3'), { recursive: true });
+  // (embedderCached() && long_count > 0). Pin the embedder probe
+  // (embedderCached → modelCacheDir) to a throwaway dir for BOTH this process
+  // and every runHook child (inherited via ...process.env), so the now-
+  // populated real dev-tree model-cache can't leak in, and plant the
+  // transformers.js <org>/<name> embedder repo there so the embedder gate is
+  // satisfied; tests that exercise the re-injection path additionally plant a
+  // long-tier fact via plantLongFact() below.
+  process.env.MINDWRIGHT_MODEL_CACHE_DIR = cacheDir;
+  mkdirSync(join(cacheDir, 'Xenova', 'bge-m3'), { recursive: true });
   return {
     dir,
     homeDir,
     cleanup() {
       if (prev === undefined) delete process.env.MINDWRIGHT_PROJECT_ROOT;
       else process.env.MINDWRIGHT_PROJECT_ROOT = prev;
+      if (prevCache === undefined) delete process.env.MINDWRIGHT_MODEL_CACHE_DIR;
+      else process.env.MINDWRIGHT_MODEL_CACHE_DIR = prevCache;
       try { rmSync(dir, { recursive: true, force: true }); } catch { /* tmp */ }
       try { rmSync(homeDir, { recursive: true, force: true }); } catch { /* tmp */ }
+      try { rmSync(cacheDir, { recursive: true, force: true }); } catch { /* tmp */ }
     },
   };
 }
@@ -69,9 +79,12 @@ function plantLongFact(dir) {
 function runHook(input, projectRoot, homeDir = null) {
   const env = { ...process.env, MINDWRIGHT_PROJECT_ROOT: projectRoot };
   if (homeDir) {
-    // Mirror hooks.test.js's runHook: redirect Node's homedir() so the hook
-    // subprocess's hfCacheDir() lands under the tmp HOME we control. Both
-    // HOME (POSIX) and USERPROFILE (Windows) must be set.
+    // Defensive homedir isolation (mirrors hooks.test.js's runHook): redirect
+    // Node's homedir() in the child so no homedir-derived path (e.g. the
+    // model-daemon socket under ~/.cache/mindwright, the Claude transcript
+    // dirs under ~/.claude) can reach the real home. HOME (POSIX) +
+    // USERPROFILE (Windows) covers both. The embedder gate this hook depends
+    // on is isolated separately via MINDWRIGHT_MODEL_CACHE_DIR.
     env.HOME = homeDir;
     env.USERPROFILE = homeDir;
   }

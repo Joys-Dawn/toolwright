@@ -2,7 +2,7 @@
 
 > Chained audit pipelines with a spawned auditor and in-session verification. Run `/audit-run` — a headless `claude -p` subprocess audits a frozen snapshot, the current session independently verifies each finding and applies fixes to the live repo.
 
-**Version**: 2.3.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/agentwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/README.md)
+**Version**: 2.4.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/agentwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/agentwright/README.md)
 
 ## Install
 
@@ -28,7 +28,7 @@ Requires Node.js ≥ 18 and `claude` on `PATH` (the auditor subprocess calls it)
 /audit-clean --logs-only                # keep findings, drop logs
 ```
 
-**Default pipeline** (no argument): `implementation → correctness → best-practices → behavior → test-coverage`.
+**Default pipeline** (no argument): `implementation → correctness → performance → best-practices → behavior → test-coverage`.
 **Default scope**: `git diff` (staged + unstaged). Pass `--all` for the entire repo, or paths/files for targeted audits.
 
 ## How it runs
@@ -57,7 +57,7 @@ All seven live under the plugin's `/` namespace as skills (since Claude Code mer
 | `/audit-reset` | `[run-id]` | Guided deletion of a run directory. |
 | `/audit-clean` | `[--logs-only]` | Prune retained artifacts per the retention policy. |
 
-## Skills (39)
+## Skills (40)
 
 Auto-discovered from `agentwright/skills/` and invokable as `/agentwright:<name>` or via the `Skill` tool.
 
@@ -69,9 +69,10 @@ The seven slash commands documented in [Commands](#commands) above are skills un
 
 | Skill | Focus |
 |---|---|
-| `/agentwright:correctness-audit` | Logic errors, null handling, async races, type coercion, resource leaks, N+1 queries. |
+| `/agentwright:correctness-audit` | Logic errors, null/undefined, async & promise bugs, type coercion, stale closures, input & network edge cases, concurrency/TOCTOU. |
 | `/agentwright:security-audit` | OWASP Top 10 2025, OWASP API Security Top 10 2023, CWE, GDPR, PCI-DSS. |
 | `/agentwright:best-practices-audit` | DRY, SOLID, KISS, YAGNI, Clean Code, naming, coupling, anti-patterns. |
+| `/agentwright:performance-audit` | Scale & resource behavior under load/multiplicity/time: process & instance multiplicity, native-resource lifecycle, leaks & unbounded growth, hot-path/startup amplification, backpressure, algorithmic complexity, DB/I-O scale, contention. |
 | `/agentwright:rust-correctness-audit` | Rust runtime bugs: debug-panic vs release-wrap overflow, panics, `Option`/`Result` mishandling, ownership/lifetime footguns, concurrency, async (tokio). Opt-in — not in any built-in pipeline; run via `/audit-step rust-correctness` or a custom pipeline. |
 | `/agentwright:rust-security-audit` | Rust memory-unsafety the generic security audit can't see: `unsafe`/UB soundness, `Send`/`Sync`, FFI, supply chain (RUSTSEC), deserialization DoS, crypto/secret misuse. Opt-in — `/audit-step rust-security` or a custom pipeline. |
 | `/agentwright:rust-best-practices-audit` | Rust idioms & design: error-handling design, ownership/borrowing idioms, trait/API conventions (C-* guidelines), Clippy lint groups, performance, module hygiene. Opt-in — `/audit-step rust-best-practices` or a custom pipeline. |
@@ -154,7 +155,7 @@ Run `/agentwright:config-init` to drop the full default config into your repo �
 ```json
 {
   "pipelines": {
-    "default": ["implementation", "correctness", "best-practices", "behavior", "test-coverage"],
+    "default": ["implementation", "correctness", "performance", "best-practices", "behavior", "test-coverage"],
     "full": ["implementation", "correctness", "security", ["best-practices", "perf"], ["my-checks", "ui"], "behavior", "test-coverage", "test-quality"],
     "quick": ["audit-bundle"]
   },
@@ -176,7 +177,7 @@ Custom stages are referenced by their key inside `pipelines` (e.g., `"perf"` in 
 
 | Key | Default | Description |
 |---|---|---|
-| `pipelines.default` | `["implementation", "correctness", "best-practices", "behavior", "test-coverage"]` | Pipeline for `/audit-run` with no argument. |
+| `pipelines.default` | `["implementation", "correctness", "performance", "best-practices", "behavior", "test-coverage"]` | Pipeline for `/audit-run` with no argument. |
 | `pipelines.<name>` | — | Named pipeline. Array of stage names or nested arrays for parallel groups. |
 | `customStages.<key>.skillId` | — | Reference a single builtin skill by ID. |
 | `customStages.<key>.skillIds` | — | Array of builtin skill IDs to fuse into one agent (mutually exclusive with `skillId` / `skillPath`). |

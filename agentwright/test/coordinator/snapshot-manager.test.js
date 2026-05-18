@@ -7,8 +7,14 @@ const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
 
-const { createGroupSnapshot } = require('../../coordinator/snapshot-manager');
-const { groupSnapshotFile, getManagedSnapshotRoot } = require('../../coordinator/paths');
+const { createGroupSnapshot, cleanupOrphanedSnapshots } = require('../../coordinator/snapshot-manager');
+const {
+  groupSnapshotFile,
+  getManagedSnapshotRoot,
+  getClaudeProjectsDir,
+  claudeProjectSlug,
+  managedSnapshotProjectSlugPrefix
+} = require('../../coordinator/paths');
 const { writeJson, readJson } = require('../../coordinator/io');
 
 describe('snapshot-manager', () => {
@@ -240,6 +246,62 @@ describe('snapshot-manager', () => {
 
       fs.rmSync(snapshot.path, { recursive: true, force: true });
       fs.rmSync(externalDir, { recursive: true, force: true });
+    });
+  });
+
+  describe('cleanupOrphanedSnapshots — leaked transcript dir sweep', () => {
+    const ORIGINAL_CFG = process.env.CLAUDE_CONFIG_DIR;
+    let cfgDir;
+    let projectsDir;
+
+    beforeEach(() => {
+      cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aw-cfg-'));
+      process.env.CLAUDE_CONFIG_DIR = cfgDir;
+      projectsDir = path.join(cfgDir, 'projects');
+      fs.mkdirSync(projectsDir, { recursive: true });
+    });
+
+    afterEach(() => {
+      if (ORIGINAL_CFG === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = ORIGINAL_CFG;
+      fs.rmSync(cfgDir, { recursive: true, force: true });
+    });
+
+    // Mimics a real Claude Code transcript dir: a memory/ subdir + a session
+    // .jsonl, so the test exercises a recursive removal, not an empty rmdir.
+    function mkProjectDir(name) {
+      const d = path.join(projectsDir, name);
+      fs.mkdirSync(path.join(d, 'memory'), { recursive: true });
+      fs.writeFileSync(path.join(d, 'session.jsonl'), '{}\n', 'utf8');
+      return d;
+    }
+
+    it('removes leaked auditor transcripts, preserves unrelated + known-run dirs, with the snapshot root absent', () => {
+      const prefix = managedSnapshotProjectSlugPrefix(tmpDir);
+      const leaked = mkProjectDir(prefix + claudeProjectSlug('2026-01-01T00-00-00-000Z-dead0000-group-0'));
+      const knownRunId = '2026-02-02T00-00-00-000Z-live1111';
+      const known = mkProjectDir(prefix + claudeProjectSlug(`${knownRunId}-group-0`));
+      const unrelated = mkProjectDir('C--Users-someone-my-project');
+
+      // Backlog case: the tmp snapshot root no longer exists, only the
+      // leaked transcript dirs remain.
+      assert.ok(!fs.existsSync(getManagedSnapshotRoot(tmpDir)));
+
+      const fakeListRuns = () => [{ runId: knownRunId, run: { groups: [{ index: 0 }] } }];
+      const removed = cleanupOrphanedSnapshots(tmpDir, fakeListRuns);
+
+      assert.ok(!fs.existsSync(leaked), 'leaked transcript dir should be removed');
+      assert.ok(fs.existsSync(known), 'known run transcript dir must be preserved (not raced)');
+      assert.ok(fs.existsSync(unrelated), 'unrelated user project dir must never be touched');
+      assert.equal(getClaudeProjectsDir(), projectsDir);
+      assert.ok(removed.includes(path.basename(leaked)));
+      assert.ok(!removed.includes(path.basename(known)));
+      assert.ok(!removed.includes(path.basename(unrelated)));
+    });
+
+    it('does not throw when the projects dir does not exist', () => {
+      fs.rmSync(projectsDir, { recursive: true, force: true });
+      assert.deepEqual(cleanupOrphanedSnapshots(tmpDir, () => []), []);
     });
   });
 });

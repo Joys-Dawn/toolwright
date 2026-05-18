@@ -8,19 +8,35 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { handleToolCall } from '../../mcp/tools.mjs';
+import { handleToolCall } from '../../lib/tools.mjs';
 import { openStore } from '../../lib/store.js';
 
 async function withEnvGate(fn) {
   const prevStub = process.env.MINDWRIGHT_USE_STUB_MODELS;
   const prevHome = process.env.HOME;
   const prevUserprofile = process.env.USERPROFILE;
+  const prevCacheDir = process.env.MINDWRIGHT_MODEL_CACHE_DIR;
   const prevProjectRoot = process.env.MINDWRIGHT_PROJECT_ROOT;
+  const prevModelSock = process.env.MINDWRIGHT_MODEL_DAEMON_SOCK;
   const fakeHome = mkdtempSync(join(tmpdir(), 'mw-gate-home-'));
+  const cacheDir = mkdtempSync(join(tmpdir(), 'mw-gate-cache-'));
   const projectDir = mkdtempSync(join(tmpdir(), 'mw-gate-proj-'));
   process.env.HOME = fakeHome;
   process.env.USERPROFILE = fakeHome;
+  // Critical: point the model cache at an EMPTY tmp dir — NOT via
+  // CLAUDE_PLUGIN_DATA, which also reroutes node_modules dep resolution and
+  // would break the openStore()/better-sqlite3 load below. With stubs OFF,
+  // embedderCached() probes <cacheDir>/Xenova/bge-m3 (absent here) → the gate
+  // fires. The fake HOME stays for daemon/transcript-path isolation only.
+  process.env.MINDWRIGHT_MODEL_CACHE_DIR = cacheDir;
   process.env.MINDWRIGHT_PROJECT_ROOT = projectDir;
+  // The model-daemon liveness probe (isModelDaemonAlive) connects to
+  // modelDaemonSocketPath(). On Windows that default is a MACHINE-GLOBAL
+  // named pipe — NOT under the fake HOME — so without this override a real
+  // daemon on the dev box would make model_daemon_alive=true and flake the
+  // "model_daemon_alive=false" assertion. Pin it to a no-listener path so the
+  // probe deterministically resolves false on every platform.
+  process.env.MINDWRIGHT_MODEL_DAEMON_SOCK = join(fakeHome, 'no-such-modeld.sock');
   // Critical: stubs OFF so embedderCached() consults the (empty) cache dir.
   delete process.env.MINDWRIGHT_USE_STUB_MODELS;
   const store = openStore();
@@ -40,9 +56,14 @@ async function withEnvGate(fn) {
     if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
     if (prevUserprofile === undefined) delete process.env.USERPROFILE;
     else process.env.USERPROFILE = prevUserprofile;
+    if (prevCacheDir === undefined) delete process.env.MINDWRIGHT_MODEL_CACHE_DIR;
+    else process.env.MINDWRIGHT_MODEL_CACHE_DIR = prevCacheDir;
     if (prevProjectRoot === undefined) delete process.env.MINDWRIGHT_PROJECT_ROOT;
     else process.env.MINDWRIGHT_PROJECT_ROOT = prevProjectRoot;
+    if (prevModelSock === undefined) delete process.env.MINDWRIGHT_MODEL_DAEMON_SOCK;
+    else process.env.MINDWRIGHT_MODEL_DAEMON_SOCK = prevModelSock;
     rmSync(fakeHome, { recursive: true, force: true });
+    rmSync(cacheDir, { recursive: true, force: true });
     rmSync(projectDir, { recursive: true, force: true });
   }
 }
@@ -167,18 +188,19 @@ test('mindwright_status does NOT add the stale-preference hint for fresh prefere
   });
 });
 
-test('mindwright_status surfaces a warning when daemon_alive=false AND pending_embeds>0', async () => {
+test('mindwright_status surfaces a warning when model_daemon_alive=false AND pending_embeds>0', async () => {
   // Behavior regression: a user seeing pending_embeds>0 with no warning had
-  // no signal that the sweeper requires the daemon. Without the warning
-  // they wait expecting auto-resolution that will never happen until a new
-  // mindwright-bound session opens.
+  // no signal that the back-fill requires the model daemon. Without the
+  // warning they wait expecting auto-resolution that will never happen until
+  // a new Claude Code session lazily starts the daemon.
   await withEnvGate(async ({ store }) => {
     // Seed a row with NULL embedding (sweeper-pending shape). Use scope=short
     // so we don't need to deal with category gating.
     store.insertEntry({
       tier: 'short', kind: 'thinking', content: 'pending sweep', sessionId: 'gate-test',
     });
-    // No daemon ticket dir + no daemon = isDaemonAlive() returns false naturally.
+    // withEnvGate pins MINDWRIGHT_MODEL_DAEMON_SOCK to a no-listener path, so
+    // isModelDaemonAlive() finds nothing accepting → model_daemon_alive=false.
     const result = await handleToolCall(
       'mindwright_status',
       {},
@@ -186,10 +208,10 @@ test('mindwright_status surfaces a warning when daemon_alive=false AND pending_e
     );
     assert.notEqual(result.isError, true, 'status must not error');
     const payload = JSON.parse(result.content[0].text);
-    assert.equal(payload.daemon_alive, false, 'precondition: no daemon');
+    assert.equal(payload.model_daemon_alive, false, 'precondition: model daemon not serving');
     assert.ok(payload.pending_embeds > 0, 'precondition: pending row exists');
-    const hasDaemonHint = payload.warnings.some((w) => /no mindwright daemon/.test(w));
+    const hasDaemonHint = payload.warnings.some((w) => /the model daemon is not serving/.test(w));
     assert.ok(hasDaemonHint,
-      `expected a daemon-down + pending-embeds warning, got: ${JSON.stringify(payload.warnings)}`);
+      `expected a model-daemon-down + pending-embeds warning, got: ${JSON.stringify(payload.warnings)}`);
   });
 });

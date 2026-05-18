@@ -34,7 +34,7 @@ describe('pipeline', () => {
   describe('BUILTIN_STAGES', () => {
     it('has all expected stages', () => {
       const expected = [
-        'correctness', 'security', 'best-practices',
+        'correctness', 'performance', 'security', 'best-practices',
         'rust-correctness', 'rust-security', 'rust-best-practices',
         'implementation', 'migration', 'ui', 'behavior',
         'test-coverage', 'test-quality'
@@ -55,6 +55,10 @@ describe('pipeline', () => {
       assert.equal(BUILTIN_STAGES['rust-security'].skillId, 'rust-security-audit');
       assert.equal(BUILTIN_STAGES['rust-best-practices'].skillId, 'rust-best-practices-audit');
     });
+
+    it('performance stage maps to performance-audit skill', () => {
+      assert.equal(BUILTIN_STAGES['performance'].skillId, 'performance-audit');
+    });
   });
 
   describe('DEFAULT_PIPELINES', () => {
@@ -66,12 +70,24 @@ describe('pipeline', () => {
     it('default pipeline matches expected stages', () => {
       assert.deepEqual(
         DEFAULT_PIPELINES.default,
-        ['implementation', 'correctness', 'best-practices', 'behavior', 'test-coverage']
+        ['implementation', 'correctness', 'performance', 'best-practices', 'behavior', 'test-coverage']
       );
     });
 
     it('default pipeline does not include test-quality (opt-in only)', () => {
       assert.ok(!DEFAULT_PIPELINES.default.includes('test-quality'));
+    });
+
+    it('performance runs after correctness and before best-practices in default and full', () => {
+      for (const name of ['default', 'full']) {
+        const flat = DEFAULT_PIPELINES[name].flat();
+        const correctnessIdx = flat.indexOf('correctness');
+        const performanceIdx = flat.indexOf('performance');
+        const bestPracticesIdx = flat.indexOf('best-practices');
+        assert.ok(performanceIdx >= 0, `${name} should include performance`);
+        assert.ok(performanceIdx > correctnessIdx, `${name}: performance must run after correctness`);
+        assert.ok(performanceIdx < bestPracticesIdx, `${name}: performance must run before best-practices`);
+      }
     });
 
     it('full pipeline includes parallel groups', () => {
@@ -348,7 +364,7 @@ describe('pipeline', () => {
       assert.equal(result.scope, '--diff');
       assert.deepEqual(
         result.stages,
-        ['implementation', 'correctness', 'best-practices', 'behavior', 'test-coverage']
+        ['implementation', 'correctness', 'performance', 'best-practices', 'behavior', 'test-coverage']
       );
     });
 
@@ -397,7 +413,7 @@ describe('pipeline', () => {
       assert.equal(result.scope, 'src/auth.ts');
       assert.deepEqual(
         result.stages,
-        ['implementation', 'correctness', 'best-practices', 'behavior', 'test-coverage']
+        ['implementation', 'correctness', 'performance', 'best-practices', 'behavior', 'test-coverage']
       );
     });
 

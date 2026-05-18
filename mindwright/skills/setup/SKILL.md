@@ -18,6 +18,6 @@ The script:
 4. Runs a smoke test: embeds "hello" and asserts the resulting Float32Array is 1024-d and unit-normalized; reranks `("hello", "world")` and asserts the score is in `[0, 1]`.
 5. Prints a final `mindwright:setup ok …` line to stdout on success, or a stack trace to stderr with exit code 1 on failure.
 
-Models cache at `~/.cache/huggingface/hub/` (transformers.js default). The total download is ~4-5 GB; first run takes ~5-15 minutes depending on the connection. Re-running after the cache is warm is fast — the script still validates by re-loading and re-running the smoke test, but no bytes move over the network.
+Models cache in the plugin's persistent data dir (`${CLAUDE_PLUGIN_DATA}/model-cache`; override the location with `MINDWRIGHT_MODEL_CACHE_DIR`) so they survive plugin updates and `/mindwright:reset`. The total download is ~4-5 GB; first run takes ~5-15 minutes depending on the connection. Re-running after the cache is warm is fast — the script still validates by re-loading and re-running the smoke test, but no bytes move over the network.
 
-If the script fails with an HTTP error, retry — Hugging Face occasionally serves partial files. If it fails with `not a valid Win32 application` or a similar ABI mismatch on Windows, the issue is the better-sqlite3 / sqlite-vec binary combination, not the models; see README and DESIGN.md "sqlite-vec Windows ABI" for recovery.
+If the script fails with an HTTP error, retry — Hugging Face occasionally serves partial files. If it fails with `not a valid Win32 application` or a similar ABI mismatch on Windows, the issue is the better-sqlite3 / sqlite-vec binary combination, not the models; see the README for recovery.

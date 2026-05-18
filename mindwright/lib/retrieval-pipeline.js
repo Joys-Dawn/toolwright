@@ -1,15 +1,8 @@
-// Shared retrieval pipeline for the two recall surfaces (UserPromptSubmit
-// and PreToolUse). Both hooks call retrieve() with the same dedup contract
-// (read injected_fact_ids, exclude them + the just-flushed ids, append
-// emitted ids back), the same overall-timeout budget, and the same
-// formatRecall + "Current time:" prefix. The duplication used to live in
-// both hooks; future changes to dedup, formatting, or timeout would need to
-// land in both places or the surfaces would silently diverge.
-//
-// The hooks still own their own outer flow — transcript flush, embedding
-// the source-specific input (prompt vs thinking block), and the novelty
-// gate (PreToolUse only). This helper covers only the retrieve →
-// post-filter → format → dedup-append leg.
+// Shared retrieve → post-filter → format → dedup-append leg for the two
+// recall surfaces (UserPromptSubmit and PreToolUse), so the dedup contract,
+// timeout budget, and formatRecall + "Current time:" prefix can't diverge.
+// The hooks still own their outer flow (flush, source-specific embed, the
+// PreToolUse novelty gate).
 
 import { retrieve } from './retriever.js';
 import { formatRecall } from './recall-format.js';
@@ -19,14 +12,9 @@ import {
   DAEMON_DOWN_WARNING,
 } from './constants.js';
 
-// Build the shared overall-timeout budget used by both hooks. Returned shape:
-//   {
-//     timeoutPromise:   Promise that resolves with a sentinel after the cap
-//                       — pass into Promise.race with an embed/retrieve call,
-//     isTimedOut:       () => boolean — true once the cap fired.
-//   }
-// Caller owns the lifetime; setTimeout uses .unref() so it never holds the
-// process alive past the hook's natural exit.
+// Shared overall-timeout budget: { timeoutPromise (resolves a sentinel after
+// the cap, race it against embed/retrieve), isTimedOut() }. setTimeout is
+// .unref()'d so it never holds the process past the hook's exit.
 export function createTimeoutBudget(ms = RETRIEVAL_OVERALL_TIMEOUT_MS) {
   let timedOut = false;
   const timeoutPromise = new Promise((resolve) => {
@@ -39,12 +27,9 @@ export function createTimeoutBudget(ms = RETRIEVAL_OVERALL_TIMEOUT_MS) {
   return { timeoutPromise, isTimedOut: () => timedOut };
 }
 
-// Returns the daemon-down warning the first time this session observes the
-// MCP daemon as unreachable; null on subsequent calls (idempotent latch). The
-// latch is per-session and cleared by SessionStart, so a fresh boot is
-// allowed to warn again. Best-effort: meta read/write failures swallow the
-// warning rather than crashing the calling hook — the worst outcome is the
-// user doesn't see the warning, which is strictly no worse than today.
+// Daemon-down warning, once per session (idempotent latch, cleared by
+// SessionStart so a fresh boot can warn again). Best-effort: meta read/write
+// failure swallows the warning rather than crashing the hook.
 export function emitDaemonDownWarningIfFirst(store, sessionId) {
   if (!sessionId) return null;
   try {

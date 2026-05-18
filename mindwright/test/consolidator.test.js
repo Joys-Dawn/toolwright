@@ -15,6 +15,7 @@ import {
   groupIntoExchanges,
 } from '../lib/consolidator.js';
 import { mirrorsDir } from '../lib/paths.js';
+import { DRAIN_MAX_ROWS } from '../lib/constants.js';
 
 async function withStore(fn) {
   // Snapshot MINDWRIGHT_PROJECT_ROOT so tests run after this one don't
@@ -68,6 +69,64 @@ test('drainBatch picks the oldest drain_pct fraction', async () => {
     const drainedContents = out.exchanges.flatMap((e) => e.rows).map((r) => r.content);
     assert.ok(drainedContents.includes('obs 0'));
     assert.ok(!drainedContents.includes('obs 9'));
+  });
+});
+
+test('drainBatch caps a huge backlog at DRAIN_MAX_ROWS and drains it over bounded passes', async () => {
+  // The seed-volume fix: a manual seed can pile the whole corpus into
+  // short-term. Without the LIMIT cap, one /mindwright:dream would drain ~70%
+  // of that in a single pass — far more than one consolidator can digest, and
+  // it would load the entire short table into memory. The SELECT is now
+  // LIMIT DRAIN_MAX_ROWS and an at-cap pass drains the WHOLE bounded window
+  // (drainPct is ignored at the cap), so a backlog is consolidated over many
+  // bounded passes; below the cap the live drainPct behavior is unchanged.
+  await withStore((store) => {
+    const sessionId = 'huge-backlog';
+    const overflow = 25; // a clear margin past the cap
+    const total = DRAIN_MAX_ROWS + overflow;
+    // One transaction → uniform created_at, ascending ids (fast: one fsync,
+    // not `total` of them). The (created_at,id) cursor still orders them.
+    const tx = store.db.transaction(() => {
+      for (let i = 0; i < total; i++) {
+        store.insertEntry({
+          tier: 'short', kind: 'thinking', content: `backlog ${i}`, sessionId,
+        });
+      }
+    });
+    tx();
+
+    // Pass 1: even at drainPct=0.7 the SELECT is LIMIT-capped, and at the cap
+    // the whole bounded window drains (NOT 70% of it) — never the whole
+    // backlog in one pass.
+    const first = drainBatch({ store, sessionId, drainPct: 0.7 });
+    assert.equal(first.drained_count, DRAIN_MAX_ROWS,
+      `at-cap pass must drain exactly DRAIN_MAX_ROWS (${DRAIN_MAX_ROWS}), got ${first.drained_count}`);
+    const firstContents = first.exchanges.flatMap((e) => e.rows).map((r) => r.content);
+    assert.ok(firstContents.includes('backlog 0'), 'oldest row is in the first window');
+    assert.ok(!firstContents.includes(`backlog ${DRAIN_MAX_ROWS}`),
+      'the row just past the cap belongs to the NEXT pass, not this one');
+
+    // Finalize pass 1 (hard-delete + CASCADE clears its locks), then pass 2
+    // takes the remainder — now under the cap, so the live drainPct applies
+    // again (proves sub-cap behavior is unchanged).
+    finalizeDrain({
+      store,
+      drainId: first.drain_id,
+      drainCutoff: first.drain_cutoff,
+      drainCutoffId: first.drain_cutoff_id,
+      sessionId,
+    });
+    const remaining = store.db.prepare(
+      `SELECT COUNT(*) n FROM entries WHERE tier='short' AND active=1 AND session_id=?`,
+    ).get(sessionId).n;
+    assert.equal(remaining, overflow, 'exactly the over-cap remainder survives pass 1');
+
+    const second = drainBatch({ store, sessionId, drainPct: 0.7 });
+    // overflow < cap ⇒ unchanged live behavior. Compute the expected count
+    // with the SAME float expression the implementation uses (don't hardcode
+    // 17 — 25*0.7 isn't exact in IEEE-754; this stays in lockstep).
+    assert.equal(second.drained_count, Math.max(1, Math.floor(overflow * 0.7)),
+      `under-cap pass must restore the live drainPct fraction, got ${second.drained_count}`);
   });
 });
 

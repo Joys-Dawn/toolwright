@@ -26,6 +26,7 @@ coverage/
 dist/
 build/
 .cache/
+model-cache/
 .parcel-cache/
 .eslintcache
 *.tsbuildinfo

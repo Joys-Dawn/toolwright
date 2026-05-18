@@ -7,6 +7,9 @@ const { spawnSync } = require('child_process');
 const {
   assertPathWithin,
   getManagedSnapshotRoot,
+  getClaudeProjectsDir,
+  claudeProjectSlug,
+  managedSnapshotProjectSlugPrefix,
   groupSnapshotFile
 } = require('./paths');
 const { writeJson } = require('./io');
@@ -185,37 +188,70 @@ function createGroupSnapshot(cwd, runId, groupIndex) {
  * other projects on the same machine are namespaced into sibling subdirs
  * and remain invisible (and untouched) here.
  *
+ * Also sweeps leaked Claude Code transcript dirs: spawned auditors run with
+ * cwd = a snapshot dir, so Claude Code writes a transcript dir under
+ * <projects>/<slug-of-snapshot-dir>/ that survives snapshot teardown (its
+ * own GC is 30 days out). Any projects dir whose name starts with this
+ * project's managed-snapshot slug prefix is unambiguously one of ours —
+ * the prefix embeds 'agentwright-snapshots' and a per-project sha256. This
+ * runs even when the snapshot root no longer exists, which is exactly the
+ * leaked-backlog case (tmp snapshots already gone, transcripts left behind).
+ *
  * @param {string} cwd - Project working directory.
  * @param {function} listRuns - Returns [{runId, run}] for all known runs.
  */
 function cleanupOrphanedSnapshots(cwd, listRuns) {
-  const snapshotRoot = getManagedSnapshotRoot(cwd);
-  if (!fs.existsSync(snapshotRoot)) {
-    return [];
-  }
-  const knownPrefixes = new Set();
+  const removed = [];
+  // Group-snapshot dir names referenced by a still-known run (any status,
+  // until pruneTerminalRuns removes its run.json). A known run's snapshot and
+  // transcript are torn down deliberately by removeSnapshotFromFile when its
+  // group completes — the sweeps below must NOT race that by deleting them
+  // out from under a concurrently active auditor.
+  const knownGroupDirs = new Set();
+  const slugPrefix = managedSnapshotProjectSlugPrefix(cwd);
+  const knownTranscriptDirs = new Set();
   for (const entry of listRuns(cwd)) {
-    const groups = entry.run.groups || [];
-    for (const group of groups) {
-      knownPrefixes.add(`${entry.runId}-group-${group.index}`);
+    for (const group of entry.run.groups || []) {
+      const groupDir = `${entry.runId}-group-${group.index}`;
+      knownGroupDirs.add(groupDir);
+      knownTranscriptDirs.add(slugPrefix + claudeProjectSlug(groupDir));
     }
   }
-  const removed = [];
-  for (const entry of fs.readdirSync(snapshotRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    if (knownPrefixes.has(entry.name)) continue;
-    const orphanPath = path.join(snapshotRoot, entry.name);
-    try {
-      const wtResult = spawnSync('git', ['worktree', 'remove', '--force', orphanPath], {
-        cwd,
-        encoding: 'utf8'
-      });
-      if (wtResult.status !== 0 && fs.existsSync(orphanPath)) {
-        fs.rmSync(orphanPath, { recursive: true, force: true });
+
+  const snapshotRoot = getManagedSnapshotRoot(cwd);
+  if (fs.existsSync(snapshotRoot)) {
+    for (const entry of fs.readdirSync(snapshotRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (knownGroupDirs.has(entry.name)) continue;
+      const orphanPath = path.join(snapshotRoot, entry.name);
+      try {
+        const wtResult = spawnSync('git', ['worktree', 'remove', '--force', orphanPath], {
+          cwd,
+          encoding: 'utf8'
+        });
+        if (wtResult.status !== 0 && fs.existsSync(orphanPath)) {
+          fs.rmSync(orphanPath, { recursive: true, force: true });
+        }
+        removed.push(entry.name);
+      } catch (err) {
+        process.stderr.write(`Warning: failed to remove orphaned snapshot ${entry.name}: ${err.message}\n`);
       }
-      removed.push(entry.name);
-    } catch (err) {
-      process.stderr.write(`Warning: failed to remove orphaned snapshot ${entry.name}: ${err.message}\n`);
+    }
+  }
+  const projectsDir = getClaudeProjectsDir();
+  if (fs.existsSync(projectsDir)) {
+    for (const entry of fs.readdirSync(projectsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (!entry.name.startsWith(slugPrefix)) continue;
+      if (knownTranscriptDirs.has(entry.name)) continue;
+      const target = path.join(projectsDir, entry.name);
+      try {
+        assertPathWithin(projectsDir, target, 'Claude project transcript');
+        fs.rmSync(target, { recursive: true, force: true });
+        removed.push(entry.name);
+      } catch (err) {
+        process.stderr.write(`Warning: failed to remove leaked transcript dir ${entry.name}: ${err.message}\n`);
+      }
     }
   }
   return removed;

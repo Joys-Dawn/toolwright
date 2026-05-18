@@ -74,13 +74,14 @@ Evaluate code against each category. Skip categories with no findings. See [REFE
 - Security misconfiguration (permissive CORS, missing CSP headers)
 - Using components with known vulnerabilities
 
-### 8. Performance Best Practices
+### 8. Performance Idioms (micro-level only)
 
-- Unnecessary re-renders or re-computations
-- N+1 queries, unbounded result sets, missing pagination
-- Synchronous blocking in async-capable contexts
-- Missing memoization, caching, or debouncing where clearly beneficial
-- Large bundle imports when a smaller alternative exists
+- Non-idiomatic re-renders/re-computations: unstable inline object/array/function props, missing list keys, work done in render that the framework idiom says to hoist or memoize
+- Missing the idiomatic memoization/caching/debounce where the framework or language convention clearly calls for it
+- Choosing a blocking API where the established non-blocking idiom is the convention
+- Whole-module or oversized imports when a focused import / lighter dependency is the idiomatic choice (bundle hygiene)
+
+Scope guard: this dimension is *coding-idiom* hygiene only. Scale and load behavior — N+1/unbounded queries, missing pagination, resource leaks, backpressure, algorithmic complexity, contention — is not flagged here; that is `agentwright:performance-audit`.
 
 ### 9. Testing Best Practices
 
@@ -188,6 +189,6 @@ Before finalizing your report, verify every finding:
 - **Be specific**: always cite file paths and line numbers.
 - **Be actionable**: every finding must include a concrete fix.
 - **Respect scope**: only audit what's in scope. In diff mode, only flag issues in changed lines (and their immediate context).
-- **Don't duplicate correctness-audit**: focus on named principles and standards, not generic bug-hunting. If using both skills, they complement each other.
+- **Don't duplicate sibling audits**: focus on named principles and standards — not generic bug-hunting (`agentwright:correctness-audit`) and not scale/resource/load behavior (`agentwright:performance-audit`). If using multiple audits, they complement each other.
 - **Pragmatism over dogma**: a principle violation is only worth flagging if fixing it provides real value. Don't flag trivial or pedantic violations that would add noise.
 - **Context matters**: consider the project's scale, team size, and existing patterns. A startup prototype has different standards than a production system.

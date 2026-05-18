@@ -7,7 +7,15 @@ description: Soft-archive a long-term fact so it stops surfacing in retrieval an
 
 Usage: `/mindwright:forget <fact_id>`.
 
-Call `mindwright_forget` with:
+Run:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" forget --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+{"fact_id": 123}
+MINDWRIGHT_ARGS
+```
+
+JSON args (stdin):
 - `fact_id`: the id of the long-term row to forget.
 
 The handler flips `active=0` on the row and regenerates the markdown mirrors. No tombstone row is created and no embedding is recomputed.

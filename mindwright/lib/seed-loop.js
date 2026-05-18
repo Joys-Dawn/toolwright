@@ -1,34 +1,21 @@
-// Dedicated transcript-bootstrap loop.
-//
-// On a fresh install into an existing project, the user's local Claude Code
-// transcripts (`~/.claude/projects/<encoded-cwd>/*.jsonl`) are a rich history
-// that organic live-capture never saw. This loop folds that history into
-// memory the SAME way live capture does: it chunks each pre-install transcript
-// into `tier:'short', kind:'seed'` rows (durable `<basename>:<uuid>` source_ref,
-// `event_ts` from each JSONL record's real `timestamp`), then lets the EXISTING
-// dream cycle distill them — it does NOT reimplement distillation.
-//
-// It is deliberately SEPARATE from the cap-50 Stop-hook nudge: that path only
-// fires when MINDWRIGHT_NUDGE!=='off' and only once short-term crosses the
-// cap; a fresh empty install has zero rows so it would never bootstrap. This
-// loop is its own bounded, resumable short→drain→finalize driver.
+// Dedicated transcript-bootstrap loop, invoked by the /mindwright:seed-from-repo
+// script (NOT any auto-trigger). Folds the user's local pre-install Claude Code
+// transcripts into memory the SAME way live capture does: chunks each into
+// `tier:'short'` rows then lets the existing dream cycle distill them.
 //
 // Resumability & the live-capture contract (no new primitive — `offsets` only):
-//   - A transcript whose session id has NO `offsets` row was never seen by
-//     live capture (SessionStart sets the offset to EOF for live sessions) and
-//     is genuinely pre-install → eligible to seed.
-//   - A transcript whose session id already has an `offsets` row (live session,
-//     or one this loop finished on a prior run) is skipped — `getOffset` > 0.
+//   - A session id with NO `offsets` row was never seen by live capture and is
+//     genuinely pre-install → eligible to seed.
+//   - A session id that already has an `offsets` row is skipped (getOffset > 0).
 //   - Each transcript is processed atomically under ONE transaction that ends
 //     by advancing that session's `offsets` row to the file's byte length. A
-//     crash mid-transcript rolls the whole transcript back (no `offsets` row,
-//     no committed rows) so the next run redoes exactly that file — no
-//     duplication, no stranded tail. A later LIVE resume of the same session
-//     continues from where seeding left off (coherent, not a collision).
+//     crash mid-transcript rolls the whole transcript back so the next run
+//     redoes exactly that file — no duplication, no stranded tail. A later
+//     live resume of the same session continues from where seeding left off.
 //
 // GOVERNING INVARIANT: `event_ts` only ever feeds recency/relevance ranking.
-// This loop threads it onto seed rows (recency) but NEVER into any lifecycle
-// query — drain/finalize stay on created_at, exactly as elsewhere.
+// This loop threads it onto seed rows but NEVER into any lifecycle query —
+// drain/finalize stay on created_at, as elsewhere.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -36,9 +23,9 @@ import { chunkTranscript } from './chunker.js';
 import { transcriptsDir as defaultTranscriptsDir } from './paths.js';
 import { SEED_BATCH_BUDGET_BYTES, SESSION_ID_PATTERN } from './constants.js';
 
-// Chunk each transcript in bounded line slices so a single multi-MB transcript
-// never builds one giant in-memory records/chunks array. JSONL is exactly one
-// record per line, so slicing on line boundaries never severs a record.
+// Bounded line slices so a single multi-MB transcript never builds one giant
+// in-memory array. JSONL is one record per line, so line-boundary slicing
+// never severs a record.
 const SEED_SLICE_LINES = 500;
 
 const JSONL_SUFFIX = '.jsonl';
@@ -46,27 +33,31 @@ const JSONL_SUFFIX = '.jsonl';
 // Run the bootstrap loop.
 //
 //   store              required — open Store handle.
-//   transcriptsDir     where the *.jsonl live; defaults to paths.transcriptsDir()
-//                      (env-overridable via MINDWRIGHT_CLAUDE_PROJECTS_DIR for tests).
-//   batchBudgetBytes   cumulative un-consolidated short-row bytes that trigger
-//                      one consolidate() between transcripts. Default tunable
-//                      constant SEED_BATCH_BUDGET_BYTES.
-//   consolidate        optional async ({ store, reason }) => void. The
-//                      "(consolidator distills)" step — drives the EXISTING
-//                      drain→retain→finalize cycle. Injected so this module
-//                      stays pure/testable and the LLM work lives where it
-//                      already lives (the dream skill / hand-driven in tests).
-//                      When omitted, the loop only ingests; the Step-11
-//                      auto-spawned /mindwright:dream drains via its normal
-//                      pipeline.
+//   transcriptsDir     where the *.jsonl live (env-overridable via
+//                      MINDWRIGHT_CLAUDE_PROJECTS_DIR for tests).
+//   batchBudgetBytes   un-consolidated short-row bytes that trigger one
+//                      consolidate() between transcripts.
+//   consolidate        optional async ({ store, reason }) => void driving the
+//                      existing drain→retain→finalize cycle. Injected so this
+//                      module stays pure/testable. When omitted the loop only
+//                      ingests; a later dream pass drains via its pipeline.
 //
 // Returns a summary: { transcriptsScanned, transcriptsSeeded, skipped,
 //                      rowsInserted, bytesIngested, consolidations }.
+//   maxBytesPerInvocation  optional cap on bytes ingested in ONE call. When
+//                      set, the loop stops at the next transcript boundary
+//                      once this much has been ingested and reports
+//                      stoppedEarly:true so the caller can re-invoke (offsets
+//                      make it resumable). null → unbounded (legacy callers /
+//                      tests). This is what keeps a manual seed incremental:
+//                      one /mindwright:seed-from-repo handles a digestible
+//                      slice, the user re-runs for the next.
 export async function runSeedLoop({
   store,
   transcriptsDir = defaultTranscriptsDir(),
   batchBudgetBytes = SEED_BATCH_BUDGET_BYTES,
   consolidate = null,
+  maxBytesPerInvocation = null,
 } = {}) {
   const summary = {
     transcriptsScanned: 0,
@@ -75,14 +66,14 @@ export async function runSeedLoop({
     rowsInserted: 0,
     bytesIngested: 0,
     consolidations: 0,
+    stoppedEarly: false,
   };
 
   let entries;
   try {
     entries = readdirSync(transcriptsDir);
   } catch (e) {
-    // No transcript tree for this project (the common case on a brand-new
-    // machine) — nothing to bootstrap, not an error.
+    // No transcript tree — nothing to bootstrap, not an error.
     if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return summary;
     throw e;
   }
@@ -97,20 +88,15 @@ export async function runSeedLoop({
 
   for (const name of files) {
     const sessionId = name.slice(0, -JSONL_SUFFIX.length);
-    // Defensive: only treat well-formed `<sessionId>.jsonl` as a transcript.
-    // sessionId flows into offsets/insertEntry as a bound param (not a path),
-    // but matching the project-wide pattern keeps junk files out of the loop.
+    // Only treat well-formed `<sessionId>.jsonl` as a transcript — keeps junk
+    // files out of the loop.
     if (!SESSION_ID_PATTERN.test(sessionId)) continue;
 
     summary.transcriptsScanned++;
 
-    // Cheap pre-check: a non-zero offset means already-seen (live-capture
-    // touched it, or a prior run finished it). Genuinely pre-install
-    // transcripts have no offsets row → getOffset returns 0. This read is
-    // kept ONLY to know which files are candidates to attempt at all — the
+    // Cheap pre-check: a non-zero offset means already-seen. The
     // authoritative re-check happens INSIDE the BEGIN IMMEDIATE transaction
-    // below, exactly as lib/store.js#runMigrations does for the identical
-    // cross-process check-then-act race.
+    // below (same cross-process check-then-act race as store#runMigrations).
     if (store.getOffset(sessionId) > 0) {
       summary.skipped++;
       continue;
@@ -120,45 +106,31 @@ export async function runSeedLoop({
     let raw;
     let byteLen;
     try {
-      // Read once, as a Buffer, and derive the offset from the EXACT bytes
-      // read — never from a separate statSync taken before the read. An
-      // eligible transcript (no offsets row) is not guaranteed dead: it can
-      // be a session that was already running when mindwright was installed
-      // and is still appending. A size captured before readFileSync would
-      // under-count if the file grows in that gap — the loop would chunk the
-      // whole grown `raw` but record the smaller pre-read size, so a later
-      // live resume re-reads [staleSize, EOF] and double-inserts the tail.
-      // buf.length is precisely the bytes we read and chunked, so the
-      // recorded offset and the ingested content can never disagree (and no
-      // UTF-8 round-trip ambiguity, unlike Buffer.byteLength on the decoded
-      // string for a record with replacement chars).
+      // Derive the offset from the EXACT bytes read, never a separate statSync
+      // before the read: an eligible transcript may be a still-appending live
+      // session, and a pre-read size would under-count if it grows in the gap,
+      // so a later live resume would double-insert the tail. buf.length also
+      // avoids the UTF-8 round-trip ambiguity of Buffer.byteLength on the
+      // decoded string.
       const buf = readFileSync(filePath);
       byteLen = buf.length;
       if (byteLen === 0) { summary.skipped++; continue; }
       raw = buf.toString('utf8');
     } catch {
-      // Unreadable / raced-away transcript — skip it, never crash the whole
-      // bootstrap over one bad file.
+      // Unreadable / raced-away — skip, never crash the bootstrap.
       summary.skipped++;
       continue;
     }
 
     const lines = raw.split(/\r?\n/).filter((l) => l.length > 0);
 
-    // One transaction per transcript under BEGIN IMMEDIATE: every chunk
-    // insert AND the final offset advance commit together or not at all
-    // (crash mid-file → full rollback → redone whole next run, no orphan
-    // rows), AND the write lock is acquired at BEGIN so a second
-    // concurrently-spawned seed loop cannot interleave between the offset
-    // re-check and the inserts. The auto-trigger
-    // (hooks/session-start.js#main → lib/seed-trigger.js#maybeAutoSeed) has no
-    // single-flight: two SessionStarts in the same fresh project before the
-    // first seeded row commits both pass shouldAutoSeed (memory still empty)
-    // and both detach a seed loop. Without BEGIN IMMEDIATE + an in-txn offset
-    // re-read, both
-    // observe getOffset()==0 for the same transcript and double-insert it.
-    // This is the SAME primitive lib/store.js#runMigrations and
-    // lib/consolidator.js#drainBatch use for the same race — not a new lock.
+    // One transaction per transcript under BEGIN IMMEDIATE: every chunk insert
+    // AND the final offset advance commit together or not at all (crash
+    // mid-file → full rollback → redone whole next run, no orphan rows), AND
+    // the write lock is acquired at BEGIN so a second concurrently-run seed
+    // loop cannot interleave between the offset re-check and the inserts and
+    // double-insert the same transcript. Same primitive store#runMigrations
+    // and consolidator#drainBatch use — not a new lock.
     const txn = store.db.transaction(() => {
       // Source-of-truth re-check: a peer seed loop may have committed this
       // transcript while we were blocked on the write lock. If so it is
@@ -179,23 +151,17 @@ export async function runSeedLoop({
             content: c.content,
             sourceRef: c.source_ref,
             sessionId,
-            // True historical event time from the JSONL record (chunker sets
-            // c.timestamp from rec.timestamp; null for records without one,
-            // e.g. bus events). Recency-only per the governing invariant.
-            // Scope stays NULL (short-tier) — raw transcripts carry no
-            // reconstructable role, so the loop never produces role:-scoped
-            // rows; the consolidator assigns user/project scope at distill.
+            // True historical event time (recency-only per the governing
+            // invariant); null for records without one. Scope stays NULL —
+            // the consolidator assigns scope at distill.
             eventTs: c.timestamp ?? null,
           });
           fileRows++;
           fileBytes += Buffer.byteLength(c.content, 'utf8');
         }
       }
-      // Advance this session's offset by exactly the bytes we read and
-      // chunked (buf.length, captured from the read itself — no stat→read
-      // gap). Coherent with live capture: a later live resume of this very
-      // session continues from precisely past what we ingested, never
-      // re-reading a tail the seed loop already inserted.
+      // Advance the offset by exactly the bytes we read (buf.length, no
+      // stat→read gap) so a later live resume continues past what we ingested.
       store.setOffset(sessionId, byteLen);
       return { raced: false, fileRows, fileBytes };
     });
@@ -213,14 +179,23 @@ export async function runSeedLoop({
     summary.bytesIngested += fileBytes;
     accumulated += fileBytes;
 
-    // Bound short-term: once enough un-consolidated content has piled up,
-    // run one drain→distill→finalize cycle before continuing so short-term
-    // never holds the whole corpus. Boundary is between transcripts (each is
-    // atomic) — never mid-transcript.
+    // Bound short-term: drain→distill→finalize once enough un-consolidated
+    // content piled up so it never holds the whole corpus. Boundary is
+    // between transcripts (each atomic) — never mid-transcript.
     if (consolidate && accumulated >= batchBudgetBytes) {
       await consolidate({ store, reason: 'seed-loop batch budget reached' });
       summary.consolidations++;
       accumulated = 0;
+    }
+
+    // Per-invocation cap: stop at this transcript boundary once enough has
+    // been ingested. Each transcript commits atomically with its offset
+    // advance, so a later run resumes cleanly at the first un-offset
+    // transcript. stoppedEarly tells the skill to re-invoke until a run
+    // ingests nothing (the terminal "all transcripts done" signal).
+    if (maxBytesPerInvocation && summary.bytesIngested >= maxBytesPerInvocation) {
+      summary.stoppedEarly = true;
+      break;
     }
   }
 

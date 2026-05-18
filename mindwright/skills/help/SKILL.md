@@ -8,7 +8,7 @@ description: List all mindwright skills and their one-line descriptions.
 Skills:
 
 - `/mindwright:setup` — one-time model download + smoke test.
-- `/mindwright:status` — store sizes, last consolidation, daemon liveness.
+- `/mindwright:status` — store sizes, last consolidation, session + model-daemon liveness.
 - `/mindwright:recall <query>` — explicit retrieval.
 - `/mindwright:retain` — save a fact directly.
 - `/mindwright:forget <fact_id>` — soft-archive a fact.
@@ -21,4 +21,4 @@ Skills:
 - `/mindwright:unassign-role <session> <role>` — detach a role tag.
 - `/mindwright:reset` — destructive DB drop.
 
-See `DESIGN.md` for architecture and `README.md` for the steady-state flow.
+See `README.md` (the "Architecture" section) for the design and steady-state flow.

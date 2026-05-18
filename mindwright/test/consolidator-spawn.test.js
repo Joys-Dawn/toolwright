@@ -10,13 +10,17 @@
 //   - On a successful spawn: mint a record under meta:consolidator_for:<h>,
 //     reuse it on the next call (deterministic session_id), and update
 //     last_spawn on each call.
+//   - isConsolidatorSession (the self-spawn guard): plain→false, env
+//     sentinel→true, role→true, getRoles-throw→false. Moved here with the
+//     function from the deleted lib/seed-trigger.js so the sentinel's reader
+//     and its writer (CONSOLIDATOR_SPAWN_ENV_OVERRIDES) are tested as one.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnConsolidator, CONSOLIDATOR_SPAWN_ENV_OVERRIDES } from '../lib/consolidator-spawn.js';
+import { spawnConsolidator, CONSOLIDATOR_SPAWN_ENV_OVERRIDES, isConsolidatorSession } from '../lib/consolidator-spawn.js';
 import { openStore } from '../lib/store.js';
 import { deriveHandle } from '../lib/handles.js';
 
@@ -235,4 +239,47 @@ test('CONSOLIDATOR_SPAWN_ENV_OVERRIDES sets MINDWRIGHT_IS_CONSOLIDATOR=1', () =>
     'sentinel value must be the literal string "1" — Stop hook checks ===');
   assert.ok(Object.isFrozen(CONSOLIDATOR_SPAWN_ENV_OVERRIDES),
     'overrides object must be frozen to prevent runtime mutation');
+});
+
+// ----- self-spawn guard: isConsolidatorSession ---------------------------
+// Moved here with the function from the deleted lib/seed-trigger.js. The
+// guard reads the same MINDWRIGHT_IS_CONSOLIDATOR sentinel that
+// CONSOLIDATOR_SPAWN_ENV_OVERRIDES (above) writes, so reader and writer now
+// live — and are tested — in one place. withEnv null-deletes the sentinel
+// per test so a sibling suite's leak can't flip these (node --test runs
+// every file in one process).
+
+const GUARD_SESS = '33333333-3333-4333-8333-333333333333';
+
+test('isConsolidatorSession: a plain session (no env, no role) is not a consolidator', () => {
+  withStore((store) => {
+    withEnv({ MINDWRIGHT_IS_CONSOLIDATOR: null }, () => {
+      assert.equal(isConsolidatorSession(store, GUARD_SESS), false);
+    });
+  });
+});
+
+test('isConsolidatorSession: MINDWRIGHT_IS_CONSOLIDATOR=1 → true (env sentinel, primary signal)', () => {
+  withStore((store) => {
+    withEnv({ MINDWRIGHT_IS_CONSOLIDATOR: '1' }, () => {
+      assert.equal(isConsolidatorSession(store, GUARD_SESS), true);
+    });
+  });
+});
+
+test('isConsolidatorSession: the consolidator role (no env var) → true (secondary signal)', () => {
+  withStore((store) => {
+    withEnv({ MINDWRIGHT_IS_CONSOLIDATOR: null }, () => {
+      store.setRoles(GUARD_SESS, ['consolidator']);
+      assert.equal(isConsolidatorSession(store, GUARD_SESS), true);
+    });
+  });
+});
+
+test('isConsolidatorSession: a getRoles failure is swallowed → false (never throws into the Stop hook)', () => {
+  withEnv({ MINDWRIGHT_IS_CONSOLIDATOR: null }, () => {
+    const brokenStore = { getRoles() { throw new Error('simulated DB failure'); } };
+    assert.doesNotThrow(() => isConsolidatorSession(brokenStore, GUARD_SESS));
+    assert.equal(isConsolidatorSession(brokenStore, GUARD_SESS), false);
+  });
 });

@@ -1,38 +1,83 @@
 ---
 name: seed-from-repo
-description: Bootstrap memory from the current repo — pulls signals from CLAUDE.md, README, and Claude Code's native per-project memory into short-term rows for the next dream cycle to consolidate.
+description: Bootstrap memory from this project — pulls CLAUDE.md, README, Claude Code's native per-project memory, AND your conversation transcript history into short-term rows, consolidating each bounded slice in THIS session. The only seeding entrypoint; transcript history is always included.
 ---
 
 # /mindwright:seed-from-repo
 
-Run:
+The single manual seeding command. Seeding **and** consolidation are fully
+user-invoked and run **in this session**: there is no automatic SessionStart
+bootstrap and no background `claude --bg` consolidator spawned on your behalf.
+You (this agent) do the consolidation yourself, inline, on each slice.
 
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/seed-from-repo.js"
-```
+A full transcript history is far too large to seed-and-distill in one shot —
+one consolidator pass cannot digest that volume — so this runs as a bounded,
+resumable loop.
 
-The script reads:
-- `CLAUDE.md` (project root only by default)
-- `README.md` (root)
-- Claude Code's native per-project memory (`~/.claude/projects/<encoded-cwd>/memory/*.md`) — these LLM-written notes are an always-included source, re-distilled through consolidation like any other seed input (not direct-mapped to long-term)
+## The loop
 
-Each item lands as a `short` tier entry with `kind=seed`. Native-memory rows additionally carry an `event_ts` (frontmatter date or file mtime) so recall ranks them by when the note was actually written, not the seed-run time. The next `/mindwright:dream` distills them into long-term facts.
+1. **Seed one slice:**
 
-**Idempotent**: re-running skips any source file already represented by an active short `seed` row (matched on the source_ref file-path prefix), so repeated invocations don't pile duplicates. An edited file is not re-chunked until its current rows are drained by a dream cycle — staleness until the next consolidation is accepted by design rather than re-diffing on every run.
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/seed-from-repo.js"
+   ```
 
-> Transcript history (`~/.claude/projects/<encoded-cwd>/*.jsonl`) is **not** seeded by this script. It is bootstrapped automatically by the dedicated transcript loop SessionStart fires on a fresh empty install (gated by `MINDWRIGHT_AUTO_SEED`, default on) — see DESIGN.md "Bootstrap". This script covers the repo-local + native-memory sources only.
+   It ingests a bounded slice into `short`-tier `kind=seed` rows from every
+   source — `CLAUDE.md` (project root only by default), `README.md`, Claude
+   Code's native per-project memory (`~/.claude/projects/<encoded-cwd>/memory/*.md`),
+   and **conversation transcript history** (`*.jsonl` — the whole point of
+   seeding). The live session is skipped (it has an `offsets` row) so live
+   content is never double-ingested. Native-memory and transcript rows carry
+   an `event_ts` so recall ranks them by when the memory actually happened,
+   not the seed-run time.
 
-Report the script's `next_step` field (printed in the stdout JSON) to the user verbatim:
-- Normally "Run /mindwright:dream to consolidate the seeded rows" when rows landed under the live calling session.
-- When no live Claude session ticket is found, the rows land under the synthetic `seed-from-repo` session instead, and `next_step` will tell the user they must run `/mindwright:dream` with `scope="all"` for this batch to be picked up. Surfacing it prevents a silent miss where a default session-scoped dream skips the seeded rows.
-- When nothing new was inserted because every source is already an un-drained short `seed` row, `next_step` still points at `/mindwright:dream` (consolidate the existing rows) rather than reporting "nothing found".
+2. **Consolidate that slice now, in this session.** Parse the stdout JSON.
+   If `short_rows_inserted` or `transcript_rows_inserted` is > 0, run
+   `/mindwright:dream` with the scope the script's `next_step` specifies
+   (`scope="all"` whenever transcript rows landed — they seed under their
+   original session ids, which a default session-scoped dream skips). Repeat
+   `/mindwright:dream` passes until that scope's short-term is drained: one
+   drain pass is capped (`DRAIN_MAX_ROWS`), so a slice may take several
+   passes. **This is the consolidation — performed by you, not a spawned
+   process.**
+
+3. **Continue if more remains.** If the JSON has `more_remaining: true`,
+   more transcript history is queued — go back to step 1. Each transcript
+   commits atomically with its offset advance, so the next run resumes
+   exactly where this one stopped; nothing is re-ingested or lost.
+
+4. **Stop conditions.** Stop when a run returns `more_remaining: false`. To
+   protect this session's context, do at most **5** slice iterations per
+   invocation; if you reach that with `more_remaining` still true, tell the
+   user verbatim: *"Seeded and consolidated N slices; more transcript history
+   remains — re-run /mindwright:seed-from-repo to continue (it resumes
+   automatically)."*
+
+Always relay the script's `next_step` field to the user. Cases it covers
+besides transcripts: repo/native rows only, under the live calling session →
+a plain `/mindwright:dream` consolidates them; no live session ticket → rows
+land under the synthetic `seed-from-repo` session and `next_step` directs
+`scope="all"`; nothing new inserted (all sources already have un-drained
+short `seed` rows) → `next_step` still points at `/mindwright:dream` to
+consolidate the existing rows.
+
+**Idempotent / resumable:** re-running skips any markdown/native source
+already represented by an active short `seed` row; transcript seeding
+resumes via the `offsets` table, so an already-seeded transcript is never
+re-ingested.
 
 ### Ancestor walking (opt-in)
 
-If the user wants ancestor CLAUDE.md files included (monorepo with shared docs in a parent dir, or a legitimate cross-repo CLAUDE.md), pass `--include-ancestors`:
+If the user wants ancestor CLAUDE.md files included (monorepo with shared
+docs in a parent dir, or a legitimate cross-repo CLAUDE.md), pass
+`--include-ancestors`:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/seed-from-repo.js" --include-ancestors
 ```
 
-Default is project-root-only because walking parents would pull in `~/.claude/CLAUDE.md` (the user's global config — typically holds personal preferences, account handles, SSH aliases, machine details). Those facts do not belong in a single project's mindwright DB and would surface in retrieval for unrelated work after `/mindwright:dream` consolidates them.
+Default is project-root-only because walking parents would pull in
+`~/.claude/CLAUDE.md` (the user's global config — typically holds personal
+preferences, account handles, SSH aliases, machine details). Those facts do
+not belong in a single project's mindwright DB and would surface in
+retrieval for unrelated work after `/mindwright:dream` consolidates them.

@@ -11,15 +11,15 @@ Run via Bash:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/reset.js" --yes
 ```
 
-Without `--yes` the script prints what it would delete and exits. With `--yes` it deletes `.claude/mindwright/mindwright.db` and the entire `.claude/mindwright/mirrors/` tree.
+Without `--yes` the script prints what it would delete and exits. With `--yes` it deletes `.claude/mindwright/mindwright.db` (plus its `-wal` / `-shm` WAL sidecars) and the entire `.claude/mindwright/mirrors/` tree.
 
-Models (`~/.cache/huggingface/hub/`) are NOT touched — they survive reset.
+Models (in the plugin's persistent data dir, `${CLAUDE_PLUGIN_DATA}/model-cache`) are NOT touched — they survive reset.
 
-After a reset, mindwright treats the project as a fresh install: the next Claude Code session automatically re-learns from this project's local transcript history in the background, re-spending subscription tokens to rebuild what you just deleted. If you are resetting to purge unwanted or sensitive memory (not just to rebuild a corrupt schema), set `MINDWRIGHT_AUTO_SEED=false` in your environment before the next session so it does not come back. The dry-run and the post-delete output both print this reminder when local transcripts are present.
+After a reset the project has no memory, and nothing rebuilds the deleted content on its own: there is no automatic SessionStart bootstrap and no background process that re-seeds from your transcript history. (The Stop-hook consolidator only ever distills short-term that already exists into long-term — it never re-seeds, so with an empty store it has nothing to act on.) Memory returns only when you explicitly run `/mindwright:seed-from-repo` (then `/mindwright:dream` to consolidate). So reset is also the clean way to purge unwanted or sensitive memory — drop the DB and simply don't re-seed; nothing re-learns the deleted content behind your back.
 
-If an active mindwright daemon is bound to this project, `--yes` refuses with a guidance message. Close the Claude Code session(s) in the project first (wait ~10s for the ticket to expire) and re-run. Deleting underneath a live daemon would either fail mid-delete on Windows (DB file locked) or leave the daemon writing to an orphan inode on POSIX while new hooks open a fresh DB at the same path — both produce silent inconsistency.
+`--yes` refuses with a guidance message when either signal says the store is still live: (a) a Claude session is bound to this project (its SessionStart ticket records a process id that is still alive), or (b) the database is actively in use (some connection is holding the SQLite lock right now). There is no expiry window — close the Claude Code session(s) in this project and the binding clears the moment those processes exit; then re-run with `--yes`. Deleting while bound would either fail mid-delete on Windows (the DB file is locked) or, on POSIX, leave the live connection writing to an orphan inode while new hooks open a fresh DB at the same path — both produce silent inconsistency.
 
-Two-stage override for diagnostic recovery (single-flag override of a destructive op was deemed too coarse — it's irreversible if you guess wrong about the daemon being dead):
+Two-stage override for diagnostic recovery (a single-flag override of an irreversible delete was deemed too coarse — the common mistake is mis-judging whether anything is still bound):
 
-- `--force` (alongside `--yes`): use when you're confident the daemon process is dead but its ticket may still be inside the 10-min freshness window. If the daemon is still showing alive at the moment you run this, `--force` will *still refuse* with a clearer message — only the next flag actually overrides.
-- `--bypass-live-daemon` (alongside `--yes --force`): the nuclear option. Used after `--force` refused. Says "I have manually verified the daemon process is dead and only the ticket file is lingering." Wrong call here corrupts state.
+- `--force` (alongside `--yes`): the recovery case — a crashed or already-exited session left a stale ticket behind but the DB is genuinely idle. If something is *still* actually bound when you run it (a live session, or a held DB lock), `--force` alone **still refuses**, with a clearer message pointing you at the next flag.
+- `--bypass-live-daemon` (alongside `--yes --force`): the second and final flag — **both** `--force` and `--bypass-live-daemon` must be present to override the refusal. Use only when you have manually verified nothing is using the DB and only a stale ticket file is lingering. A wrong call here corrupts state.

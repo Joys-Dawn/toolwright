@@ -1,29 +1,19 @@
 // Tests for lib/models.js
-//
-// Most tests touch the network and the full ONNX runtime, so they're gated
-// behind MINDWRIGHT_SKIP_MODEL_TESTS=1 — CI and fresh-clone scenarios set
-// that to skip multi-gigabyte downloads. The fallback-path test does not
-// touch the network; it drives _loadEmbedderWithFallback with a stub
-// pipeline factory.
 
-import { test, skip } from 'node:test';
+
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   _loadEmbedderWithFallback,
   _loadRerankerWithFallback,
   _resetForTesting,
+  disposeModels,
   embed,
   rerank,
   getEmbedder,
+  getReranker,
   EMBEDDING_DIM,
 } from '../lib/models.js';
-
-const SKIP_MODEL_TESTS = process.env.MINDWRIGHT_SKIP_MODEL_TESTS === '1';
-
-// Re-route the network-gated tests through node:test's top-level `skip` when
-// MINDWRIGHT_SKIP_MODEL_TESTS=1. The function body never runs in that mode,
-// so the multi-gigabyte download and onnxruntime spin-up are both avoided.
-const modelTest = SKIP_MODEL_TESTS ? skip : test;
 
 // Models on first cold pull can take 10+ minutes. Even warm loads spend
 // several seconds in onnxruntime-node init. 20 minutes is generous; the
@@ -180,6 +170,59 @@ test('_loadRerankerWithFallback propagates errors when both dtypes fail', async 
   }
 });
 
+// ---------- network-free: ONNX CPU-arena opt-out ----------
+// The unbounded-RSS pathology: ONNX Runtime's CPU memory arena is ON by
+// default and never returns its worst-case high-water allocation to the OS.
+// transformers.js forwards session_options straight to onnxruntime's
+// InferenceSession.create, so both loaders MUST pass
+// { enableCpuMemArena: false } — and the key MUST be camelCase
+// (onnxruntime-node silently ignores the Python snake_case form, so a typo
+// here re-opens the leak with zero signal).
+
+test('_loadEmbedderWithFallback disables the ONNX CPU arena on the q8 path', async () => {
+  let opts;
+  const pipelineFn = async (_task, _modelId, o) => { opts = o; return { _tag: 'p' }; };
+  await _loadEmbedderWithFallback(pipelineFn, 'fake/embedder');
+  assert.deepEqual(opts.session_options, { enableCpuMemArena: false });
+});
+
+test('_loadEmbedderWithFallback keeps the arena disabled on the fp16 fallback path', async () => {
+  const seen = [];
+  const pipelineFn = async (_task, _modelId, o) => {
+    seen.push(o.session_options);
+    if (o.dtype === 'q8') throw new Error('no model_quantized.onnx shipped');
+    return { _tag: 'fp16' };
+  };
+  const origWarn = console.warn;
+  console.warn = () => {};
+  try {
+    await _loadEmbedderWithFallback(pipelineFn, 'fake/embedder');
+  } finally {
+    console.warn = origWarn;
+  }
+  assert.equal(seen.length, 2, 'q8 attempt + fp16 fallback both carry session_options');
+  for (const so of seen) assert.deepEqual(so, { enableCpuMemArena: false });
+});
+
+test('_loadRerankerWithFallback disables the ONNX CPU arena on both dtype paths', async () => {
+  const seen = [];
+  const modelFn = async (_modelId, o) => {
+    seen.push(o.session_options);
+    if (o.dtype === 'q8') throw new Error('no model_quantized.onnx shipped');
+    return { _tag: 'm' };
+  };
+  const tokenizerFn = async () => ({ _tag: 't' });
+  const origWarn = console.warn;
+  console.warn = () => {};
+  try {
+    await _loadRerankerWithFallback(modelFn, tokenizerFn, 'fake/reranker');
+  } finally {
+    console.warn = origWarn;
+  }
+  assert.equal(seen.length, 2, 'q8 attempt + fp16 fallback');
+  for (const so of seen) assert.deepEqual(so, { enableCpuMemArena: false });
+});
+
 // ---------- network-free: getEmbedder cache + retry semantics ----------
 
 test('getEmbedder drops its cache on rejection so the next call retries', async () => {
@@ -231,11 +274,55 @@ test('getEmbedder caches the resolved value across calls (no double load)', asyn
   _resetForTesting();
 });
 
-// ---------- network-gated: real model behavior ----------
-// These exercise the real bge-m3 + bge-reranker pipeline. Skipped unless the
-// caller opted in (i.e., they have models cached or are willing to download).
+// ---------- network-free: disposeModels (daemon idle-exit / RSS recycle) ----------
+// transformers.js disposal is MANUAL (its FinalizationRegistry auto-free is a
+// @todo), so a dropped model's native onnxruntime session leaks until process
+// exit unless disposeModels() releases it. The daemon calls this on idle-exit /
+// shutdown / RSS-recycle; it must dispose the resolved instances AND clear the
+// loader cache so a post-recycle load is cold (never a dead-session pipe).
 
-modelTest(
+test('disposeModels disposes the resolved embedder + reranker and clears the loader cache', async () => {
+  _resetForTesting();
+  let embDisposed = 0;
+  let rerankDisposed = 0;
+  let embLoads = 0;
+  const pipelineFn = async () => {
+    embLoads++;
+    return { _tag: 'emb', dispose: async () => { embDisposed++; } };
+  };
+  const modelFn = async () => ({ _tag: 'rer', dispose: async () => { rerankDisposed++; } });
+  const tokenizerFn = async () => ({ _tag: 'tok' });
+
+  await getEmbedder({ _pipelineFn: pipelineFn });
+  await getReranker({ _modelFn: modelFn, _tokenizerFn: tokenizerFn });
+  assert.equal(embLoads, 1, 'one cold embedder load');
+
+  await disposeModels();
+  assert.equal(embDisposed, 1, 'embedder pipe .dispose() was awaited');
+  assert.equal(rerankDisposed, 1, 'reranker model .dispose() was awaited');
+
+  // Cache cleared ⇒ the next getEmbedder cold-loads again instead of handing
+  // back a disposed (dead native session) pipe.
+  await getEmbedder({ _pipelineFn: pipelineFn });
+  assert.equal(embLoads, 2, 'disposeModels cleared the loader cache');
+  _resetForTesting();
+});
+
+test('disposeModels is a safe, idempotent no-op when nothing is loaded', async () => {
+  _resetForTesting();
+  await disposeModels(); // nothing resolved yet — must not throw
+  await disposeModels(); // repeated — still a clean no-op
+  let loads = 0;
+  const pipelineFn = async () => { loads++; return { _tag: 'p' }; };
+  await getEmbedder({ _pipelineFn: pipelineFn });
+  assert.equal(loads, 1, 'a load after a no-op disposeModels still works');
+  _resetForTesting();
+});
+
+// ---------- real model behavior (always runs; pulls ~5 GB if cache cold) ----------
+// These exercise the real bge-m3 + bge-reranker pipeline end to end.
+
+test(
   'embed("hello") returns one Float32Array of dim EMBEDDING_DIM, unit-normalized',
   { timeout: MODEL_TEST_TIMEOUT_MS },
   async () => {
@@ -255,7 +342,7 @@ modelTest(
   }
 );
 
-modelTest(
+test(
   'embed is semantically stable across batches for the same input',
   { timeout: MODEL_TEST_TIMEOUT_MS },
   async () => {
@@ -303,7 +390,7 @@ modelTest(
   }
 );
 
-modelTest(
+test(
   'embed handles batch input and returns per-row Float32Arrays of EMBEDDING_DIM',
   { timeout: MODEL_TEST_TIMEOUT_MS },
   async () => {
@@ -321,7 +408,7 @@ modelTest(
   }
 );
 
-modelTest(
+test(
   'rerank returns one sigmoid-applied score per candidate in [0, 1]',
   { timeout: MODEL_TEST_TIMEOUT_MS },
   async () => {
@@ -335,7 +422,7 @@ modelTest(
   }
 );
 
-modelTest(
+test(
   'rerank ranks a near-paraphrase higher than an unrelated candidate',
   { timeout: MODEL_TEST_TIMEOUT_MS },
   async () => {

@@ -65,6 +65,7 @@ Produce a minimal, targeted fix. The fix should change as little as possible whi
   - Strict fix (may break callers depending on buggy behavior) vs. lenient fix (preserves compatibility)
   - Minimal patch vs. small refactor that prevents the class of bug
 - **What NOT to change**: Explicitly state anything in the affected area that you are intentionally leaving alone. This prevents scope creep during implementation.
+- **Resource & concurrency impact**: `N/A` for most fixes. Required only if the fix changes a resource's lifecycle/disposal, per-instance footprint, multiplicity (per-call vs shared), a hot/startup path, or unbounded-input handling — then state the new footprint × multiplicity vs the target ceiling and what releases the resource on every exit path (normal, error, signal). This is the design-time form of the `agentwright:performance-audit` Resource Budget.
 
 ### 5. Verify External Contracts (mandatory)
 
@@ -129,6 +130,7 @@ Write the plan to the plan file with this structure:
 **Approach**: [What changes and why]
 **Alternatives considered**: [Why not X]
 **Out of scope**: [What is intentionally not changed]
+**Resource & concurrency impact**: [N/A — or the changed footprint × multiplicity vs ceiling and disposal on all exit paths]
 
 ## Implementation Steps
 1. [Step — each should be a single commit]

@@ -1,81 +1,86 @@
-// Regression test for scripts/reset.js's active-daemon guardrail
-// (behavior-7). The script must refuse to delete underneath a live daemon
-// because (Windows) rmSync fails mid-delete on the locked DB file, leaving
-// mirrors deleted but the DB intact, and (POSIX) rm succeeds at the
-// directory entry but the daemon's open fd keeps writing to the orphan
-// inode while new hooks open a fresh DB at the same path — two split-brain
-// stores with no warning.
+// Regression tests for scripts/reset.js's bound-guard. reset must refuse to
+// delete underneath something that is using the DB, because (Windows) rmSync
+// fails mid-delete on the locked DB file leaving a half-reset, and (POSIX) rm
+// succeeds at the dir entry but a live fd keeps writing the orphan inode while
+// new hooks open a fresh DB at the same path — silent split-brain.
+//
+// Two complementary signals gate it (post daemon-liveness refactor):
+//   - isSessionLive(): a ticket records a live Claude PID (no mtime window —
+//     a live PID is the signal, a dead one is a crashed-session orphan).
+//   - isDbInUse(): some connection actively holds the SQLite lock right now
+//     (the OS/SQLite-enforced backstop; catches an active writer even with no
+//     ticket). The two-stage --force / --bypass-live-daemon ladder is the
+//     escape hatch and is unchanged.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
-  mkdtempSync, rmSync, writeFileSync, mkdirSync,
-  existsSync, statSync, utimesSync,
+  mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { projectSlug } from '../../lib/paths.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PLUGIN_ROOT = resolve(__dirname, '..', '..');
 const SCRIPT = join(PLUGIN_ROOT, 'scripts', 'reset.js');
 
+// Async-aware: a sync body cleans up immediately (unchanged for the existing
+// ticket-driven tests); an async body (the belt-and-suspenders SQLite-lock
+// case) defers the rmSync until its Promise settles, so the temp project root
+// isn't deleted out from under an in-flight `await new Database(...)`.
 function withFreshRoot(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'mindwright-reset-'));
-  try {
-    return fn(dir);
-  } finally {
+  const cleanup = () => {
     try { rmSync(dir, { recursive: true, force: true }); } catch { /* tmp */ }
+  };
+  let result;
+  try {
+    result = fn(dir);
+  } catch (err) {
+    cleanup();
+    throw err;
   }
+  if (result && typeof result.then === 'function') {
+    return result.then(
+      (v) => { cleanup(); return v; },
+      (err) => { cleanup(); throw err; },
+    );
+  }
+  cleanup();
+  return result;
 }
 
+// A reliably-dead PID for the "crashed session, ticket lingers" case.
+function deadPid() {
+  return spawnSync(process.execPath, ['-e', 'process.exit(0)']).pid;
+}
+
+// Fake-bytes DB: enough for the ticket-driven tests (isDbInUse opens it as
+// SQLite, fails SQLITE_NOTADB → not-in-use, so the TICKET alone decides
+// boundness — exactly the isolation these cases want).
 function plantDb(dir) {
   const dbDir = join(dir, '.claude', 'mindwright');
   mkdirSync(dbDir, { recursive: true });
   const dbPath = join(dbDir, 'mindwright.db');
   writeFileSync(dbPath, 'fake sqlite bytes');
-  // Mirrors too — reset deletes mirrorsDir as well.
   const mirrors = join(dbDir, 'mirrors');
   mkdirSync(mirrors, { recursive: true });
   writeFileSync(join(mirrors, 'recent.md'), '# recent\n');
   return { dbPath, mirrors };
 }
 
-function plantTicket(dir, { ageMs = 0 } = {}) {
+// liveness now keys on claude_pid: alive → bound, dead → orphan.
+function plantTicket(dir, { claudePid } = {}) {
   const ticketsDir = join(dir, '.claude', 'mindwright', 'tickets');
   mkdirSync(ticketsDir, { recursive: true });
-  const ticketPath = join(ticketsDir, '1234-5678.json');
-  writeFileSync(ticketPath, JSON.stringify({ pipe: 'fake' }));
-  if (ageMs > 0) {
-    const old = new Date(Date.now() - ageMs);
-    utimesSync(ticketPath, old, old);
-  }
+  const ticketPath = join(ticketsDir, `${claudePid}-5678.json`);
+  writeFileSync(ticketPath, JSON.stringify({
+    session_id: 'reset-test', claude_pid: claudePid, hook_pid: 5678, created_at: Date.now(),
+  }));
   return ticketPath;
-}
-
-// Plant a Claude Code transcript so the post-reset auto-seed gate
-// (lib/seed-trigger.js#shouldAutoSeed) would re-bootstrap. Returns the
-// projects-dir to pass as MINDWRIGHT_CLAUDE_PROJECTS_DIR; the reset
-// subprocess resolves transcriptsDir() = <projectsDir>/<projectSlug(dir)>.
-// Placed inside `dir` so withFreshRoot's cleanup also removes it, and well
-// away from .claude/mindwright so reset itself never touches it.
-function plantTranscript(dir) {
-  const projectsDir = join(dir, 'claude-projects');
-  const txDir = join(projectsDir, projectSlug(dir));
-  mkdirSync(txDir, { recursive: true });
-  writeFileSync(
-    join(txDir, 'aaaaaaaa-1111-4111-8111-111111111111.jsonl'),
-    JSON.stringify({
-      type: 'user',
-      message: { content: 'hi' },
-      uuid: 'u1',
-      timestamp: '2024-01-01T00:00:00.000Z',
-    }) + '\n',
-  );
-  return projectsDir;
 }
 
 function runReset(dir, args, extraEnv = {}) {
@@ -85,26 +90,24 @@ function runReset(dir, args, extraEnv = {}) {
   });
 }
 
-test('reset --yes refuses while a live daemon ticket is present', () => {
+test('reset --yes refuses while a live-PID ticket is present', () => {
   withFreshRoot((dir) => {
     const { dbPath, mirrors } = plantDb(dir);
-    plantTicket(dir); // fresh mtime = live daemon
+    plantTicket(dir, { claudePid: process.pid }); // alive → bound
 
     const res = runReset(dir, ['--yes']);
     assert.equal(res.status, 1, `expected exit 1; got ${res.status}. stderr=${res.stderr}`);
     assert.match(res.stderr, /refusing to delete/i);
-    assert.match(res.stderr, /active daemon/i);
-    // Nothing should have been deleted.
+    assert.match(res.stderr, /Claude session is bound/i);
     assert.ok(existsSync(dbPath), 'DB must still exist after refusal');
     assert.ok(existsSync(mirrors), 'mirrors dir must still exist after refusal');
   });
 });
 
-test('reset --yes proceeds when no ticket is fresh (daemon dead or never spawned)', () => {
+test('reset --yes proceeds when the only ticket has a dead PID (crashed/never-spawned session)', () => {
   withFreshRoot((dir) => {
     const { dbPath, mirrors } = plantDb(dir);
-    // Plant a stale ticket — older than the 10-minute freshness window.
-    plantTicket(dir, { ageMs: 11 * 60 * 1000 });
+    plantTicket(dir, { claudePid: deadPid() }); // dead → orphan, not bound
 
     const res = runReset(dir, ['--yes']);
     assert.equal(res.status, 0, `expected exit 0; got ${res.status}. stderr=${res.stderr}`);
@@ -114,172 +117,102 @@ test('reset --yes proceeds when no ticket is fresh (daemon dead or never spawned
   });
 });
 
-test('reset --yes --force STILL refuses when the ticket is fresh (single-flag override is too coarse)', () => {
-  // Behavior regression: --force was previously a single-flag escape hatch
-  // for the irreversible reset. A user who mis-judged the daemon's liveness
-  // would corrupt their DB silently. Now --force only bypasses *when the
-  // ticket is genuinely stale* — if isDaemonAlive() still says alive, --force
-  // refuses with a clearer message pointing at --bypass-live-daemon.
+test('reset --yes --force STILL refuses when a live-PID ticket is present (single-flag override is too coarse)', () => {
   withFreshRoot((dir) => {
     const { dbPath, mirrors } = plantDb(dir);
-    plantTicket(dir); // fresh — daemon shows alive
+    plantTicket(dir, { claudePid: process.pid }); // alive → bound
 
     const res = runReset(dir, ['--yes', '--force']);
-    assert.equal(res.status, 1, `--force alone must refuse when daemon is alive; got ${res.status}. stderr=${res.stderr}`);
+    assert.equal(res.status, 1, `--force alone must refuse when bound; got ${res.status}. stderr=${res.stderr}`);
     assert.match(res.stderr, /refusing to delete/i);
     assert.match(res.stderr, /--bypass-live-daemon/);
-    // Nothing deleted.
     assert.ok(existsSync(dbPath));
     assert.ok(existsSync(mirrors));
   });
 });
 
-test('reset --yes --force bypasses the live-daemon guard when the ticket is genuinely stale', () => {
-  // Standard --force use case: a previous session crashed, ticket lingers,
-  // user wants to nuke and rebuild. With a stale ticket, isDaemonAlive()
-  // returns false and --force is a clean no-op (proceeds same as --yes would).
+test('reset --yes --force bypasses the guard when the ticket is a genuine dead-PID orphan', () => {
   withFreshRoot((dir) => {
     const { dbPath, mirrors } = plantDb(dir);
-    plantTicket(dir, { ageMs: 11 * 60 * 1000 }); // stale — past freshness window
+    plantTicket(dir, { claudePid: deadPid() }); // dead → not bound → --force is a clean no-op
 
     const res = runReset(dir, ['--yes', '--force']);
-    assert.equal(res.status, 0, `--force must succeed when ticket is stale; got ${res.status}. stderr=${res.stderr}`);
+    assert.equal(res.status, 0, `--force must succeed when not bound; got ${res.status}. stderr=${res.stderr}`);
     assert.ok(!existsSync(dbPath));
     assert.ok(!existsSync(mirrors));
   });
 });
 
-test('reset --yes --bypass-live-daemon (without --force) STILL refuses on a fresh ticket', () => {
-  // Regression: the override is a TWO-stage ladder. Passing
-  // --bypass-live-daemon by itself (skipping the --force step) used to let
-  // a single mistaken flag wipe an actively-bound DB, contradicting the
-  // documented ladder and the refusal-message wording. Now both override
-  // flags must be present together; --bypass-live-daemon alone falls into
-  // the non-forced refusal branch and the user is pointed at --force first.
+test('reset --yes --bypass-live-daemon (without --force) STILL refuses on a live-PID ticket', () => {
   withFreshRoot((dir) => {
     const { dbPath, mirrors } = plantDb(dir);
-    plantTicket(dir); // fresh — daemon shows alive
+    plantTicket(dir, { claudePid: process.pid });
 
     const res = runReset(dir, ['--yes', '--bypass-live-daemon']);
     assert.equal(res.status, 1,
-      `--bypass-live-daemon alone must refuse when daemon is alive; got ${res.status}. stderr=${res.stderr}`);
+      `--bypass-live-daemon alone must refuse when bound; got ${res.status}. stderr=${res.stderr}`);
     assert.match(res.stderr, /refusing to delete/i);
     assert.match(res.stderr, /--force/);
-    // Nothing deleted.
     assert.ok(existsSync(dbPath));
     assert.ok(existsSync(mirrors));
   });
 });
 
-test('reset --yes --force --bypass-live-daemon overrides the live-daemon refusal', () => {
-  // Two-stage override: --force alone refuses on a fresh ticket, but adding
-  // the explicit --bypass-live-daemon flag lets the user nuke anyway. Used
-  // when the user has manually verified the daemon is dead and only the
-  // ticket file is lingering inside the freshness window.
+test('reset --yes --force --bypass-live-daemon overrides the bound refusal', () => {
   withFreshRoot((dir) => {
     const { dbPath, mirrors } = plantDb(dir);
-    plantTicket(dir); // fresh ticket
+    plantTicket(dir, { claudePid: process.pid }); // bound
 
     const res = runReset(dir, ['--yes', '--force', '--bypass-live-daemon']);
     assert.equal(res.status, 0,
-      `--bypass-live-daemon must allow deletion; got ${res.status}. stderr=${res.stderr}`);
+      `both override flags must allow deletion; got ${res.status}. stderr=${res.stderr}`);
     assert.ok(!existsSync(dbPath));
     assert.ok(!existsSync(mirrors));
   });
 });
 
-test('reset (dry-run) prints a hint about active daemon but still succeeds without deleting', () => {
+test('reset (dry-run) prints the bound hint but still succeeds without deleting', () => {
   withFreshRoot((dir) => {
     const { dbPath, mirrors } = plantDb(dir);
-    plantTicket(dir);
+    plantTicket(dir, { claudePid: process.pid });
 
     const res = runReset(dir, []); // no --yes
     assert.equal(res.status, 0, `dry-run must succeed; got ${res.status}. stderr=${res.stderr}`);
     assert.match(res.stderr, /DRY RUN/);
-    // The hint about the live daemon should be visible so the user knows
-    // why --yes alone won't work next.
-    assert.match(res.stderr, /active daemon/i);
+    assert.match(res.stderr, /Claude session is currently bound/i);
     assert.match(res.stderr, /--force/);
-    // Nothing deleted.
     assert.ok(existsSync(dbPath));
     assert.ok(existsSync(mirrors));
   });
 });
 
-// ---- behavior-3: post-reset auto-re-bootstrap / token-respend warning ----
-// Emptying memory re-arms the SessionStart auto-seed gate, so the next
-// session silently re-ingests the local transcript corpus and re-spends
-// subscription tokens to rebuild what was just deleted. reset.js must surface
-// that (warn-only — no enforcement) in both the dry-run and the post-delete
-// output, gated on the same two preconditions shouldAutoSeed uses that a
-// reset can observe: transcripts present AND MINDWRIGHT_AUTO_SEED !== 'false'.
-
-const REBOOTSTRAP_RE = /re-ingest your local transcript history/;
-
-test('reset dry-run warns the next session will auto-re-bootstrap when local transcripts exist', () => {
-  withFreshRoot((dir) => {
-    plantDb(dir);
-    const projectsDir = plantTranscript(dir);
-
-    const res = runReset(dir, [], { MINDWRIGHT_CLAUDE_PROJECTS_DIR: projectsDir });
-    assert.equal(res.status, 0, `dry-run must succeed; got ${res.status}. stderr=${res.stderr}`);
-    assert.match(res.stderr, /DRY RUN/);
-    assert.match(res.stderr, REBOOTSTRAP_RE);
-    assert.match(res.stderr, /MINDWRIGHT_AUTO_SEED=false/);
-  });
-});
-
-test('reset --yes warns about auto-re-bootstrap AFTER deleting', () => {
-  withFreshRoot((dir) => {
-    const { dbPath } = plantDb(dir);
-    const projectsDir = plantTranscript(dir);
-    plantTicket(dir, { ageMs: 11 * 60 * 1000 }); // stale → reset proceeds
-
-    const res = runReset(dir, ['--yes'], { MINDWRIGHT_CLAUDE_PROJECTS_DIR: projectsDir });
-    assert.equal(res.status, 0, `expected exit 0; got ${res.status}. stderr=${res.stderr}`);
-    assert.match(res.stderr, /DELETING/);
-    assert.ok(!existsSync(dbPath), 'DB should be gone after successful reset');
-    assert.match(res.stderr, REBOOTSTRAP_RE);
-    // The warning is post-delete guidance — it must come after the removal.
-    const removedAt = res.stderr.indexOf('removed:');
-    const warnAt = res.stderr.search(REBOOTSTRAP_RE);
-    assert.ok(
-      removedAt >= 0 && warnAt > removedAt,
-      `the re-bootstrap warning must follow the deletion output; stderr=${res.stderr}`,
-    );
-  });
-});
-
-test('reset suppresses the re-bootstrap warning when MINDWRIGHT_AUTO_SEED=false', () => {
-  withFreshRoot((dir) => {
-    plantDb(dir);
-    const projectsDir = plantTranscript(dir);
-
-    const res = runReset(dir, [], {
-      MINDWRIGHT_CLAUDE_PROJECTS_DIR: projectsDir,
-      MINDWRIGHT_AUTO_SEED: 'false',
-    });
-    assert.equal(res.status, 0, `dry-run must succeed; got ${res.status}. stderr=${res.stderr}`);
-    assert.match(res.stderr, /DRY RUN/);
-    assert.ok(
-      !REBOOTSTRAP_RE.test(res.stderr),
-      `opting out via MINDWRIGHT_AUTO_SEED=false must silence the warning; stderr=${res.stderr}`,
-    );
-  });
-});
-
-test('reset does not warn about re-bootstrap when no local transcripts exist', () => {
-  withFreshRoot((dir) => {
-    plantDb(dir);
-    const emptyProjects = join(dir, 'empty-projects');
-    mkdirSync(emptyProjects, { recursive: true });
-
-    const res = runReset(dir, [], { MINDWRIGHT_CLAUDE_PROJECTS_DIR: emptyProjects });
-    assert.equal(res.status, 0, `dry-run must succeed; got ${res.status}. stderr=${res.stderr}`);
-    assert.match(res.stderr, /DRY RUN/);
-    assert.ok(
-      !REBOOTSTRAP_RE.test(res.stderr),
-      `no transcripts → no warning; stderr=${res.stderr}`,
-    );
+test('belt-and-suspenders: a held SQLite lock makes reset --yes refuse even with NO ticket at all', async () => {
+  // The OS/SQLite-enforced backstop: no ticket exists (isSessionLive=false),
+  // but a real connection actively holds BEGIN EXCLUSIVE, so isDbInUse=true
+  // and reset must still refuse. The lock is held by THIS process; reset runs
+  // as a separate process → genuine cross-process lock contention.
+  await new Promise((resolveTest, rejectTest) => {
+    withFreshRoot(async (dir) => {
+      const dbDir = join(dir, '.claude', 'mindwright');
+      mkdirSync(dbDir, { recursive: true });
+      const dbPath = join(dbDir, 'mindwright.db');
+      const { loadNativeDefault } = await import('../../lib/native-require.js');
+      const Database = await loadNativeDefault('better-sqlite3');
+      const held = new Database(dbPath);
+      held.pragma('journal_mode = WAL');
+      held.exec('CREATE TABLE t(x)');
+      held.pragma('busy_timeout = 0');
+      held.exec('BEGIN EXCLUSIVE'); // hold the write lock across the spawn
+      try {
+        const res = runReset(dir, ['--yes']); // separate process
+        assert.equal(res.status, 1,
+          `a held SQLite lock must make reset refuse; got ${res.status}. stderr=${res.stderr}`);
+        assert.match(res.stderr, /refusing to delete/i);
+        assert.ok(existsSync(dbPath), 'DB must survive — it was actively locked');
+      } finally {
+        try { held.exec('ROLLBACK'); } catch { /* */ }
+        held.close();
+      }
+    }).then(resolveTest, rejectTest);
   });
 });

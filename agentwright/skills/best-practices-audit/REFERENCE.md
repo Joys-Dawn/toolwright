@@ -170,17 +170,16 @@ High-level modules should not depend on low-level modules. Both should depend on
 
 ---
 
-## 8. Performance
+## 8. Performance Idioms (micro-level only)
 
 **Sources**: Web.dev, framework-specific documentation, general CS principles
 
-- **Avoid premature optimization** — but do avoid *obviously* bad patterns:
-  - O(n^2) when O(n) or O(n log n) is straightforward
-  - Fetching entire tables/collections when only a subset is needed
-  - Re-computing values on every render/call that could be memoized
-- **Minimize bundle size**: tree-shake, lazy-load routes/components, avoid importing entire libraries for one utility
-- **Batch operations**: reduce network round-trips, use bulk APIs, batch DOM updates
-- **Debounce/throttle**: user input handlers that trigger expensive work
+This category is *coding-idiom* hygiene only. Scale and load behavior — algorithmic complexity, N+1/unbounded queries, missing pagination, resource leaks, backpressure, contention, whole-dataset-in-memory — is **not** flagged here; that is `agentwright:performance-audit`.
+
+- **Idiomatic memoization/recompute**: values recomputed every render/call that the framework idiom says to memoize (stable refs, `useMemo`/`useCallback`, computed caching)
+- **Minimize bundle size**: tree-shake, lazy-load routes/components, avoid importing an entire library for one utility
+- **Idiomatic batching**: prefer the bulk/batched API over a loop of single calls where the convention exists; batch DOM updates
+- **Debounce/throttle**: user-input handlers that trigger expensive work
 
 ---
 

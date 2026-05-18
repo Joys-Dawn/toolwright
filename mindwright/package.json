@@ -1,6 +1,6 @@
 {
   "name": "mindwright",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Per-agent memory + cross-session learning for Claude Code multi-agent setups",
@@ -13,7 +13,6 @@
     "test": "node --test \"test/**/*.test.js\" \"test/**/*.test.mjs\""
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
     "@huggingface/transformers": "^3.0.0",
     "better-sqlite3": "12.10.0",
     "sqlite-vec": "0.1.9"

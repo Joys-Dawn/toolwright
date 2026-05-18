@@ -54,6 +54,7 @@ For every change in the target state:
 - **Indirect consumers**: files that depend on the direct consumers' behavior
 - **Configuration**: build configs, test configs, CI, dependency injection setup
 - **External contracts**: public APIs, database schemas, event formats — anything that crosses a system boundary
+- **Resource & concurrency invariants**: does the new structure change a resource's per-instance footprint, multiplicity (per-call vs shared/singleton), lifecycle/disposal on exit paths, or concurrency/contention? A refactor must **preserve** these unless changing them is the explicit goal. If it changes them, state the new footprint × multiplicity vs the target ceiling and treat it as a behavior change — see `agentwright:performance-audit`.
 
 Classify each as:
 - **Must update** — will break if not changed alongside the refactor
@@ -116,6 +117,8 @@ How the code should be structured after. New boundaries, responsibilities, file 
 | File/Module | Impact | Action |
 |---|---|---|
 | ... | Must update / Should verify / Safe | ... |
+
+**Resource & concurrency invariants**: [Preserved — or the intended change: new footprint × multiplicity vs ceiling, lifecycle, concurrency, and why]
 
 ## Steps
 

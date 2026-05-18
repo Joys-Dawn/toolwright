@@ -1,7 +1,7 @@
 // Unit tests for the three non-trivial helpers inside scripts/seed-from-repo.js.
 // The existing seed-from-repo.test.js drives the happy path end-to-end; this
 // file pins the branches that the e2e test never reaches:
-//   - findCallingSessionId (ticket discovery + freshness filter)
+//   - findCallingSessionId (ticket discovery + PID-liveness filter)
 //   - collectClaudeMdAncestry (multi-level CLAUDE.md walk)
 //   - splitMarkdownSections (heading split + large-section subdivision)
 // A regression in any of these would silently degrade /mindwright:dream's
@@ -15,15 +15,14 @@ import {
   rmSync,
   writeFileSync,
   mkdirSync,
-  utimesSync,
 } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   findCallingSessionId,
   collectClaudeMdAncestry,
   splitMarkdownSections,
-  TICKET_MAX_AGE_MS,
 } from '../../scripts/seed-from-repo.js';
 import { ticketsDir } from '../../lib/paths.js';
 
@@ -56,25 +55,33 @@ function withTmp(fn) {
   return result;
 }
 
-function plantTicket({ sessionId, ageMs = 0, claudePid = 12345, hookPid = 67890 }) {
+// A reliably-dead PID: spawn a child, let it exit, reuse its reaped pid.
+function deadPid() {
+  return spawnSync(process.execPath, ['-e', 'process.exit(0)']).pid;
+}
+
+// readActiveTicket now gates on claude_pid liveness (alive → eligible) and
+// returns the session_id of the most-recent `created_at` among eligible
+// tickets — no mtime, no heartbeat. `ageMs` only backdates created_at to
+// control recency ordering; `alive: false` plants a genuine dead-PID ticket
+// (the "stale" case is a crashed session now, not an aged file). A live
+// ticket uses THIS process's pid (guaranteed alive on every platform for the
+// duration of the test); vary `hookPid` to keep co-live tickets in distinct
+// files (the path is `${claude_pid}-${hook_pid}.json`).
+function plantTicket({
+  sessionId, ageMs = 0, alive = true, hookPid = 67890,
+}) {
   const dir = ticketsDir();
   mkdirSync(dir, { recursive: true });
+  const claudePid = alive ? process.pid : deadPid();
   const ticket = {
     session_id: sessionId,
-    pipe_path: '\\\\.\\pipe\\test',
     claude_pid: claudePid,
     hook_pid: hookPid,
     created_at: Date.now() - ageMs,
   };
   const path = join(dir, `${claudePid}-${hookPid}.json`);
   writeFileSync(path, JSON.stringify(ticket));
-  // Backdate the file's mtime to match ageMs — readActiveTicket gates on
-  // st.mtimeMs (heartbeat-updated by the daemon), not the JSON created_at,
-  // so a test that wants to simulate a stale ticket must age the mtime too.
-  if (ageMs > 0) {
-    const backdated = (Date.now() - ageMs) / 1000;
-    utimesSync(path, backdated, backdated);
-  }
 }
 
 // ---------------------------------------------------------------
@@ -88,17 +95,21 @@ test('findCallingSessionId returns null when no tickets dir exists', async () =>
   });
 });
 
-test('findCallingSessionId returns the most-recent fresh ticket session_id', async () => {
+test('findCallingSessionId returns the most-recent live ticket session_id', async () => {
   await withTmp(async () => {
-    plantTicket({ sessionId: 'older-sess', ageMs: 1_000, claudePid: 1, hookPid: 1 });
-    plantTicket({ sessionId: 'newer-sess', ageMs: 0, claudePid: 2, hookPid: 2 });
+    // Both tickets have a live PID (this process); recency is decided by
+    // created_at — newer-sess (ageMs 0) beats older-sess (ageMs 1000).
+    plantTicket({ sessionId: 'older-sess', ageMs: 1_000, hookPid: 1 });
+    plantTicket({ sessionId: 'newer-sess', ageMs: 0, hookPid: 2 });
     assert.equal(await findCallingSessionId(), 'newer-sess');
   });
 });
 
-test('findCallingSessionId ignores tickets past TICKET_MAX_AGE_MS', async () => {
+test('findCallingSessionId ignores a ticket whose claude_pid is dead (crashed session)', async () => {
   await withTmp(async () => {
-    plantTicket({ sessionId: 'stale-sess', ageMs: TICKET_MAX_AGE_MS + 1_000 });
+    // Age is irrelevant now: a freshly-written ticket with a dead PID is a
+    // crashed/never-spawned session and must not bind the seed rows.
+    plantTicket({ sessionId: 'dead-sess', alive: false });
     assert.equal(await findCallingSessionId(), null);
   });
 });
@@ -111,8 +122,8 @@ test('findCallingSessionId tolerates unparseable / partial ticket files', async 
     writeFileSync(join(dir, '999-1.json'), '{ not valid json');
     // Tmp partial.
     writeFileSync(join(dir, '999-2.json.tmp.1234'), '{}');
-    // One valid fresh ticket.
-    plantTicket({ sessionId: 'survivor', claudePid: 1, hookPid: 1 });
+    // One valid live ticket.
+    plantTicket({ sessionId: 'survivor', hookPid: 1 });
     assert.equal(await findCallingSessionId(), 'survivor');
   });
 });

@@ -1,34 +1,33 @@
 #!/usr/bin/env node
-// Diagnostic dump for mindwright. Mirrors the mindwright_status MCP tool but
-// runs as a plain script so the user can sanity-check state without an active
-// MCP server. Used by /mindwright:status when the daemon may be down.
+// Diagnostic dump for mindwright, used by /mindwright:status. Mirrors the
+// mindwright_status tool but runs as a plain script so the user can
+// sanity-check state even when the model daemon is down.
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { dataDir, dbPath, mirrorsDir, hfCacheDir, projectRoot, embedderCached } from '../lib/paths.js';
-import { isDaemonAlive } from '../lib/daemon-status.js';
+import { dataDir, dbPath, mirrorsDir, modelCacheDir, projectRoot, embedderCached } from '../lib/paths.js';
+import { isSessionLive } from '../lib/session-liveness.js';
+import { isModelDaemonAlive } from '../lib/model-daemon-status.js';
 import { depsInstalled } from '../lib/ready.js';
 import { maybeAutoInstall, installLogPath } from '../lib/auto-setup.js';
 
 async function main() {
-  // Dependency gate: better-sqlite3/sqlite-vec aren't installed by a
-  // marketplace plugin copy (nor after a plugin update wipes node_modules).
-  // openStore() is the only native-dep import here, so quarantine it behind a
-  // dep-free check and emit a status built only from dep-free signals; trigger
-  // the single-flight background install so a later /mindwright:status comes
-  // up fully on its own.
+  // Dependency gate: quarantine openStore() (the only native-dep import)
+  // behind a dep-free check, emit a status built only from dep-free signals,
+  // and trigger the background install so a later /mindwright:status comes up
+  // fully on its own.
   if (!depsInstalled()) {
     maybeAutoInstall();
     print({
-      ...baseStatus(),
+      ...(await baseStatus()),
       ...zeroCounts(),
       note: `native dependencies not installed yet — a one-time background install was triggered (log: ${installLogPath()}); memory features activate automatically once it completes`,
     });
     return;
   }
   const { openStore } = await import('../lib/store.js');
-  const out = baseStatus();
+  const out = await baseStatus();
 
   if (!out.db_exists) {
     Object.assign(out, zeroCounts(), {
@@ -55,10 +54,9 @@ async function main() {
     out.last_consolidation = last ? last.fired_at : null;
     out.pending_embeds = store.countPendingEmbeds();
     out.oldest_preference_at = store.oldestUserPreference();
-    // Unlike the MCP tool's `consolidator` (filtered to the caller's
-    // requester handle), the script has no caller and lists every
-    // consolidator-for record so the user can see what's spawned at the
-    // project level when debugging dream-cycle issues.
+    // The script has no caller, so (unlike the tool, which filters to the
+    // caller's requester handle) it lists every consolidator-for record for
+    // debugging dream-cycle issues.
     out.consolidators = store.listConsolidators();
   } finally {
     store.close();
@@ -67,23 +65,25 @@ async function main() {
   print(out);
 }
 
-// Single source of truth for the status payload shape. Both degraded
-// branches (deps-missing, db-not-initialized) and the live path build on
-// these so adding/renaming a status field is a one-site change instead of
-// a three-site change where the least-exercised copy silently drifts.
-// Dep-free by construction (paths.js / daemon-status.js / node:fs only) —
-// safe to call from the pre-dependency-gate branch.
-function baseStatus() {
+// Single source of truth for the status payload shape so all three branches
+// (deps-missing, db-not-initialized, live) can't drift. Dep-free by
+// construction — safe to call from the pre-dependency-gate branch. Async only
+// for the model-daemon socket probe (node:net, still dep-free).
+async function baseStatus() {
   return {
     project_root: projectRoot(),
     data_dir: dataDir(),
     db_path: dbPath(),
     db_exists: existsSync(dbPath()),
     mirrors_dir: mirrorsDir(),
-    hf_cache_dir: hfCacheDir(),
+    model_cache_dir: modelCacheDir(),
     model_cached: embedderCached(),
-    reranker_cached: existsSync(join(hfCacheDir(), 'models--onnx-community--bge-reranker-v2-m3-ONNX')),
-    daemon_alive: isDaemonAlive(),
+    reranker_cached: existsSync(join(modelCacheDir(), 'onnx-community', 'bge-reranker-v2-m3-ONNX')),
+    // Two distinct signals: a Claude session bound to THIS project vs. the
+    // machine-wide model daemon actually serving (what the daemon-down
+    // warning that sent the user here is really about).
+    session_alive: isSessionLive(),
+    model_daemon_alive: await isModelDaemonAlive(),
   };
 }
 
@@ -109,10 +109,11 @@ function print(out) {
     `  db path:           ${out.db_path}`,
     `  db exists:         ${out.db_exists}`,
     `  mirrors dir:       ${out.mirrors_dir}`,
-    `  hf cache:          ${out.hf_cache_dir}`,
+    `  model cache:       ${out.model_cache_dir}`,
     `  embedder cached:   ${out.model_cached}`,
     `  reranker cached:   ${out.reranker_cached}`,
-    `  daemon alive:      ${out.daemon_alive}`,
+    `  session bound:     ${out.session_alive}`,
+    `  model daemon:      ${out.model_daemon_alive}`,
     `  short_count:       ${out.short_count}`,
     `  long_count:        ${out.long_count}`,
     `  by_category:       ${JSON.stringify(out.by_category)}`,
@@ -133,8 +134,7 @@ function print(out) {
   process.stdout.write(JSON.stringify(out) + '\n');
 }
 
-// Only run main() when this file is invoked directly (e.g., via the
-// /mindwright:status skill), not when imported for unit testing.
+// Only run main() when invoked directly, not on import (unit tests).
 const invokedDirectly =
   process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (invokedDirectly) {

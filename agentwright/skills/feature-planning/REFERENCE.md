@@ -111,6 +111,15 @@ A plan section is "done" when it meets these criteria. Self-check before calling
 - [ ] Auth requirements are stated per endpoint.
 - [ ] Error response shapes and status codes are defined (not just the 200 case).
 
+### Resource & Concurrency Model
+- [ ] Present whenever the feature loads/holds a heavy or bounded resource, runs per-session/request/worker, spawns processes, or consumes unbounded input — or explicitly marked `N/A` with a one-line reason.
+- [ ] Per-instance footprint is quantified (memory / fds / connections / threads, steady + peak), not hand-waved.
+- [ ] Multiplicity unit is named and multiplied by a defensible peak count; the product is compared against a stated target ceiling.
+- [ ] Worst case ≤ ceiling — or the design is revised here. A plan whose footprint × multiplicity exceeds the ceiling is rejected, not deferred to review.
+- [ ] Lifecycle is explicit: who owns the resource and what releases it on every exit path (normal, error, SIGINT/SIGTERM).
+- [ ] Hot-path/startup work is identified and checked for ×N amplification under concurrent units, with a shared/single-flight path where it would otherwise multiply.
+- [ ] If work is enqueued: the bound, the drain rate, and the backpressure/shedding behavior under overload are stated.
+
 ### Implementation Steps
 - [ ] Each step is small enough to be a single commit.
 - [ ] Dependencies between steps are noted (what must come before what).

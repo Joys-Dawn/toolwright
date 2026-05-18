@@ -1,18 +1,9 @@
 #!/usr/bin/env node
-// Stop hook. Two jobs (DESIGN.md "Trigger sources"):
-//   1) Flush any final transcript content from offset → EOF — picks up the
-//      final assistant text + tail thinking that landed after the last
-//      tool call. Same chunker/write code path as PreToolUse, just no
-//      retrieval gate.
-//   2) Check the consolidation trigger: if short-term row count for this
-//      session has crossed `CAP_EXCHANGES`, stage a nudge message in the
-//      `meta` table for the next UserPromptSubmit hook to surface.
-//      Claude Code only honors `hookSpecificOutput.additionalContext` from
-//      UserPromptSubmit / SessionStart / PreToolUse (DESIGN.md:379) — Stop
-//      doesn't have a user-visible context surface, so we hand the nudge
-//      off to a hook that does.
-//
-// On any error, exit with `{}` so the session isn't disrupted.
+// Stop hook. Two jobs: (1) flush final transcript content from offset → EOF
+// (same chunker path as PreToolUse, no retrieval gate); (2) check the
+// consolidation trigger and, since Stop has no user-visible context surface,
+// stage a nudge for the next UserPromptSubmit to surface. On any error, exit
+// with `{}` so the session isn't disrupted.
 
 import { readFileSync } from 'node:fs';
 import { openStore } from '../lib/store.js';
@@ -20,22 +11,16 @@ import { flushTranscript } from '../lib/transcript-flush.js';
 import { evaluateNudgeTriggers, nudgeReason, suggestScopeAll } from '../lib/nudge.js';
 import { logHookError } from '../lib/hook-log.js';
 import { NUDGE_STATES, CONSOLIDATOR_COMPLETION_GRACE_MS } from '../lib/constants.js';
-import { spawnConsolidator } from '../lib/consolidator-spawn.js';
+// isConsolidatorSession is the self-spawn guard: never spawn a consolidator
+// from inside a consolidator session (co-located with the sentinel it reads).
+import { spawnConsolidator, isConsolidatorSession } from '../lib/consolidator-spawn.js';
 import { deriveHandle } from '../lib/handles.js';
-// isConsolidatorSession lives in lib/seed-trigger.js — the same self-spawn
-// guard the SessionStart-hosted auto-seed gate uses. handleCapCheck below
-// consumes it here so the guard has a single definition (behavior-1 moved the
-// auto-seed trigger out of this hook; see lib/seed-trigger.js header).
-import { isConsolidatorSession } from '../lib/seed-trigger.js';
 
 // Auto-spawn the background consolidator. Returns true on successful spawn.
-// MINDWRIGHT_SEED_TRANSCRIPT=1 is the user's explicit opt-in to backfill
-// transcript content into short-term. On already-tracked sessions this
-// re-ingests from byte 0, which doubles row counts and is the most reliable
-// way to trip capCrossed. Auto-spawning at that moment would burn subscription
-// tokens deduplicating something the user already knows is duplicated (and
-// hadn't yet inspected). While the env is set, suspend auto-spawn and fall
-// back to the manual nudge so the user controls when /mindwright:dream runs.
+// While MINDWRIGHT_SEED_TRANSCRIPT=1, suspend auto-spawn and fall back to the
+// manual nudge: seed re-ingest from byte 0 doubles row counts and trips
+// capCrossed, so auto-spawning then would burn tokens deduplicating something
+// the user already knows is duplicated. Let the user control when dream runs.
 function trySpawnConsolidator(store, sessionId, triggers) {
   if (process.env.MINDWRIGHT_SEED_TRANSCRIPT === '1') return false;
   try {
@@ -52,29 +37,18 @@ function trySpawnConsolidator(store, sessionId, triggers) {
   }
 }
 
-// Reconciliation read for the auto-spawned consolidator. trySpawnConsolidator
-// only confirms the OS accepted the detached `claude --bg` spawn — NOT that
-// `/mindwright:dream` actually ran to completion. A completed dream's mandatory
-// close is mindwright_finalize_drain, which writes a timestamped
-// `consolidations` row (store.recordConsolidation). That row is the durable
-// "done" acknowledgment a later Stop can reconcile against.
+// Reconciliation read: trySpawnConsolidator only confirms the OS accepted the
+// detached spawn, NOT that /mindwright:dream ran to completion. A completed
+// dream writes a timestamped `consolidations` row — the durable "done" ack.
 //
-// Returns true when ALL hold: we DID auto-spawn a consolidator on a prior trip
-// (meta:consolidator_for.last_spawn is set), the completion lease has elapsed
-// since that spawn, and NO consolidations row landed with fired_at >=
-// last_spawn. That combination means the background consolidator died silently
-// (auth failure, rate limit, dream-skill regression, crashed `claude --bg`
-// supervisor) and the sticky FIRED state is now hiding an unconsolidated
-// overflow from the user. The caller re-surfaces the manual nudge and re-arms.
-//
-// Returns false (stay quiet) when: we never auto-spawned (spawn skipped/refused
-// — the fallback nudge already ran, so the user has a visible path); still
-// within the lease (the dream may legitimately still be running — nagging now
-// would be the hostile re-nudge the edge-trigger was built to prevent); or a
-// consolidation completed at/after our spawn (the dream stuck — not the
-// silent-death case behavior-5 targets; any remaining overflow is a fresh
-// accumulation the normal re-arm→re-spawn path handles). Any error is logged
-// and swallowed — reconciliation must never break the Stop hook.
+// Returns true (re-surface nudge + re-arm) when ALL hold: we DID auto-spawn on
+// a prior trip, the completion lease has elapsed, and NO consolidations row
+// landed with fired_at >= last_spawn — i.e. the background consolidator died
+// silently and the sticky FIRED state is hiding an unconsolidated overflow.
+// Returns false (stay quiet) when we never auto-spawned, are still within the
+// lease (dream may legitimately still be running), or a consolidation
+// completed at/after our spawn. Any error is logged and swallowed —
+// reconciliation must never break the Stop hook.
 function spawnedConsolidatorNeverCompleted(store, sessionId, now = Date.now()) {
   try {
     const record = store.getConsolidatorFor(deriveHandle(sessionId));
@@ -103,29 +77,16 @@ function stagePendingNudge(store, sessionId, triggers) {
 }
 
 // Cap check. Edge-trigger: fire the nudge the FIRST time short-term crosses
-// CAP_EXCHANGES, then stay quiet until the count drops below cap (because
-// /mindwright:dream ran) and a later cap crossing re-arms it. Without this
-// gate the same nudge gets re-staged every turn forever, spamming
-// `additionalContext` until the user capitulates and runs dream.
-//
-// Stop can't surface additionalContext itself — Claude Code only honors it on
-// UserPromptSubmit / SessionStart / PreToolUse — so we stage a pending message
-// that the next UserPromptSubmit drains.
-//
-// When the session IS a consolidator we skip BOTH the spawn and the staged
-// nudge. Staging a nudge for ourselves is pointless — the consolidator's main
-// loop IS running /mindwright:dream; there's no user-facing UserPromptSubmit
-// to surface the nudge. The nudge_state transitions still run so the gate
-// re-arms correctly if this session ever exits its consolidator role.
+// CAP_EXCHANGES, then stay quiet until the count drops below cap and a later
+// crossing re-arms it — without this gate the same nudge re-stages every turn.
+// When the session IS a consolidator, skip BOTH the spawn and the staged nudge
+// (the consolidator loop already runs dream; no user-facing surface) but still
+// run the nudge_state transitions so the gate re-arms if it leaves that role.
 function handleCapCheck(store, sessionId) {
   try {
-    // Triggers AND nudge_state are both project-wide. Quiet users with many
-    // short sessions still get a nudge when total rows pile up; once that
-    // nudge has fired the FIRED state suppresses further re-fires across the
-    // whole project (including new sessions opening on the same un-drained
-    // state) until /mindwright:dream clears both triggers and re-arms it.
-    // The sessionId arg to get/setNudgeState is retained as a signature stub
-    // — see lib/store.js#getNudgeState for the rationale.
+    // Triggers AND nudge_state are both project-wide so quiet users with many
+    // short sessions still get a nudge when total rows pile up, and a fired
+    // nudge stays suppressed across the project until dream clears it.
     const triggers = evaluateNudgeTriggers(store);
     const state = store.getNudgeState();
 
@@ -138,28 +99,23 @@ function handleCapCheck(store, sessionId) {
             stagePendingNudge(store, sessionId, triggers);
           }
         }
-        // Always mark FIRED — anti-spam holds whether we spawned, fell back to
-        // a nudge, or skipped both because we ARE the consolidator. The next
-        // cap-clear → cap-cross cycle re-arms below.
+        // Always mark FIRED — anti-spam holds whether we spawned, nudged, or
+        // skipped both as the consolidator. The next cap-clear→cross re-arms.
         store.setNudgeState(NUDGE_STATES.FIRED);
       } else if (
         !isConsolidatorSession(store, sessionId)
         && spawnedConsolidatorNeverCompleted(store, sessionId)
       ) {
-        // We auto-spawned a background consolidator on a prior trip and went
-        // quiet (FIRED), but the completion lease elapsed with no
-        // consolidations row and short-term is STILL over the trigger — the
-        // detached `claude --bg` consolidator died silently. Re-surface the
-        // manual nudge and re-arm so the next crossing retries the spawn
-        // instead of leaving the user blind behind a sticky FIRED forever.
-        // (Bounded: ~one retry per lease window, each failure now visible via
-        // the staged nudge — not per-turn spam.)
+        // Auto-spawned consolidator died silently (lease elapsed, no
+        // consolidations row, still over trigger). Re-surface the manual
+        // nudge and re-arm so the next crossing retries instead of leaving
+        // the user blind behind a sticky FIRED. Bounded to ~one retry per
+        // lease window.
         stagePendingNudge(store, sessionId, triggers);
         store.setNudgeState(NUDGE_STATES.ARMED);
       }
     } else if (state === NUDGE_STATES.FIRED) {
-      // Both conditions cleared (dream drained rows AND the rows that tripped
-      // the safety-net got distilled away) — re-arm for the next trip.
+      // Both conditions cleared — re-arm for the next trip.
       store.setNudgeState(NUDGE_STATES.ARMED);
     }
   } catch (e) {
@@ -201,20 +157,11 @@ export async function main() {
       }
     }
 
-    // 2) Cap check. Users who never want to see the nudge can set
-    //    MINDWRIGHT_NUDGE=off in their environment — Stop skips the whole
-    //    staging path then (no spawn, no nudge, no state-machine update).
+    // 2) Cap check. MINDWRIGHT_NUDGE=off skips the whole staging path
+    //    (no spawn, no nudge, no state-machine update).
     if (process.env.MINDWRIGHT_NUDGE !== 'off') {
       handleCapCheck(store, sessionId);
     }
-
-    // 3) Auto-seed bootstrap is NOT here. It is hosted by SessionStart
-    //    (lib/seed-trigger.js#maybeAutoSeed, called from
-    //    hooks/session-start.js#main). Its empty-memory precondition is only
-    //    observable before the turn's first flush; by the first Stop,
-    //    flushTranscript (step 1) plus the earlier UserPromptSubmit/PreToolUse
-    //    flushes have already written short rows, so a Stop-hosted gate could
-    //    never fire on the documented fresh-install flow (behavior-1).
   } finally {
     store.close();
   }

@@ -1,18 +1,11 @@
 #!/usr/bin/env node
-// /mindwright:setup — one-time model download + smoke test.
+// /mindwright:setup — one-time model download + smoke test (confirms shapes
+// and the sigmoid range).
 //
-// Downloads Xenova/bge-m3 (~1.1 GB at q8/~2.1 GB at fp16) and
-// onnx-community/bge-reranker-v2-m3-ONNX (~570 MB at fp32) to the
-// transformers.js cache (~/.cache/huggingface/hub/ by default), then runs a
-// smoke test to confirm shapes and the sigmoid range.
-//
-// Loaded ONLY via dynamic import() from scripts/setup.js (the dependency-free
-// shim entrypoint) AFTER its synchronous dep-install gate — never invoked
-// directly: this file statically imports lib/models.js (→
-// @huggingface/transformers), which a deps-less plugin copy cannot resolve.
-// All progress goes to stderr (the log() helper); stdout carries only the
-// final machine-parseable success line (main()'s closing `mindwright:setup
-// ok …` write) so the /mindwright:setup skill can parse it.
+// Loaded ONLY via dynamic import() from scripts/setup.js AFTER its dep-install
+// gate — never directly: it statically imports lib/models.js, which a
+// deps-less copy cannot resolve. Progress goes to stderr; stdout carries only
+// the final machine-parseable `mindwright:setup ok …` line for the skill.
 
 import {
   EMBEDDING_DIM,
@@ -28,10 +21,8 @@ function log(msg) {
   process.stderr.write(`[mindwright:setup] ${msg}\n`);
 }
 
-// Exported for unit testing — assertion thresholds live here so a regression
-// in (a) Float32Array typecheck, (b) embedding dimensionality, (c) unit-norm
-// tolerance, (d) sigmoid range, or (e) rerank result shape can be caught
-// without downloading 5GB of models.
+// Exported so the assertion thresholds are unit-testable without downloading
+// 5GB of models.
 export function assertEmbeddingShape(vec) {
   if (!(vec instanceof Float32Array)) {
     throw new Error(`smoke test failed: embed did not return Float32Array (got ${typeof vec})`);

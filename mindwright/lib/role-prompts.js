@@ -1,25 +1,13 @@
-// Canonical role registry — the five built-in roles a mindwright-using
-// agent can be assigned. Each role carries a short prompt fragment that
-// SessionStart appends to the agent's context and that the PostToolUse-on-
-// `wrightward_list_inbox` hook re-injects on diff.
+// Canonical role registry — the five built-in roles an agent can be assigned.
+// Each carries a short prompt fragment SessionStart appends and the
+// PostToolUse-on-inbox hook re-injects on diff. Keep fragments small
+// (≤800 chars): identity-shaping, not a procedure manual.
 //
-// Keep each fragment small. The role-prompt is identity-shaping, not a
-// procedure manual — the procedural detail comes from the agent's actual
-// task body (the handoff) and from retrieved memories. A bloated fragment
-// burns context every turn for marginal gain. ≤800 chars is the discipline
-// (asserted in test/role-prompts.test.js).
-//
-// Roles are also the scoping key for procedural memory: a fact retained
-// under `scope='role:planner'` is only surfaced when a session has the
-// 'planner' role assigned. The role names here are the source of truth for
-// what shapes get accepted by retrieval.
+// Roles are also the scoping key for procedural memory: a fact under
+// `scope='role:planner'` is only surfaced to a session holding that role.
 
-// The canonical role identifiers — mindwright's built-in scoping roles.
 // Single source of truth: categorize.js's procedural-cue regexes are built
-// dynamically from this list, ROLE_PROMPTS below carries one prompt fragment
-// per entry, and the test suite asserts the keys stay in sync. Adding a new
-// role means: append to this list, add its prompt fragment to ROLE_PROMPTS,
-// and the categorize-cue regex picks it up automatically.
+// from this list, ROLE_PROMPTS carries one fragment per entry, kept in sync.
 export const CANONICAL_ROLES = Object.freeze([
   'planner',
   'implementer',
@@ -28,9 +16,8 @@ export const CANONICAL_ROLES = Object.freeze([
   'tester',
 ]);
 
-// Mapping each role identity to a short prompt fragment. Frozen so a
-// downstream typo (`'PLANNER'`, `'planner '`) becomes a TypeError at
-// read-time rather than silently injecting nothing.
+// Role → prompt fragment. Frozen so a downstream typo throws rather than
+// silently injecting nothing.
 export const ROLE_PROMPTS = Object.freeze({
   planner:
     'You are a planner. Your job is to produce a thorough, implementation-ready ' +
@@ -72,26 +59,21 @@ export const ROLE_PROMPTS = Object.freeze({
     'trivial cases.',
 });
 
-// Stable alias map. `validator` is the plan-vocabulary synonym for `reviewer`.
-// Any role name not in ROLE_PROMPTS that's resolved through this alias map
-// gets the canonical name's fragment. Unknown roles still pass through with
-// no fragment (silent passthrough — they still affect retrieval scope).
+// `validator` is the plan-vocabulary synonym for `reviewer`. Unknown roles
+// pass through with no fragment but still affect retrieval scope.
 const ROLE_ALIASES = Object.freeze({
   validator: 'reviewer',
 });
 
-// Resolve a role name to its canonical fragment, applying the alias map.
-// Returns null for unknown roles.
+// Resolve a role to its canonical fragment; null for unknown roles.
 function fragmentFor(role) {
   if (typeof role !== 'string') return null;
   const canonical = ROLE_ALIASES[role] || role;
   return ROLE_PROMPTS[canonical] || null;
 }
 
-// Render fragments for a list of assigned roles. Joins with two newlines so
-// the agent sees one role per "paragraph" rather than a wall of text.
-// Unknown roles are silently skipped — the role is still in `meta:roles:`
-// and still scopes procedural retrieval, but injects no extra system text.
+// Render fragments for assigned roles, one per paragraph. Unknown roles are
+// skipped (still scope retrieval, just inject no system text).
 export function getRolePromptsFor(roles) {
   if (!Array.isArray(roles) || roles.length === 0) return '';
   const parts = [];
@@ -102,9 +84,8 @@ export function getRolePromptsFor(roles) {
   return parts.join('\n\n');
 }
 
-// Render one-line "role X has been unassigned" notes for the PostToolUse
-// diff hook. We can't retract already-injected context, but we CAN tell the
-// agent the role no longer applies so future decisions weight it differently.
+// One-line unassign notes for the PostToolUse diff hook: we can't retract
+// injected context but can tell the agent the role no longer applies.
 export function getRoleUnassignNotices(roles) {
   if (!Array.isArray(roles) || roles.length === 0) return '';
   return roles

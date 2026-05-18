@@ -12,7 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname } from 'node:path';
@@ -21,7 +21,7 @@ import net from 'node:net';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PLUGIN_ROOT = dirname(__dirname); // mindwright/
-const DAEMON_PIPE_URL = pathToFileURL(`${PLUGIN_ROOT}/mcp/daemon-pipe.mjs`).href;
+const DAEMON_PIPE_URL = pathToFileURL(`${PLUGIN_ROOT}/lib/daemon-pipe.mjs`).href;
 
 const STUB_EMBED_VALUE = 0.5;
 const STUB_DIM = 1024;
@@ -40,12 +40,36 @@ function stubRerank(query, candidates) {
 function setupIsolatedRoot() {
   const dir = mkdtempSync(join(tmpdir(), 'mindwright-daemon-test-'));
   const prev = process.env.MINDWRIGHT_PROJECT_ROOT;
+  const prevSock = process.env.MINDWRIGHT_MODEL_DAEMON_SOCK;
+  const prevDisable = process.env.MINDWRIGHT_MODEL_DAEMON_DISABLE;
   process.env.MINDWRIGHT_PROJECT_ROOT = dir;
+  // The client now talks to the MACHINE-wide model daemon socket, not a
+  // per-session one. Point it at an isolated socket so the test's
+  // startPipeServer and connectPipe agree, and DISABLE the lazy respawn so a
+  // degrade-to-null assertion can't fork a real ONNX daemon.
+  //
+  // Production's modelDaemonSocketPath() binds a Windows NAMED PIPE on win32
+  // and a unix-socket FILE on POSIX. These tests were authored on POSIX and
+  // hardcoded a `.sock` file, so on Windows server.listen() tries to AF_UNIX-
+  // bind a filesystem path and fails with EACCES. Mirror the real per-platform
+  // transport instead: a named pipe on Windows (reuse the unique mkdtemp
+  // basename so the machine-global \\.\pipe namespace stays collision-free
+  // across tests), the socket file on POSIX.
+  const sock = process.platform === 'win32'
+    ? `\\\\.\\pipe\\${basename(dir)}`
+    : join(dir, 'modeld.sock');
+  process.env.MINDWRIGHT_MODEL_DAEMON_SOCK = sock;
+  process.env.MINDWRIGHT_MODEL_DAEMON_DISABLE = '1';
   return {
     dir,
+    sock,
     cleanup() {
       if (prev === undefined) delete process.env.MINDWRIGHT_PROJECT_ROOT;
       else process.env.MINDWRIGHT_PROJECT_ROOT = prev;
+      if (prevSock === undefined) delete process.env.MINDWRIGHT_MODEL_DAEMON_SOCK;
+      else process.env.MINDWRIGHT_MODEL_DAEMON_SOCK = prevSock;
+      if (prevDisable === undefined) delete process.env.MINDWRIGHT_MODEL_DAEMON_DISABLE;
+      else process.env.MINDWRIGHT_MODEL_DAEMON_DISABLE = prevDisable;
       try {
         rmSync(dir, { recursive: true, force: true });
       } catch {
@@ -56,11 +80,11 @@ function setupIsolatedRoot() {
 }
 
 async function importFresh() {
-  // Import after MINDWRIGHT_PROJECT_ROOT is set so `pipePath()` resolves
-  // against the isolated tmp root. ES modules cache by URL, so we use
-  // cache-busting query strings.
+  // Re-import per test with a cache-busting query so each test gets a fresh
+  // module instance bound to the isolated env (MINDWRIGHT_PROJECT_ROOT /
+  // MINDWRIGHT_MODEL_DAEMON_SOCK) set just above. ES modules cache by URL.
   const stamp = Date.now() + '-' + Math.random();
-  const pipeMod = await import(`../mcp/daemon-pipe.mjs?t=${stamp}`);
+  const pipeMod = await import(`../lib/daemon-pipe.mjs?t=${stamp}`);
   const clientMod = await import(`../lib/pipe-client.js?t=${stamp}`);
   return { startPipeServer: pipeMod.startPipeServer, connectPipe: clientMod.connectPipe };
 }
@@ -70,7 +94,7 @@ test('roundtrip: embed + rerank against in-process stub server', async () => {
   try {
     const { startPipeServer, connectPipe } = await importFresh();
     const { close } = await startPipeServer({
-      sessionId: 'roundtrip-1',
+      pipePath: process.env.MINDWRIGHT_MODEL_DAEMON_SOCK,
       embedFn: stubEmbed,
       rerankFn: stubRerank,
     });
@@ -100,7 +124,7 @@ test('embed returns null after server.close()', async () => {
   try {
     const { startPipeServer, connectPipe } = await importFresh();
     const { close } = await startPipeServer({
-      sessionId: 'close-1',
+      pipePath: process.env.MINDWRIGHT_MODEL_DAEMON_SOCK,
       embedFn: stubEmbed,
       rerankFn: stubRerank,
     });
@@ -157,7 +181,7 @@ test('server-side errors degrade to null AND surface the message on stderr', asy
       throw new Error('synthetic embed failure');
     };
     const { close } = await startPipeServer({
-      sessionId: 'errlog-1',
+      pipePath: process.env.MINDWRIGHT_MODEL_DAEMON_SOCK,
       embedFn: failEmbed,
       rerankFn: stubRerank,
     });
@@ -209,7 +233,7 @@ test('client returns null after the daemon is SIGKILL\'d (subprocess)', async ()
         return v;
       });
       const stubRerank = async (q, cs) => cs.map((_, i) => 0.5 + i * 0.01);
-      await startPipeServer({ sessionId: process.env.MW_TEST_SID, embedFn: stubEmbed, rerankFn: stubRerank });
+      await startPipeServer({ pipePath: process.env.MINDWRIGHT_MODEL_DAEMON_SOCK, embedFn: stubEmbed, rerankFn: stubRerank });
       process.stdout.write('READY\\n');
       // keep the loop alive
       setInterval(() => {}, 1 << 30);
@@ -274,7 +298,7 @@ test('daemon refuses unbounded no-newline input and closes the connection (CWE-7
     const { startPipeServer } = await importFresh();
     const MAX = 4096;
     const { server, path, close } = await startPipeServer({
-      sessionId: 'flood',
+      pipePath: process.env.MINDWRIGHT_MODEL_DAEMON_SOCK,
       embedFn: stubEmbed,
       rerankFn: stubRerank,
       maxBufferBytes: MAX,

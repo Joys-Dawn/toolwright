@@ -1,12 +1,11 @@
 {
   "name": "mindwright",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Per-agent memory + cross-session learning for Claude Code multi-agent setups (wrightward family)",
   "author": {
     "name": "yiann"
   },
   "license": "Apache-2.0",
   "keywords": ["memory", "learning", "retrieval", "multi-agent", "wrightward"],
-  "skills": "./skills/",
-  "mcpServers": "./.mcp.json"
+  "skills": "./skills/"
 }

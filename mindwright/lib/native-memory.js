@@ -1,29 +1,18 @@
 // Reads Claude Code's native per-project memory tree
-// (`~/.claude/projects/<encoded-cwd>/memory/*.md`) into seed rows for the
-// unified seed path. These files are LLM-written by the global CLAUDE.md
-// memory protocol — they are NOT hand-curated truth, so they take exactly
-// the same path as every other seed source: short-tier `seed` rows that the
-// consolidator re-distills. We deliberately do NOT map the frontmatter
-// `metadata.type` onto an entries.category here — categorization is the
-// consolidator's job (DESIGN.md "auto-seed by folding into consolidation").
-//
-// MEMORY.md is skipped: it is the human-readable index of one-line pointers,
-// fully redundant with the individual fact files it points at — seeding it
-// would just duplicate every other row's gist with no new signal.
+// (`~/.claude/projects/<encoded-cwd>/memory/*.md`) into seed rows. These are
+// LLM-written, not curated truth, so they take the same path as every seed
+// source: short-tier `seed` rows the consolidator re-distills. We do NOT map
+// frontmatter `metadata.type` onto a category — that's the consolidator's
+// job. MEMORY.md is skipped: it is a redundant index of the other files.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { nativeMemoryDir } from './paths.js';
 
-// Minimal, dependency-free frontmatter reader. The memory protocol's schema
-// is shallow (`name`, `description`, `metadata.type` — one level of nesting)
-// so a YAML library would be disproportionate. Anything we don't recognize
-// is ignored rather than erroring: a malformed or schema-drifted file should
-// still seed its body, never crash the whole scan.
-//
-// Returns { data, body }. `data` holds the parsed scalar keys plus a nested
-// `metadata` object when present; `body` is everything after the closing
-// fence (or the whole file when there is no frontmatter).
+// Minimal dep-free frontmatter reader (schema is shallow: one level of
+// nesting, so a YAML lib would be disproportionate). Unrecognized input is
+// ignored, never thrown — a malformed file still seeds its body.
+// Returns { data, body }.
 function parseFrontmatter(raw) {
   const text = raw.replace(/^﻿/, '');
   // Frontmatter must be the very first thing in the file: `---\n ... \n---`.
@@ -57,11 +46,9 @@ function parseFrontmatter(raw) {
   return { data, body };
 }
 
-// Coerce a frontmatter date-ish value (or a file mtime Date) to an ISO
-// string, or null when it isn't a real date. event_ts is stored as ISO text
-// and COALESCE-compared lexicographically against created_at (also ISO), so
-// the representation must match exactly — a raw "2026-05-01" or epoch number
-// would sort wrong against a full ISO timestamp.
+// Coerce a date-ish value to an ISO string, or null. event_ts is COALESCE-
+// compared lexicographically against created_at (also ISO), so a raw
+// "2026-05-01" or epoch number would sort wrong — must be full ISO.
 function toIso(value) {
   if (value == null) return null;
   const d = value instanceof Date ? value : new Date(value);
@@ -69,18 +56,11 @@ function toIso(value) {
   return Number.isNaN(t) ? null : d.toISOString();
 }
 
-// Scan a native-memory directory into seed-row inputs. `memoryDir` is
-// injectable so unit tests point at a fixture tree; production / the
-// seed-from-repo script call with no argument and get the real
-// ~/.claude/projects/<encoded-cwd>/memory path.
-//
-// Each *.md (except MEMORY.md) becomes one row:
-//   { content, eventTs, sourceRef:"memory:<filename>" }
-// content = the one-line `description` (when present) followed by the body,
-// so the consolidator gets both the headline and the detail to re-distill.
-// eventTs prefers a frontmatter `date`/`created`/`updated` field, else the
-// file's mtime — "when this memory actually happened", per the governing
-// event_ts invariant (recency/relevance only; lifecycle stays on created_at).
+// Scan a native-memory dir into seed-row inputs. `memoryDir` is injectable
+// (test fixture seam). Each *.md (except MEMORY.md) → one row
+// { content, eventTs, sourceRef:"memory:<filename>" }; content is the
+// `description` headline + body. eventTs prefers a frontmatter
+// date/created/updated field, else file mtime — recency/relevance only.
 export function collectNativeMemory(memoryDir = nativeMemoryDir()) {
   let names;
   try {

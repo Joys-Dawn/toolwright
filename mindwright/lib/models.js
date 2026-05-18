@@ -1,48 +1,97 @@
 // Embedder + reranker loaders for mindwright.
 //
-// Models live as lazy singletons inside the calling process. The MCP daemon
-// (mcp/server.mjs) holds these across the session lifetime; hooks reach them
-// through the daemon-pipe RPC so they never pay the cold-load cost themselves.
-// See DESIGN.md "Architecture sketch" for the full picture.
+// Models load as lazy singletons in-process. The ONLY process that should load
+// them is the machine-wide model daemon (scripts/model-daemon.mjs): it holds them
+// for the whole machine over a fixed global socket, so hooks and the CLI never
+// pay the ONNX cold-load themselves.
 //
-// Embedder: Xenova/bge-m3, dtype q8 (model_quantized.onnx) with fp16 fallback
-//   (model_fp16.onnx) when the q8 file is missing in the cached repo.
-// Reranker: onnx-community/bge-reranker-v2-m3-ONNX, dtype q8
-//   (model_quantized.onnx, ~571 MB) with fp16 fallback (model_fp16.onnx,
-//   ~1.14 GB). We explicitly opt into a single-file quantized variant
-//   because the upstream repo's default `model.onnx` is a 657 KB graph stub
-//   that pairs with a 2.27 GB `model.onnx_data` sidecar — and transformers.js
-//   only fetches that sidecar when called with `use_external_data_format:
-//   true`. Without the dtype hint, the load completes with a missing sidecar
-//   and ONNX-runtime fails at first inference. Raw logits → manual sigmoid
-//   `1 / (1 + exp(-x))` (the ONNX port does NOT apply sigmoid itself).
+// Embedder: Xenova/bge-m3, dtype q8 with fp16 fallback when q8 is missing.
+// Reranker: onnx-community/bge-reranker-v2-m3-ONNX, dtype q8 with fp16
+//   fallback. We explicitly opt into a single-file quantized variant because
+//   the upstream repo's default `model.onnx` is a 657 KB graph stub paired
+//   with a 2.27 GB `model.onnx_data` sidecar that transformers.js only fetches
+//   with `use_external_data_format: true`. Without the dtype hint the load
+//   completes with a missing sidecar and ONNX-runtime fails at first
+//   inference. Raw logits → manual sigmoid (the ONNX port omits sigmoid).
 
-// transformers.js is resolved from the persistent ${CLAUDE_PLUGIN_DATA}/
-// node_modules via lib/native-require.js (see that file's header for why a
-// bare import can't reach it). createRequire().resolve() picks the package's
-// `require` condition → its webpack-bundled CJS build, whose named exports
-// the cjs-module-lexer can't see through, so the symbols live only on the
-// module.exports object — loadNativeDefault() returns exactly that. Top-level
-// await is safe: models.js is only ever loaded AFTER the readiness gate
-// (through the MCP daemon / sweeper / store path), never from a deps-less
-// hook process.
+// transformers.js resolved from the persistent node_modules via
+// lib/native-require.js. createRequire().resolve() picks the `require`
+// condition → webpack-bundled CJS build whose named exports the
+// cjs-module-lexer can't see, so symbols live only on module.exports —
+// loadNativeDefault() returns that. Top-level await is safe: this file loads
+// only AFTER the readiness gate, never from a deps-less hook process.
 import { loadNativeDefault } from './native-require.js';
-const { pipeline, AutoModelForSequenceClassification, AutoTokenizer } =
+const { pipeline, AutoModelForSequenceClassification, AutoTokenizer, env } =
   await loadNativeDefault('@huggingface/transformers');
+
+import { EMBEDDING_DIM } from './constants.js';
+import { modelCacheDir } from './paths.js';
+
+// Redirect transformers.js' model cache OFF its volatile package-local default
+// (node_modules/@huggingface/transformers/.cache/ — destroyed by a
+// transformers.js version bump or a dependency reinstall, forcing a multi-GB
+// re-download) onto the durable ${CLAUDE_PLUGIN_DATA}/model-cache: the
+// Claude-Code-documented persistent plugin data dir that survives plugin
+// updates and dependency reinstalls, and is OUTSIDE node_modules so npm never
+// touches it. transformers.js reads env.cacheDir at fetch time; setting it
+// ONCE here at module init — before any getEmbedder/getReranker — keeps every
+// load and embedderCached()'s probe (lib/paths.js) on one agreed location.
+env.cacheDir = modelCacheDir();
 
 export const EMBEDDER_MODEL_ID = 'Xenova/bge-m3';
 export const RERANKER_MODEL_ID = 'onnx-community/bge-reranker-v2-m3-ONNX';
-export const EMBEDDING_DIM = 1024;
+// Re-exported from lib/constants.js (single source of truth).
+export { EMBEDDING_DIM };
 
 let _embedderPromise = null;
 let _rerankerPromise = null;
+// Resolved instances kept so disposeModels() can release the native ONNX
+// sessions. transformers.js disposal is MANUAL (PreTrainedModel.dispose /
+// Pipeline.dispose; its FinalizationRegistry auto-free is still a @todo), so
+// a dropped model's native session — owned by onnxruntime-node, outside V8
+// GC — leaks until process exit unless we dispose it explicitly.
+let _embedderPipe = null; // a Pipeline (has async .dispose())
+let _rerankerModel = null; // a PreTrainedModel (has async .dispose())
+
+// ONNX Runtime's CPU memory arena is ON by default and grows to the
+// worst-case batch×sequence high-water mark, never returning it to the OS
+// (documented ORT behavior, maintainer-confirmed: a 2 MB model can
+// pre-allocate ~6 GB). A long-lived daemon serving highly variable batch
+// sizes ratchets RSS to tens of GB and stays there. transformers.js spreads
+// `session_options` straight through to onnxruntime's
+// InferenceSession.create, so disabling the arena here is the one effective
+// lever. The key MUST be camelCase — onnxruntime-node ignores the Python
+// `enable_cpu_mem_arena` silently.
+const ONNX_SESSION_OPTIONS = { enableCpuMemArena: false };
+
+async function safeDispose(obj) {
+  try {
+    if (obj && typeof obj.dispose === 'function') await obj.dispose();
+  } catch {
+    /* best-effort: a failed dispose must never crash shutdown/reload */
+  }
+}
 
 /**
- * Load the embedder with dtype='q8', falling back to dtype='fp16' if the
- * quantized ONNX file isn't shipped in the cached repo.
- *
- * Exported separately from getEmbedder() so tests can drive the fallback path
- * with a stubbed pipeline factory (no network, no real model load).
+ * Release the resident embedder + reranker ONNX sessions and clear the
+ * loader caches. Called by the model daemon on idle-exit / shutdown /
+ * RSS-recycle. Safe to call repeatedly and before any load (a no-op when
+ * nothing is resolved). The next getEmbedder/getReranker cold-loads again.
+ */
+export async function disposeModels() {
+  const pipe = _embedderPipe;
+  const model = _rerankerModel;
+  _embedderPipe = null;
+  _rerankerModel = null;
+  _embedderPromise = null;
+  _rerankerPromise = null;
+  await safeDispose(pipe);
+  await safeDispose(model);
+}
+
+/**
+ * Load the embedder at dtype='q8', falling back to 'fp16' when q8 isn't
+ * shipped in the cached repo.
  *
  * @param {(task: string, model: string, opts: object) => Promise<any>} pipelineFn
  * @param {string} modelId
@@ -50,7 +99,10 @@ let _rerankerPromise = null;
  */
 export async function _loadEmbedderWithFallback(pipelineFn, modelId) {
   try {
-    const pipe = await pipelineFn('feature-extraction', modelId, { dtype: 'q8' });
+    const pipe = await pipelineFn('feature-extraction', modelId, {
+      dtype: 'q8',
+      session_options: ONNX_SESSION_OPTIONS,
+    });
     return { pipe, dtype: 'q8' };
   } catch (err) {
     const message = err && err.message ? err.message : String(err);
@@ -59,37 +111,34 @@ export async function _loadEmbedderWithFallback(pipelineFn, modelId) {
         `falling back to dtype='fp16'. This is expected when the upstream repo ` +
         `does not ship model_quantized.onnx.`
     );
-    const pipe = await pipelineFn('feature-extraction', modelId, { dtype: 'fp16' });
+    const pipe = await pipelineFn('feature-extraction', modelId, {
+      dtype: 'fp16',
+      session_options: ONNX_SESSION_OPTIONS,
+    });
     return { pipe, dtype: 'fp16' };
   }
 }
 
-// The _pipelineFn override is a test-only seam — production callers always
-// use the imported transformers.js `pipeline`.
+// _pipelineFn is a test-only seam.
 export async function getEmbedder({ _pipelineFn = pipeline } = {}) {
   if (_embedderPromise) return _embedderPromise;
-  // Cache the resolved value, but DROP the cache on rejection so a transient
-  // load failure (network glitch during HF download, mid-bootstrap daemon)
-  // doesn't permanently wedge embedding for the lifetime of the process.
-  _embedderPromise = _loadEmbedderWithFallback(_pipelineFn, EMBEDDER_MODEL_ID).catch((err) => {
-    _embedderPromise = null;
-    throw err;
-  });
+  // DROP the cache on rejection so a transient load failure doesn't
+  // permanently wedge embedding for the process lifetime.
+  _embedderPromise = _loadEmbedderWithFallback(_pipelineFn, EMBEDDER_MODEL_ID)
+    .then((res) => {
+      _embedderPipe = res.pipe; // record for disposeModels()
+      return res;
+    })
+    .catch((err) => {
+      _embedderPromise = null;
+      throw err;
+    });
   return _embedderPromise;
 }
 
 /**
- * Load the reranker with dtype='q8', falling back to dtype='fp16' if the
- * quantized ONNX file isn't shipped in the cached repo.
- *
- * Mirrors _loadEmbedderWithFallback so the reranker pulls a single-file
- * variant (model_quantized.onnx at q8 or model_fp16.onnx at fp16) instead of
- * the split model.onnx + model.onnx_data fp32 export, which transformers.js
- * won't fully fetch without `use_external_data_format: true`. The tokenizer
+ * Load the reranker at dtype='q8', falling back to 'fp16'. The tokenizer
  * load is dtype-agnostic so it runs in parallel with the first model attempt.
- *
- * Exported separately so tests can drive the fallback path with stubbed
- * loaders.
  *
  * @param {(modelId: string, opts: object) => Promise<any>} modelFn
  * @param {(modelId: string) => Promise<any>} tokenizerFn
@@ -101,7 +150,7 @@ export async function _loadRerankerWithFallback(modelFn, tokenizerFn, modelId) {
   let model;
   let dtype;
   try {
-    model = await modelFn(modelId, { dtype: 'q8' });
+    model = await modelFn(modelId, { dtype: 'q8', session_options: ONNX_SESSION_OPTIONS });
     dtype = 'q8';
   } catch (err) {
     const message = err && err.message ? err.message : String(err);
@@ -110,24 +159,28 @@ export async function _loadRerankerWithFallback(modelFn, tokenizerFn, modelId) {
         `falling back to dtype='fp16'. This is expected when the upstream repo ` +
         `does not ship model_quantized.onnx.`
     );
-    model = await modelFn(modelId, { dtype: 'fp16' });
+    model = await modelFn(modelId, { dtype: 'fp16', session_options: ONNX_SESSION_OPTIONS });
     dtype = 'fp16';
   }
   const tokenizer = await tokenizerPromise;
   return { model, tokenizer, dtype };
 }
 
-// The _modelFn / _tokenizerFn overrides are test-only seams — production
-// callers always use transformers.js's static from_pretrained methods.
+// _modelFn / _tokenizerFn are test-only seams.
 export async function getReranker({
   _modelFn = (modelId, opts) => AutoModelForSequenceClassification.from_pretrained(modelId, opts),
   _tokenizerFn = (modelId) => AutoTokenizer.from_pretrained(modelId),
 } = {}) {
   if (_rerankerPromise) return _rerankerPromise;
-  _rerankerPromise = _loadRerankerWithFallback(_modelFn, _tokenizerFn, RERANKER_MODEL_ID).catch((err) => {
-    _rerankerPromise = null;
-    throw err;
-  });
+  _rerankerPromise = _loadRerankerWithFallback(_modelFn, _tokenizerFn, RERANKER_MODEL_ID)
+    .then((res) => {
+      _rerankerModel = res.model; // record for disposeModels()
+      return res;
+    })
+    .catch((err) => {
+      _rerankerPromise = null;
+      throw err;
+    });
   return _rerankerPromise;
 }
 
@@ -185,12 +238,11 @@ export async function rerank(query, candidates) {
   });
   const outputs = await model(inputs);
   const logits = outputs?.logits?.data;
-  // Fail loud on shape mismatch rather than silently emitting NaN scores —
-  // `Math.exp(-undefined) === NaN`, and downstream NaN scores get silently
-  // dropped by `score >= floor` comparisons, looking like rerank-floor
-  // abstention. The daemon-pipe handler converts a thrown error into a
-  // null response, which lib/pipe-client.js + lib/retriever.js know how to
-  // degrade against (1.0-per-row fallback).
+  // Fail loud on shape mismatch rather than emit NaN scores: `Math.exp(
+  // -undefined)===NaN` gets silently dropped by `score >= floor`, looking
+  // like rerank-floor abstention. The daemon-pipe handler converts a throw
+  // into a null response that pipe-client + retriever degrade against
+  // (1.0-per-row fallback).
   if (!logits || logits.length < candidates.length) {
     throw new Error(
       `rerank: expected at least ${candidates.length} logits, got ${logits ? logits.length : 'undefined'}`,
@@ -207,6 +259,12 @@ export async function rerank(query, candidates) {
  * Reset the cached loader promises. Test-only.
  */
 export function _resetForTesting() {
+  // Fire-and-forget dispose so a real loaded model from one test does not
+  // leak into the next; stubs have no .dispose() so this is a no-op there.
+  void safeDispose(_embedderPipe);
+  void safeDispose(_rerankerModel);
+  _embedderPipe = null;
+  _rerankerModel = null;
   _embedderPromise = null;
   _rerankerPromise = null;
 }

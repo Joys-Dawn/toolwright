@@ -1,24 +1,10 @@
-// Deterministic (category, scope) prediction heuristic. The calling Claude
-// session tags each fact during `/mindwright:dream`, but when a fact arrives
-// untagged (explicit retain, bootstrap path, mock test) this falls back to
-// keyword cues to pick one of the orthogonal-taxonomy tuples:
+// Deterministic (category, scope) fallback for facts that arrive untagged
+// (explicit retain, bootstrap, tests). Returns null when nothing fires
+// (caller defaults to fact/project).
 //
-//   { category: 'fact',       scope: 'user'        }   — preference / user-state
-//   { category: 'fact',       scope: 'project'     }   — codebase fact
-//   { category: 'procedural', scope: 'role:<role>' }   — role-tagged know-how
-//   { category: 'procedural', scope: 'project'     }   — project-wide procedure
-//   { category: 'episodic',   scope: 'project'     }   — lesson-from-incident
-//
-// Conservative: returns `null` when nothing fires, letting callers default
-// to `{ category: 'fact', scope: 'project' }`.
-//
-// LANGUAGE SCOPE: this fallback is English-only. The cue regexes match
-// English verbs and word forms. Non-English content silently returns null
-// (→ caller defaults). The PRIMARY categorization path is the dream-cycle
-// LLM (i.e. the calling Claude session) which IS multilingual — non-English
-// users rely on that path tagging facts explicitly via
-// mindwright_retain_fact, and the retrieval side stays multilingual
-// independently via bge-m3. Localizing the heuristic is out of scope.
+// English-only: the cue regexes match English word forms, so non-English
+// content returns null. Acceptable because the PRIMARY path is the
+// multilingual dream-cycle LLM tagging facts explicitly.
 
 const PREFERENCE_CUES = [
   /\bthe user (prefers?|wants?|likes?|expects?|asks?)/i,
@@ -29,10 +15,8 @@ const PREFERENCE_CUES = [
   /\bI(?:'m| am) the user\b/i,
 ];
 
-// Procedural cues — "when planning…", "<role> should…", etc.
-// Role alternations are built from CANONICAL_ROLES so adding a new role in
-// role-prompts.js automatically wires it into categorization. Generic verbs
-// (planning/implementing/...) live alongside the canonical names and resolve
+// Role alternations built from CANONICAL_ROLES so a new role in
+// role-prompts.js auto-wires into categorization. Generic verbs resolve
 // through VERB_TO_ROLE at extraction time.
 import { CANONICAL_ROLES } from './role-prompts.js';
 const ROLE_ALTERNATION = CANONICAL_ROLES.join('|');
@@ -44,9 +28,7 @@ const PROCEDURAL_CUES = [
   /\bthis (?:role|peer|agent) (?:should|must|does)/i,
 ];
 
-// When a procedural cue fires, try to extract WHICH role the procedure is
-// about. Capture-group 1 is the role name (case-insensitive). Matches the
-// canonical roles plus the generic verbs that VERB_TO_ROLE then resolves.
+// Extract WHICH role a procedural cue is about (capture group 1).
 const PROCEDURAL_ROLE_EXTRACTORS = [
   new RegExp(`\\bwhen (${ROLE_ALTERNATION}) (?:is|are)`, 'i'),
   new RegExp(`\\bwhen (${VERB_ALTERNATION})`, 'i'),
@@ -65,13 +47,13 @@ const VERB_TO_ROLE = {
 const PROJECT_FACT_CUES = [
   /\b(repo|repository|project|codebase|module|service|api|library)\b/i,
   /\b(uses|implements|depends on|requires)\b/i,
-  /\b[A-Z]\w+(?:Service|Manager|Controller|Component|Module|Client)\b/, // PascalCase tokens
+  /\b[A-Z]\w+(?:Service|Manager|Controller|Component|Module|Client)\b/,
 ];
 
 const EPISODIC_CUES = [
   /\bI claimed .* without checking\b/i,
   /\b(?:was|were) wrong\b/i,
-  /\bthe \d{4}-\d{2}-\d{2}\b/, // ISO date — "the 2026-05-13 incident"
+  /\bthe \d{4}-\d{2}-\d{2}\b/, // "the <ISO date> incident"
   /\b(?:incident|outage|regression|post[- ]mortem)\b/i,
   /\b(?:lessons? learned|in retrospect)\b/i,
 ];
@@ -88,13 +70,8 @@ function extractRoleFromText(text) {
   return null;
 }
 
-// Returns one of:
-//   { category, scope }
-//   null   (nothing fired — caller defaults to { category: 'fact', scope: 'project' })
-//
-// `role` (optional): a callsite-explicit role tag (e.g. mindwright_retain
-// `role` field). If provided AND no preference cue fires, the result is
-// procedural / role:<role>.
+// Returns { category, scope } or null (nothing fired). An explicit `role`
+// with no preference cue yields procedural / role:<role>.
 export function categorize(text, { role = null } = {}) {
   if (typeof text !== 'string' || !text.trim()) return null;
 
@@ -106,7 +83,6 @@ export function categorize(text, { role = null } = {}) {
     if (re.test(text)) return { category: 'episodic', scope: 'project' };
   }
 
-  // Procedural cues
   for (const re of PROCEDURAL_CUES) {
     if (re.test(text)) {
       const inferred = role || extractRoleFromText(text);
@@ -116,8 +92,6 @@ export function categorize(text, { role = null } = {}) {
     }
   }
   if (role) {
-    // Explicit role tag without a procedural cue → still procedural,
-    // role-scoped.
     return { category: 'procedural', scope: `role:${role}` };
   }
 

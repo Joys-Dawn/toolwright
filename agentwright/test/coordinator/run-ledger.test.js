@@ -18,12 +18,16 @@ const {
   updateGroupStatus,
   cleanupCompletedStageArtifacts,
   cleanupCompletedGroupArtifacts,
+  removeGroupSnapshot,
   pruneTerminalRuns,
   listRuns
 } = require('../../coordinator/run-ledger');
+const { createGroupSnapshot } = require('../../coordinator/snapshot-manager');
 const {
   ensureAuditBase,
   getManagedSnapshotRoot,
+  getClaudeProjectsDir,
+  claudeProjectSlug,
   expectedGroupSnapshotPath,
   validateRunId,
   validateStageName,
@@ -734,6 +738,48 @@ describe('run-ledger', () => {
       const stage = live.stages.find(s => s.name === 'correctness');
       assert.equal(stage.status, 'auditing');
       assert.equal(stage.findingsCount, 0);
+    });
+  });
+
+  describe('removeGroupSnapshot — Claude Code transcript cleanup', () => {
+    const ORIGINAL_CFG = process.env.CLAUDE_CONFIG_DIR;
+    let cfgDir;
+    let projectsDir;
+    const runId = '2026-03-03T00-00-00-000Z-abcd1234';
+
+    beforeEach(() => {
+      cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aw-cfg-ledger-'));
+      process.env.CLAUDE_CONFIG_DIR = cfgDir;
+      projectsDir = path.join(cfgDir, 'projects');
+      fs.mkdirSync(projectsDir, { recursive: true });
+    });
+
+    afterEach(() => {
+      if (ORIGINAL_CFG === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = ORIGINAL_CFG;
+      const root = getManagedSnapshotRoot(tmpDir);
+      fs.rmSync(cfgDir, { recursive: true, force: true });
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it('deletes the snapshot dir AND its Claude Code transcript dir, leaving unrelated dirs', () => {
+      fs.writeFileSync(path.join(tmpDir, 'app.js'), 'x', 'utf8');
+      const snapshot = createGroupSnapshot(tmpDir, runId, 0);
+      assert.ok(fs.existsSync(snapshot.path));
+
+      const transcriptDir = path.join(projectsDir, claudeProjectSlug(snapshot.path));
+      fs.mkdirSync(path.join(transcriptDir, 'memory'), { recursive: true });
+      fs.writeFileSync(path.join(transcriptDir, 'session.jsonl'), '{}\n', 'utf8');
+      const unrelated = path.join(projectsDir, 'C--Users-someone-real-project');
+      fs.mkdirSync(unrelated, { recursive: true });
+
+      assert.equal(getClaudeProjectsDir(), projectsDir);
+      removeGroupSnapshot(tmpDir, runId, 0);
+
+      assert.ok(!fs.existsSync(snapshot.path), 'snapshot dir removed');
+      assert.ok(!fs.existsSync(groupSnapshotFile(tmpDir, runId, 0)), 'snapshot meta file removed');
+      assert.ok(!fs.existsSync(transcriptDir), 'auditor transcript dir removed alongside the snapshot');
+      assert.ok(fs.existsSync(unrelated), 'unrelated user project dir preserved');
     });
   });
 });

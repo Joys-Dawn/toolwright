@@ -20,13 +20,15 @@ const SCRIPT = join(PLUGIN_ROOT, 'scripts', 'status.js');
 function withFreshRoots(fn) {
   const projectDir = mkdtempSync(join(tmpdir(), 'mindwright-status-proj-'));
   const homeDir = mkdtempSync(join(tmpdir(), 'mindwright-status-home-'));
+  const cacheDir = mkdtempSync(join(tmpdir(), 'mindwright-status-cache-'));
   const cleanup = () => {
     try { rmSync(projectDir, { recursive: true, force: true }); } catch { /* tmp */ }
     try { rmSync(homeDir, { recursive: true, force: true }); } catch { /* tmp */ }
+    try { rmSync(cacheDir, { recursive: true, force: true }); } catch { /* tmp */ }
   };
   let result;
   try {
-    result = fn({ projectDir, homeDir });
+    result = fn({ projectDir, homeDir, cacheDir });
   } catch (err) {
     cleanup();
     throw err;
@@ -44,31 +46,45 @@ function withFreshRoots(fn) {
   return result;
 }
 
-function runStatus(projectDir, homeDir) {
+function runStatus(projectDir, homeDir, cacheDir) {
   return spawnSync(process.execPath, [SCRIPT], {
     encoding: 'utf8',
     env: {
       ...process.env,
       MINDWRIGHT_PROJECT_ROOT: projectDir,
-      // Redirect Node's homedir() in the child so hfCacheDir() lands under
-      // a tmp we control. HOME (POSIX) + USERPROFILE (Windows) covers both.
+      // Redirect Node's homedir() in the child so the Claude transcript dirs
+      // (and the POSIX model-daemon socket default, ~/.cache/mindwright) stay
+      // under a tmp we control. HOME (POSIX) + USERPROFILE (Windows) covers
+      // both. isSessionLive() reads tickets under MINDWRIGHT_PROJECT_ROOT, not
+      // HOME, so the isolated empty projectDir already makes it false.
       HOME: homeDir,
       USERPROFILE: homeDir,
+      // The Windows model-daemon socket is a MACHINE-GLOBAL named pipe — NOT
+      // under HOME — so a HOME redirect alone wouldn't stop isModelDaemonAlive()
+      // from probing (and connecting to) a real daemon a dev has running.
+      // Override the socket wholesale to a bogus path with no listener so the
+      // probe deterministically resolves false on every platform.
+      MINDWRIGHT_MODEL_DAEMON_SOCK: join(homeDir, 'no-such-modeld.sock'),
+      // The embedder/reranker probe (baseStatus → modelCacheDir) reads
+      // MINDWRIGHT_MODEL_CACHE_DIR; point it at a tmp dir so the test — not
+      // the populated real dev-tree model-cache — decides cached/not-cached.
+      MINDWRIGHT_MODEL_CACHE_DIR: cacheDir,
     },
   });
 }
 
-function plantModelCache(homeDir, names) {
-  const hub = join(homeDir, '.cache', 'huggingface', 'hub');
-  mkdirSync(hub, { recursive: true });
-  for (const name of names) {
-    mkdirSync(join(hub, name), { recursive: true });
+// transformers.js lays each repo out as <cacheDir>/<org>/<name> — NOT the
+// Python-hub models--org--name convention. Plant the exact dirs
+// embedderCached() and the reranker check in scripts/status.js probe.
+function plantModelCache(cacheDir, repos) {
+  for (const [org, name] of repos) {
+    mkdirSync(join(cacheDir, org, name), { recursive: true });
   }
 }
 
 test('no-db short-circuit emits db_exists=false, zero counts, and a note', () => {
-  withFreshRoots(({ projectDir, homeDir }) => {
-    const res = runStatus(projectDir, homeDir);
+  withFreshRoots(({ projectDir, homeDir, cacheDir }) => {
+    const res = runStatus(projectDir, homeDir, cacheDir);
     assert.equal(res.status, 0, `expected exit 0; got ${res.status}. stderr=${res.stderr}`);
     const out = JSON.parse(res.stdout.trim().split('\n').pop());
     assert.equal(out.db_exists, false, 'db_exists should be false on a fresh project');
@@ -92,7 +108,7 @@ test('no-db short-circuit emits db_exists=false, zero counts, and a note', () =>
 });
 
 test('populated branch reads short/long counts and by_category from live store', async () => {
-  await withFreshRoots(async ({ projectDir, homeDir }) => {
+  await withFreshRoots(async ({ projectDir, homeDir, cacheDir }) => {
     // Plant a real DB so the script takes the populated path. We hit
     // openStore from the test process (it's pure Node + better-sqlite3),
     // insert a few rows, then close — leaving a DB on disk for the
@@ -123,7 +139,7 @@ test('populated branch reads short/long counts and by_category from live store',
       delete process.env.MINDWRIGHT_PROJECT_ROOT;
     }
 
-    const res = runStatus(projectDir, homeDir);
+    const res = runStatus(projectDir, homeDir, cacheDir);
     assert.equal(res.status, 0, `expected exit 0; got ${res.status}. stderr=${res.stderr}`);
     const out = JSON.parse(res.stdout.trim().split('\n').pop());
     assert.equal(out.db_exists, true);
@@ -142,7 +158,7 @@ test('populated branch reads short/long counts and by_category from live store',
 });
 
 test('consolidators array surfaces every consolidator_for:* meta record', async () => {
-  await withFreshRoots(async ({ projectDir, homeDir }) => {
+  await withFreshRoots(async ({ projectDir, homeDir, cacheDir }) => {
     const { openStore } = await import('../../lib/store.js');
     process.env.MINDWRIGHT_PROJECT_ROOT = projectDir;
     const store = openStore();
@@ -161,7 +177,7 @@ test('consolidators array surfaces every consolidator_for:* meta record', async 
       delete process.env.MINDWRIGHT_PROJECT_ROOT;
     }
 
-    const res = runStatus(projectDir, homeDir);
+    const res = runStatus(projectDir, homeDir, cacheDir);
     assert.equal(res.status, 0, `expected exit 0; got ${res.status}. stderr=${res.stderr}`);
     const out = JSON.parse(res.stdout.trim().split('\n').pop());
     assert.equal(out.consolidators.length, 2, 'both planted records must surface');
@@ -179,8 +195,8 @@ test('consolidators array surfaces every consolidator_for:* meta record', async 
 });
 
 test('stdout JSON parses and matches the stderr-rendered values', () => {
-  withFreshRoots(({ projectDir, homeDir }) => {
-    const res = runStatus(projectDir, homeDir);
+  withFreshRoots(({ projectDir, homeDir, cacheDir }) => {
+    const res = runStatus(projectDir, homeDir, cacheDir);
     assert.equal(res.status, 0);
     const out = JSON.parse(res.stdout.trim().split('\n').pop());
     // stderr is the human-readable form — assert that every keyed value the
@@ -189,30 +205,31 @@ test('stdout JSON parses and matches the stderr-rendered values', () => {
     assert.match(res.stderr, new RegExp(`db exists:\\s+${out.db_exists}`));
     assert.match(res.stderr, new RegExp(`short_count:\\s+${out.short_count}`));
     assert.match(res.stderr, new RegExp(`long_count:\\s+${out.long_count}`));
-    assert.match(res.stderr, new RegExp(`daemon alive:\\s+${out.daemon_alive}`));
+    assert.match(res.stderr, new RegExp(`session bound:\\s+${out.session_alive}`));
+    assert.match(res.stderr, new RegExp(`model daemon:\\s+${out.model_daemon_alive}`));
     assert.match(res.stderr, new RegExp(`embedder cached:\\s+${out.model_cached}`));
     assert.match(res.stderr, new RegExp(`reranker cached:\\s+${out.reranker_cached}`));
   });
 });
 
-test('model_cached / reranker_cached reflect hfCacheDir contents', () => {
-  withFreshRoots(({ projectDir, homeDir }) => {
+test('model_cached / reranker_cached reflect the model-cache dir contents', () => {
+  withFreshRoots(({ projectDir, homeDir, cacheDir }) => {
     // First: no model dirs → both false.
-    let res = runStatus(projectDir, homeDir);
+    let res = runStatus(projectDir, homeDir, cacheDir);
     let out = JSON.parse(res.stdout.trim().split('\n').pop());
     assert.equal(out.model_cached, false, 'no embedder dir → model_cached=false');
     assert.equal(out.reranker_cached, false, 'no reranker dir → reranker_cached=false');
 
-    // Plant only the embedder cache dir.
-    plantModelCache(homeDir, ['models--Xenova--bge-m3']);
-    res = runStatus(projectDir, homeDir);
+    // Plant only the embedder repo (transformers.js <org>/<name> layout).
+    plantModelCache(cacheDir, [['Xenova', 'bge-m3']]);
+    res = runStatus(projectDir, homeDir, cacheDir);
     out = JSON.parse(res.stdout.trim().split('\n').pop());
     assert.equal(out.model_cached, true, 'embedder dir present → model_cached=true');
     assert.equal(out.reranker_cached, false, 'reranker still missing → reranker_cached=false');
 
     // Plant the reranker too.
-    plantModelCache(homeDir, ['models--onnx-community--bge-reranker-v2-m3-ONNX']);
-    res = runStatus(projectDir, homeDir);
+    plantModelCache(cacheDir, [['onnx-community', 'bge-reranker-v2-m3-ONNX']]);
+    res = runStatus(projectDir, homeDir, cacheDir);
     out = JSON.parse(res.stdout.trim().split('\n').pop());
     assert.equal(out.model_cached, true);
     assert.equal(out.reranker_cached, true, 'reranker dir present → reranker_cached=true');
@@ -247,6 +264,11 @@ test('deps-absent branch emits the degraded baseStatus()+zeroCounts() payload an
         MINDWRIGHT_INSTALL_LOCK_DIR: pluginCopy,
         HOME: homeDir,
         USERPROFILE: homeDir,
+        // baseStatus() is async now and awaits isModelDaemonAlive(); pin the
+        // socket to a no-listener path so the probe fails fast and can't
+        // connect to a real machine daemon (the field is unasserted here, but
+        // determinism + no 1s hang on the machine-global Windows pipe).
+        MINDWRIGHT_MODEL_DAEMON_SOCK: join(homeDir, 'no-such-modeld.sock'),
       },
     });
 

@@ -1,11 +1,11 @@
 ---
 name: dream
-description: Consolidate the oldest ~70% of short-term observations into long-term facts. Reads the active long-term summary, drains a batch of exchanges, distills facts in your own context, and writes them back via deterministic MCP helpers.
+description: Consolidate the oldest ~70% of short-term observations into long-term facts. Reads the active long-term summary, drains a batch of exchanges, distills facts in your own context, and writes them back via deterministic CLI helpers.
 ---
 
 # /mindwright:dream
 
-You — the calling Claude session — are the consolidator. The MCP tools below are deterministic helpers. The LLM work (reading exchanges, distilling facts, deciding what to keep and what to supersede) happens in **your** context.
+You — the calling Claude session — are the consolidator. The CLI tools below are deterministic helpers. The LLM work (reading exchanges, distilling facts, deciding what to keep and what to supersede) happens in **your** context.
 
 ## What you're doing
 
@@ -13,17 +13,37 @@ The user has accumulated short-term observations from one or more sessions in th
 
 ## The cycle
 
-Run these steps in order. Do **not** skip ahead. Do **not** call `mindwright_finalize_drain` before retaining the facts you wanted.
+Run these steps in order. Do **not** skip ahead. Do **not** call the `finalize_drain` CLI tool before retaining the facts you wanted.
 
 ### Step 1 — orient
 
-Call `mindwright_status`. Note the current `short_count`, `long_count`, `by_category` breakdown, and `by_category_scope` breakdown (keys like `fact/user`, `procedural/role:planner`, `episodic/project`) so you can sanity-check the result at the end.
+Run:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" status --session-id '${CLAUDE_SESSION_ID}'
+```
+
+Note the current `short_count`, `long_count`, `by_category` breakdown, and `by_category_scope` breakdown (keys like `fact/user`, `procedural/role:planner`, `episodic/project`) so you can sanity-check the result at the end.
 
 ### Step 2 — pick a scope, then pull a batch
 
-First check what role this session is assigned to: call `mindwright_get_roles` (it returns `{ "roles": [...] }`). If `roles` includes `"consolidator"`, you are a peer dedicated to consolidating the team — use `{ scope: "all" }` (and you will need `confirm_all_sessions: true` in step 6). An auto-spawned consolidator session is assigned this role before launch, so this is the normal automatic path. Otherwise default to `{ scope: "session" }` — a single-session consolidation of your own short-term. Widen a non-consolidator session to `{ scope: "all" }` only when the user asks for a project-wide dream OR the step-2 `hint` reports cross-session rows waiting.
+First check what role this session is assigned to. Run:
 
-Call `mindwright_drain_batch` with the chosen scope. The response shape:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" get_roles --session-id '${CLAUDE_SESSION_ID}'
+```
+
+It returns `{ "roles": [...] }`. If `roles` includes `"consolidator"`, you are a peer dedicated to consolidating the team — use `{ scope: "all" }` (and you will need `confirm_all_sessions: true` in step 6). An auto-spawned consolidator session is assigned this role before launch, so this is the normal automatic path. Otherwise default to `{ scope: "session" }` — a single-session consolidation of your own short-term. Widen a non-consolidator session to `{ scope: "all" }` only when the user asks for a project-wide dream OR the step-2 `hint` reports cross-session rows waiting.
+
+Run `drain_batch` with the chosen scope:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" drain_batch --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+{"scope": "session"}
+MINDWRIGHT_ARGS
+```
+
+The response shape:
 
 ```json
 {
@@ -102,9 +122,10 @@ For each exchange in the batch:
 
 ### Step 4 — retain each fact
 
-For each fact, call `mindwright_retain_fact`:
+For each fact, run `retain_fact` with these JSON args on stdin:
 
-```json
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" retain_fact --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
 {
   "drain_id": "<from step 2>",
   "exchange_id": "<exchange this fact came from>",
@@ -112,10 +133,13 @@ For each fact, call `mindwright_retain_fact`:
   "content": "<the distilled fact text, shaped to its category per step 3.6>",
   "category": "procedural | episodic | fact",
   "scope": "user | project | role:<role>",
-  "entities": ["kira-424", "mindwright/lib/store.js"],  // optional
-  "confidence": 0.85  // scope='user' only
+  "entities": ["kira-424", "mindwright/lib/store.js"],
+  "confidence": 0.85
 }
+MINDWRIGHT_ARGS
 ```
+
+(`entities` is optional; `confidence` is `scope='user'` only.)
 
 The response is:
 
@@ -127,26 +151,32 @@ The response is:
 
 ### Step 5 — wire up supersedes
 
-For each candidate you decide IS truly contradicted by the new fact, call:
+For each candidate you decide IS truly contradicted by the new fact, run:
 
-```json
-mindwright_mark_superseded({ "old_id": <candidate>, "new_id": <fact_id from step 4> })
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" mark_superseded --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+{"old_id": <candidate>, "new_id": <fact_id from step 4>}
+MINDWRIGHT_ARGS
 ```
 
 Don't supersede candidates that merely overlap topically — only the ones the new fact replaces. If unsure, leave it and surface the pair to the user; `/mindwright:resolve-contradiction` is the explicit cleanup path for clashes that need arbitration.
 
 ### Step 6 — finalize
 
-When every exchange has been processed, call:
+When every exchange has been processed, run:
 
-```json
-mindwright_finalize_drain({ "drain_id": "<from step 2>" })
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" finalize_drain --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+{"drain_id": "<from step 2>"}
+MINDWRIGHT_ARGS
 ```
 
 If you opened the drain with `scope: "all"` in step 2 (project-wide consolidation), you MUST also pass `confirm_all_sessions: true`:
 
-```json
-mindwright_finalize_drain({ "drain_id": "<from step 2>", "confirm_all_sessions": true })
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" finalize_drain --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+{"drain_id": "<from step 2>", "confirm_all_sessions": true}
+MINDWRIGHT_ARGS
 ```
 
 The explicit confirmation guards against a prompt-injected memory tricking your session into hard-deleting other sessions' rows.
@@ -171,10 +201,10 @@ If the step-2 `drain_batch` response carried a cross-session `hint`, surface it 
 - **No partial finalize.** Either you retain everything you intended and call `finalize_drain`, or you abort the cycle and call nothing — leaving short-term intact.
 - **Don't fabricate.** If an exchange contains nothing durable, retain nothing. Empty consolidation cycles are normal and valid.
 - **Don't paraphrase the user into your own voice.** A user preference is what they said, not your interpretation of it. Quote when it's load-bearing.
-- **No `@anthropic-ai/sdk`. No `ANTHROPIC_API_KEY` lookup.** Your context is the LLM; the MCP tools are deterministic helpers.
+- **No `@anthropic-ai/sdk`. No `ANTHROPIC_API_KEY` lookup.** Your context is the LLM; the CLI tools are deterministic helpers.
 
 ## When to run
 
-- Automatically — when short-term crosses `cap_exchanges` (or the age safety-net trips), the Stop hook spawns a background `claude --bg` consolidator session that dispatches this skill. The spawned session is identified by a deterministic UUID per `(project, requesting_handle)`, persists across sessions, and is **auto-assigned the `consolidator` role before launch** — so its step-2 role check resolves to a project-wide `scope: "all"` drain (it must also pass `confirm_all_sessions: true` on finalize). See `mindwright_status.consolidator` for its handle and last-spawn timestamp. If the spawn fails (e.g. `claude` not on PATH), Stop falls back to the additionalContext-nudge path.
-- When the leader explicitly assigns the `consolidator` role to a peer via `mindwright_assign_role`. Auto-spawn fires for the assignment.
+- Automatically — when short-term crosses `cap_exchanges` (or the age safety-net trips), the Stop hook spawns a background `claude --bg` consolidator session that dispatches this skill. The spawned session is identified by a deterministic UUID per `(project, requesting_handle)`, persists across sessions, and is **auto-assigned the `consolidator` role before launch** — so its step-2 role check resolves to a project-wide `scope: "all"` drain (it must also pass `confirm_all_sessions: true` on finalize). See the `status` CLI tool's `consolidator` field (or `/mindwright:status`) for its handle and last-spawn timestamp. If the spawn fails (e.g. `claude` not on PATH), Stop falls back to the additionalContext-nudge path.
+- When the leader explicitly assigns the `consolidator` role to a peer via the `assign_role` CLI tool (`/mindwright:assign-role`). Auto-spawn fires for the assignment.
 - Manually when the user asks (`/mindwright:dream`).

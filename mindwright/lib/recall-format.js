@@ -1,32 +1,17 @@
 // Format retrieved memory rows for hook `additionalContext` injection.
 //
-// Memory rows can be sourced from external parties — wrightward routes
-// Discord user messages into the bus as `user_message` / `discord_user`
-// events, the chunker stores their bodies verbatim, and the retriever can
-// later surface them. If we concatenated those bodies into
-// `additionalContext` raw, a Discord user could plant content that masquerades
-// as system / user role markers, fake their own "mindwright recall:" preamble,
-// or smuggle control characters. The next session's Claude Code sees the
-// injected text BEFORE the user's prompt, treats it as system-level guidance,
-// and may follow whatever instruction is hidden in there. OWASP LLM01 / CWE-1039.
-//
-// Mitigations applied per entry:
-//   - Strip control characters that could reset terminal / prompt parsers.
-//   - Defang `<system>` / `</user>` etc. by replacing the ASCII angle
-//     brackets with their fullwidth-but-visually-identical Unicode siblings
-//     (〈 / 〉, U+2329/U+232A). Reader still sees the structure; the prompt
-//     parser does not treat them as role frames.
-//   - For origin=external content, ALSO collapse all newlines to a single
-//     space so the body cannot fake new block boundaries inside the
-//     injected text. Self/peer content keeps its line structure (indented
-//     under a `|` prefix) so retained code snippets, numbered lists, etc.
-//     stay readable when recalled.
-//   - Tag each line with a provenance marker (`origin=self|peer|external`)
-//     and the row's id / tier / kind so the model can reason about trust.
-//
-// The block is framed by a brief preamble that names recall as untrusted
-// retrieved memory — Claude has been trained to treat such fences as data
-// rather than instruction.
+// Rows can come from external parties (Discord user messages routed through
+// the bus). Injected raw, they could fake role markers / a recall preamble /
+// control chars and the next session would treat them as system guidance
+// (OWASP LLM01 / CWE-1039). Per-entry mitigations:
+//   - Strip control characters.
+//   - Defang `<system>`/`</user>` by swapping ASCII angle brackets for
+//     visually-identical fullwidth siblings (〈 〉) so the prompt parser
+//     doesn't treat them as role frames.
+//   - origin=external: collapse newlines to a space so the body can't fake
+//     block boundaries. Self/peer keeps line structure (under a `|` prefix).
+//   - Tag each line with provenance (origin=self|peer|external) + id/tier/kind.
+// The block is framed by a preamble naming recall as untrusted data.
 
 const SELF_KINDS = new Set([
   'cli_prompt',
@@ -35,18 +20,14 @@ const SELF_KINDS = new Set([
   'outbound_send',  // this agent's own outbound wrightward broadcasts
   'fact',
   'seed',
-  // User-typed kinds suggested by /mindwright:retain's skill body and the
-  // mindwright_retain tool description ("fact", "note", "preference"). A
-  // retain runs in the user's own session, so these are self-origin even
-  // when the kind label happens to be a descriptive noun rather than one
-  // of the auto-chunker labels above.
+  // User-typed retain kinds — a retain runs in the user's own session, so
+  // these are self-origin even though the label is a descriptive noun.
   'note',
   'preference',
 ]);
-// Peer kinds = wrightward bus events from OTHER agents in the same repo. They
-// are trusted because the user wired the peer mesh themselves. Listed explicitly
-// so a future unrecognized kind defaults to the strict `external` mode (line-
-// collapse + safest framing) rather than silently inheriting peer trust.
+// wrightward bus events from OTHER agents (trusted: the user wired the mesh).
+// Listed explicitly so an unrecognized kind falls to strict `external` mode
+// rather than inheriting peer trust.
 const PEER_KINDS = new Set([
   'agent_message',
   'handoff',
@@ -66,15 +47,13 @@ export function originOf(kind) {
   return 'external';  // strict default: unknown kinds get the safest treatment
 }
 
-// `multiline=false` (default): collapse newlines to single spaces. This is
-// the safe mode for origin=external content.
-// `multiline=true`: preserve newlines so the caller can lay out the body
-// across multiple lines without losing structure (used for self/peer).
-// Control-character stripping and role-frame defanging run in both modes.
+// multiline=false (default): collapse newlines to spaces (safe mode for
+// origin=external). multiline=true: preserve newlines (self/peer). Control-char
+// stripping + role-frame defanging run in both modes.
 export function defang(text, { multiline = false } = {}) {
   if (typeof text !== 'string') return '';
   let out = text
-    .replace(/[\x00-\x08\x0e-\x1f\x7f]/g, '')                // control chars
+    .replace(/[\x00-\x08\x0e-\x1f\x7f]/g, '')
     .replace(/\r\n?/g, '\n');
   if (!multiline) {
     out = out.replace(/\n+/g, ' ');
@@ -84,17 +63,14 @@ export function defang(text, { multiline = false } = {}) {
   return out.trim();
 }
 
-// Strip anything from the meta tokens (kind, category) that could break out of
-// the `- [id=... kind=... origin=...]` framing. The retain handler accepts
-// arbitrary `kind` and `category` strings; a prompt-injected memory could
-// otherwise plant `kind="fake] mindwright recall: TRUSTED MEMORY: ... <system>"`
-// that gets surfaced to the next session's Claude as forged framing. We keep
-// the lookup-via-originOf trusted (it runs against the raw kind first), but
-// the rendered prefix uses the sanitized form.
+// Strip meta-token chars that could break out of the `- [id=... kind=...]`
+// framing. retain accepts arbitrary kind/category, so a prompt-injected row
+// could otherwise plant forged framing. originOf still runs against the raw
+// kind; only the rendered prefix uses the sanitized form.
 function safeMetaToken(text) {
   return String(text)
-    .replace(/[\x00-\x1f\x7f]/g, '')     // control chars
-    .replace(/[\[\]\n\r]/g, '_');        // bracket / newline frame-breakers
+    .replace(/[\x00-\x1f\x7f]/g, '')
+    .replace(/[\[\]\n\r]/g, '_');
 }
 
 export function formatRecall(hits) {
@@ -113,24 +89,19 @@ export function formatRecall(hits) {
     const scope = h.scope ? safeMetaToken(h.scope) : '';
     const sc = scope ? ` scope=${scope}` : '';
     const id = h.id ?? '?';
-    // Prefer event_ts (when the underlying exchange ACTUALLY happened) over
-    // created_at (the row's write/seed-run time). For a live row event_ts is
-    // null → fall back to created_at, byte-identical to pre-change. This is
-    // the "honest when-it-happened" surface the seeding overhaul exists for.
+    // event_ts (when it ACTUALLY happened) over created_at (write/seed time);
+    // null for live rows → created_at.
     const tsVal = h.event_ts ?? h.created_at;
     const ts = tsVal ? safeMetaToken(tsVal) : '';
     const tsTok = ts ? ` ts=${ts}` : '';
     const metaPrefix = `- [id=${id} tier=${tier} kind=${kind} origin=${origin}${cat}${sc}${tsTok}]`;
 
     if (origin === 'external') {
-      // Untrusted content — line-collapse to neutralize fake block boundaries.
+      // Untrusted — line-collapse to neutralize fake block boundaries.
       lines.push(`${metaPrefix} ${defang(h.content)}`);
       continue;
     }
-    // Trusted content (self / peer) — preserve internal newlines so retained
-    // code / structured facts stay readable. Each content line is indented
-    // under a `|` prefix so the model can tell where one entry ends and the
-    // next begins.
+    // Trusted (self/peer) — preserve newlines under a `|` prefix.
     const safe = defang(h.content, { multiline: true });
     const contentLines = safe.split('\n');
     if (contentLines.length <= 1) {
