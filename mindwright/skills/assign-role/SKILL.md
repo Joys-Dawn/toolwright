@@ -8,7 +8,7 @@ description: Attach a role tag to a session (yours or a peer's). Role-scoped pro
 Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" assign_role --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" assign_role --session-id '${CLAUDE_SESSION_ID}' --plugin-data "${CLAUDE_PLUGIN_DATA}" <<'MINDWRIGHT_ARGS'
 {"target": "bob-42", "role": "planner", "confirm_cross_session": true}
 MINDWRIGHT_ARGS
 ```

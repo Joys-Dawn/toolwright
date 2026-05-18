@@ -2,7 +2,7 @@
 
 > Per-agent memory and cross-session learning for Claude Code multi-agent setups. Each session quietly accumulates short-term observations as you work, then — automatically or on demand — distills them into long-term facts (preferences, conventions, role know-how, lessons learned). Future prompts pull from that memory by relevance; nothing is dumped at session start, nothing irrelevant is injected.
 
-**Version**: 0.3.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/mindwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/mindwright/README.md)
+**Version**: 0.3.1 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/mindwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/mindwright/README.md)
 
 ## Install
 

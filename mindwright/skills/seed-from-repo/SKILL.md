@@ -19,7 +19,7 @@ resumable loop.
 1. **Seed one slice:**
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/seed-from-repo.js"
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/seed-from-repo.js" --plugin-data "${CLAUDE_PLUGIN_DATA}"
    ```
 
    It ingests a bounded slice into `short`-tier `kind=seed` rows from every
@@ -73,7 +73,7 @@ docs in a parent dir, or a legitimate cross-repo CLAUDE.md), pass
 `--include-ancestors`:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/seed-from-repo.js" --include-ancestors
+node "${CLAUDE_PLUGIN_ROOT}/scripts/seed-from-repo.js" --include-ancestors --plugin-data "${CLAUDE_PLUGIN_DATA}"
 ```
 
 Default is project-root-only because walking parents would pull in

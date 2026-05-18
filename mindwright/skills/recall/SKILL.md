@@ -10,7 +10,7 @@ Usage: `/mindwright:recall <query>` (the argument becomes the retrieval query).
 Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" recall --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" recall --session-id '${CLAUDE_SESSION_ID}' --plugin-data "${CLAUDE_PLUGIN_DATA}" <<'MINDWRIGHT_ARGS'
 {"query": "...", "scope": "all", "k": 8, "bypass_session_dedup": true}
 MINDWRIGHT_ARGS
 ```

@@ -5,7 +5,7 @@
 // lock, a shared install-dir preparer, a fire-and-forget detached worker, and
 // a synchronous user-invoked install.
 //
-// Hard constraint for this suite: it must NEVER spawn a real `npm install`
+// Hard constraint for this suite: it must NEVER spawn a real `npm ci`
 // (that would mutate the persistent node_modules, hit the network, take
 // minutes). UNCONDITIONAL — it holds even on a deps-absent tree (a designed
 // scenario: auto-setup.js IS the deps-absent machinery). Enforced by injected
@@ -105,13 +105,16 @@ test('npmAvailable returns true — the suite itself runs under npm', () => {
   assert.equal(npmAvailable(), true);
 });
 
-test('NPM_INSTALL_ARGS is the shared runtime-only quiet install flag set', () => {
+test('NPM_INSTALL_ARGS pins the shared clean-install (ci) quiet flag set', () => {
   // One source of truth shared by the detached worker and the sync setup path.
-  assert.deepEqual(NPM_INSTALL_ARGS, ['install', '--omit=dev', '--no-audit', '--no-fund']);
+  // `ci`, NOT `install`: `npm install` no-ops a present-but-broken package so
+  // a poisoned/partial/ABI-stale node_modules could never self-heal — see the
+  // rationale on NPM_INSTALL_ARGS in lib/auto-setup.js.
+  assert.deepEqual(NPM_INSTALL_ARGS, ['ci', '--omit=dev', '--no-audit', '--no-fund']);
 });
 
 // --- prepareInstallDir() -----------------------------------------------
-// Puts the bundled manifest in the PERSISTENT data dir so `npm install` (cwd =
+// Puts the bundled manifest in the PERSISTENT data dir so `npm ci` (cwd =
 // pluginDataDir()) finds it, and that copy is also what ready.js#
 // manifestUpToDate() diffs. The source!==dest guard is essential: in the dev
 // tree / test suite CLAUDE_PLUGIN_DATA is unset ⇒ pluginDataDir() ===
@@ -238,7 +241,7 @@ test('maybeAutoInstall takes the single-flight lock, spawns the worker, and unre
 
 test('maybeAutoInstall does NOT spawn a second worker when a fresh lock is already held (single-flight)', () => {
   // The corruption this lock exists to prevent: two concurrent sessions both
-  // spawning `npm install` into one node_modules. A fresh lock (just written,
+  // spawning `npm ci` into one node_modules. A fresh lock (just written,
   // mtime < the max-age window) ⇒ acquireLock 'held' ⇒ maybeAutoInstall must
   // return WITHOUT spawning. spawnWorker is a tripwire.
   writeFileSync(
@@ -326,7 +329,7 @@ test('acquireLock yields exactly one winner against a single stale lock (single-
 test('runInstallSync returns a structured npm-not-found error WITHOUT spawning when npm is off PATH', async () => {
   const prevPath = process.env.PATH;
   // Emptying PATH makes the `npm --version` probe fail, so npmAvailable() is
-  // false and runInstallSync() must short-circuit BEFORE the `npm install`
+  // false and runInstallSync() must short-circuit BEFORE the `npm ci`
   // spawn — proving no real install can run here.
   process.env.PATH = '';
   try {
@@ -346,7 +349,7 @@ test('runInstallSync yields a `pending` result (never a competing install) when 
   // while it is still going. A FRESH lock in the per-test sandbox simulates the
   // in-flight install. deps not yet present (depsCheck:()=>false) ⇒
   // runInstallSync must return the distinct `pending` result and NOT spawn a
-  // second `npm install` into the same dir (the 10-min busy-wait poll was
+  // second `npm ci` into the same dir (the 10-min busy-wait poll was
   // deliberately removed). spawnInstall is a tripwire.
   const lock = installLockPath();
   writeFileSync(

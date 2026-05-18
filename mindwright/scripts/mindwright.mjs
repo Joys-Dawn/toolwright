@@ -25,6 +25,11 @@ function parseArgv(argv) {
     if (a === '--args') { inlineArgs = argv[++i] ?? null; continue; }
     if (a.startsWith('--session-id=')) { sessionId = a.slice('--session-id='.length); continue; }
     if (a.startsWith('--args=')) { inlineArgs = a.slice('--args='.length); continue; }
+    // --plugin-data is read by lib/paths.js (the Claude-Code-substituted
+    // persistent data dir); consume its value here so it can never be
+    // mistaken for the positional <tool> regardless of arg order.
+    if (a === '--plugin-data') { i++; continue; }
+    if (a.startsWith('--plugin-data=')) { continue; }
     if (!a.startsWith('-') && tool === null) { tool = a; continue; }
   }
   return { tool, sessionId, inlineArgs };

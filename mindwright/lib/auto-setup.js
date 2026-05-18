@@ -32,7 +32,7 @@ import { loadProbe, probeAndMarkIfOk, writeMarker } from './health-marker.js';
 const INSTALL_LOCK_MAX_AGE_MS = 15 * 60 * 1000;
 
 // Lock/log keyed by the install TARGET so two projects sharing one plugin
-// install cannot both spawn `npm install` into the same node_modules.
+// install cannot both spawn `npm ci` into the same node_modules.
 function installTargetSlug() {
   return pluginDataDir().replace(/[^a-zA-Z0-9]/g, '-');
 }
@@ -67,8 +67,24 @@ export function npmAvailable() {
   }
 }
 
-// Single source of truth for npm args so the install paths cannot drift.
-export const NPM_INSTALL_ARGS = ['install', '--omit=dev', '--no-audit', '--no-fund'];
+// Single source of truth for the npm args (the detached worker AND the sync
+// /mindwright:setup path share this, so they cannot drift). `ci`, NOT
+// `install`, deliberately: `npm install` is a no-op ("up to date", exit 0)
+// for a package whose directory already exists even when its native build
+// never produced a loadable binary — npm runs a package's install/build
+// lifecycle ONLY on an actual (re)install. So one transiently-failed first
+// install (e.g. a prebuild-install download blip) poisons node_modules
+// permanently: the JS lands, the .node never does, every later `npm install`
+// no-ops, the load-probe keeps failing, the marker is never written, and the
+// background recovery respawns forever without ever repairing anything. `npm
+// ci` deletes node_modules and reinstalls strictly from the bundled lockfile,
+// ALWAYS re-running the native build scripts, so a poisoned / partial /
+// ABI-stale tree deterministically self-heals with zero user action. Cost: a
+// full refetch on every triggered install (only when deps aren't ready —
+// never on a hook hot path), and the bundled lockfile must stay in sync with
+// package.json (an out-of-sync lock makes `npm ci` fail LOUDLY in the install
+// log, which beats a silent half-installed state).
+export const NPM_INSTALL_ARGS = ['ci', '--omit=dev', '--no-audit', '--no-fund'];
 
 // Copy the bundled package.json (also what ready.js#manifestUpToDate compares
 // against) + lockfile into the persistent install dir.
@@ -101,7 +117,7 @@ export function prepareInstallDir() {
 //
 // `wx` is an atomic exclusive-create → exactly one winner under concurrency. A
 // stale lock is reclaimed by an atomic rename to a unique name (exactly one
-// stealer wins, losers get ENOENT) so the reclaim cannot let two `npm install`
+// stealer wins, losers get ENOENT) so the reclaim cannot let two `npm ci`
 // into one dir.
 export function acquireLock() {
   const lock = installLockPath();
@@ -145,7 +161,7 @@ export function acquireLock() {
 }
 
 // Spawn the detached installer. The worker (not this millisecond-lived hook
-// process) runs `npm install`, probes, writes the ABI marker, and removes the
+// process) runs `npm ci`, probes, writes the ABI marker, and removes the
 // lock on exit; the worker owns the install log so stdio is 'ignore' here.
 function defaultSpawnWorker() {
   return spawn(process.execPath, [join(PLUGIN_ROOT, 'scripts', 'install-worker.js')], {
@@ -181,7 +197,7 @@ export function maybeAutoInstall({ depsCheck = depsInstalled, spawnWorker = defa
   }
 }
 
-// The real blocking `npm install` for /mindwright:setup, cwd = the persistent
+// The real blocking `npm ci` for /mindwright:setup, cwd = the persistent
 // data dir. Extracted so runInstallSync's seam can substitute a stub; owns
 // only the spawn + its error→result mapping (lock lifecycle stays in caller).
 function defaultSpawnInstall() {
@@ -193,7 +209,7 @@ function defaultSpawnInstall() {
       windowsHide: true,
     });
     if (r.status === 0) return { ok: true, code: 0 };
-    return { ok: false, code: r.status, error: `npm install exited with code ${r.status}` };
+    return { ok: false, code: r.status, error: `npm ci exited with code ${r.status}` };
   } catch (e) {
     return { ok: false, code: null, error: e && e.message ? e.message : String(e) };
   }
@@ -205,7 +221,7 @@ function defaultSpawnInstall() {
 // result instead of throwing so the caller can print a clean message.
 //
 // Single-flight: a background maybeAutoInstall() may already be running a
-// detached `npm install` into the same node_modules, which two concurrent
+// detached `npm ci` into the same node_modules, which two concurrent
 // installs would corrupt. So this path participates in the SAME lock: if a
 // fresh background install holds it, this returns a `pending` result so the
 // caller can ask the user to re-run shortly — NEVER a competing install.

@@ -10,7 +10,7 @@ Usage: `/mindwright:forget <fact_id>`.
 Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" forget --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" forget --session-id '${CLAUDE_SESSION_ID}' --plugin-data "${CLAUDE_PLUGIN_DATA}" <<'MINDWRIGHT_ARGS'
 {"fact_id": 123}
 MINDWRIGHT_ARGS
 ```

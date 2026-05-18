@@ -24,7 +24,7 @@ export async function run({ depsCheck = depsInstalled, install = runInstallSync 
     const r = await install();
     if (r.pending) {
       // A background install holds the single-flight lock; a second
-      // `npm install` into the same node_modules would corrupt it. Not a
+      // `npm ci` into the same node_modules would corrupt it. Not a
       // failure — in progress; the user re-runs once it finishes.
       process.stderr.write(`[mindwright:setup] ${r.error}\n`);
       process.exit(1);
@@ -36,7 +36,7 @@ export async function run({ depsCheck = depsInstalled, install = runInstallSync 
     }
     if (!depsCheck()) {
       process.stderr.write(
-        '[mindwright:setup] npm install reported success but the native deps still are not resolvable — '
+        '[mindwright:setup] npm ci reported success but the native deps still are not resolvable — '
           + 'check the npm output above.\n',
       );
       process.exit(1);

@@ -20,7 +20,7 @@ Run these steps in order. Do **not** skip ahead. Do **not** call the `finalize_d
 Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" status --session-id '${CLAUDE_SESSION_ID}'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" status --session-id '${CLAUDE_SESSION_ID}' --plugin-data "${CLAUDE_PLUGIN_DATA}"
 ```
 
 Note the current `short_count`, `long_count`, `by_category` breakdown, and `by_category_scope` breakdown (keys like `fact/user`, `procedural/role:planner`, `episodic/project`) so you can sanity-check the result at the end.
@@ -30,7 +30,7 @@ Note the current `short_count`, `long_count`, `by_category` breakdown, and `by_c
 First check what role this session is assigned to. Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" get_roles --session-id '${CLAUDE_SESSION_ID}'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" get_roles --session-id '${CLAUDE_SESSION_ID}' --plugin-data "${CLAUDE_PLUGIN_DATA}"
 ```
 
 It returns `{ "roles": [...] }`. If `roles` includes `"consolidator"`, you are a peer dedicated to consolidating the team — use `{ scope: "all" }` (and you will need `confirm_all_sessions: true` in step 6). An auto-spawned consolidator session is assigned this role before launch, so this is the normal automatic path. Otherwise default to `{ scope: "session" }` — a single-session consolidation of your own short-term. Widen a non-consolidator session to `{ scope: "all" }` only when the user asks for a project-wide dream OR the step-2 `hint` reports cross-session rows waiting.
@@ -38,7 +38,7 @@ It returns `{ "roles": [...] }`. If `roles` includes `"consolidator"`, you are a
 Run `drain_batch` with the chosen scope:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" drain_batch --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" drain_batch --session-id '${CLAUDE_SESSION_ID}' --plugin-data "${CLAUDE_PLUGIN_DATA}" <<'MINDWRIGHT_ARGS'
 {"scope": "session"}
 MINDWRIGHT_ARGS
 ```
@@ -125,7 +125,7 @@ For each exchange in the batch:
 For each fact, run `retain_fact` with these JSON args on stdin:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" retain_fact --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" retain_fact --session-id '${CLAUDE_SESSION_ID}' --plugin-data "${CLAUDE_PLUGIN_DATA}" <<'MINDWRIGHT_ARGS'
 {
   "drain_id": "<from step 2>",
   "exchange_id": "<exchange this fact came from>",
@@ -154,7 +154,7 @@ The response is:
 For each candidate you decide IS truly contradicted by the new fact, run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" mark_superseded --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" mark_superseded --session-id '${CLAUDE_SESSION_ID}' --plugin-data "${CLAUDE_PLUGIN_DATA}" <<'MINDWRIGHT_ARGS'
 {"old_id": <candidate>, "new_id": <fact_id from step 4>}
 MINDWRIGHT_ARGS
 ```
@@ -166,7 +166,7 @@ Don't supersede candidates that merely overlap topically — only the ones the n
 When every exchange has been processed, run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" finalize_drain --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" finalize_drain --session-id '${CLAUDE_SESSION_ID}' --plugin-data "${CLAUDE_PLUGIN_DATA}" <<'MINDWRIGHT_ARGS'
 {"drain_id": "<from step 2>"}
 MINDWRIGHT_ARGS
 ```
@@ -174,7 +174,7 @@ MINDWRIGHT_ARGS
 If you opened the drain with `scope: "all"` in step 2 (project-wide consolidation), you MUST also pass `confirm_all_sessions: true`:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" finalize_drain --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" finalize_drain --session-id '${CLAUDE_SESSION_ID}' --plugin-data "${CLAUDE_PLUGIN_DATA}" <<'MINDWRIGHT_ARGS'
 {"drain_id": "<from step 2>", "confirm_all_sessions": true}
 MINDWRIGHT_ARGS
 ```

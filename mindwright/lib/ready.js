@@ -1,7 +1,7 @@
 // Dependency-free readiness gate.
 //
 // Native deps (better-sqlite3, sqlite-vec, transformers.js) are NOT vendored —
-// `npm install` runs once into the persistent data dir. Until then (fresh
+// `npm ci` runs once into the persistent data dir. Until then (fresh
 // install, dep bump, or Node upgrade staling the binding) they're absent or
 // unloadable. Every auto-firing entrypoint checks this dep-free predicate
 // FIRST so a not-yet-ready copy stays dormant (and kicks off a background

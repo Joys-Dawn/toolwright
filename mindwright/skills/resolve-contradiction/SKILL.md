@@ -8,7 +8,7 @@ description: When two long-term facts contradict each other, pick one, merge the
 Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" resolve_contradiction --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" resolve_contradiction --session-id '${CLAUDE_SESSION_ID}' --plugin-data "${CLAUDE_PLUGIN_DATA}" <<'MINDWRIGHT_ARGS'
 {"fact_id_a": 12, "fact_id_b": 34, "resolution": "merge", "merged_content": "..."}
 MINDWRIGHT_ARGS
 ```

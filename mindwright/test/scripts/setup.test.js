@@ -5,7 +5,7 @@
 // observable outcomes in the deps-absent branch:
 //   1. runInstallSync() returns !ok            → "dependency install FAILED"
 //      + installLogPath(), exit(1)
-//   2. runInstallSync() ok but deps STILL absent → "npm install reported
+//   2. runInstallSync() ok but deps STILL absent → "npm ci reported
 //      success but ... not resolvable", exit(1)  (a defensive double-check)
 //   3. ok + deps now present                    → falls through to the model
 //      download (the real heavy impl — out of scope here; that's the
@@ -14,7 +14,7 @@
 // Outcome 1 is verified end-to-end via a real subprocess on a faithful
 // node_modules-less copy with npm forced off PATH (the same proven
 // mechanism as auto-setup.test.js's npm-not-found test — runInstallSync
-// short-circuits BEFORE any spawn, so NO real `npm install` ever runs).
+// short-circuits BEFORE any spawn, so NO real `npm ci` ever runs).
 // Outcome 2 is a defensive guard not deterministically reachable from a
 // subprocess without a flaky filesystem race, so it is driven in-process
 // through setup.js's injectable seam (run({ depsCheck, install })). The
@@ -66,7 +66,7 @@ test('deps-absent + npm off PATH: real subprocess exits 1 with the FAILED messag
   // derives PLUGIN_ROOT from its own location → the sandbox). PATH='' makes
   // runInstallSync()'s npmAvailable() probe fail, so it returns the structured
   // npm-not-found error WITHOUT spawning (proven in auto-setup.test.js) — no
-  // real `npm install` can run here. setup-impl.js is copied but never
+  // real `npm ci` can run here. setup-impl.js is copied but never
   // imported (the branch exits before the dynamic import).
   const pluginCopy = mkdtempSync(join(tmpdir(), 'mindwright-setup-plugin-'));
   const projectDir = mkdtempSync(join(tmpdir(), 'mindwright-setup-proj-'));
@@ -135,6 +135,6 @@ test('run() injected install {ok:true} but deps still absent: exits 1 with the s
   );
 
   assert.equal(exitCode, 1);
-  assert.match(stderr, /npm install reported success but the native deps still are not resolvable/);
+  assert.match(stderr, /npm ci reported success but the native deps still are not resolvable/);
   assert.ok(!/dependency install FAILED/.test(stderr), 'must not emit the FAILED message — install returned ok');
 });

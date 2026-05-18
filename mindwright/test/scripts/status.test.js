@@ -246,7 +246,7 @@ test('deps-absent branch emits the degraded baseStatus()+zeroCounts() payload an
   // own location → the sandbox). store.js is copied but never imported (the
   // branch returns before `await import('../lib/store.js')`).
   // MINDWRIGHT_AUTO_INSTALL=false keeps maybeAutoInstall() from spawning a
-  // real npm install; the payload contract is independent of that call.
+  // real npm ci; the payload contract is independent of that call.
   const pluginCopy = mkdtempSync(join(tmpdir(), 'mindwright-status-plugin-'));
   const projectDir = mkdtempSync(join(tmpdir(), 'mindwright-status-proj-'));
   const homeDir = mkdtempSync(join(tmpdir(), 'mindwright-status-home-'));

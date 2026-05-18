@@ -23,7 +23,7 @@ import { installLockPath, installLogPath, NPM_INSTALL_ARGS, prepareInstallDir } 
 import { loadProbe, probeAndMarkIfOk, writeMarker } from '../lib/health-marker.js';
 import { manifestUpToDate } from '../lib/ready.js';
 
-// Real `npm install` in the persistent data dir; output appended to the
+// Real `npm ci` in the persistent data dir; output appended to the
 // install log so /mindwright:status can show why a build failed. Never
 // rejects — a spawn failure is a not-ok result the re-probe reflects. Async
 // spawn keeps the event loop free for the minutes-long from-source compile.
@@ -87,7 +87,7 @@ export async function main({
 
   const lockPath = installLockPath();
   try {
-    // Skip `npm install` only when deps both LOAD and match the bundled
+    // Skip `npm ci` only when deps both LOAD and match the bundled
     // manifest (see header for why probe-alone is insufficient).
     let r = await probe();
     if (!r.ok || !manifestOk()) {

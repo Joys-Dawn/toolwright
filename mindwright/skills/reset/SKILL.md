@@ -8,7 +8,7 @@ description: Destructive — drop the mindwright database and all markdown mirro
 Run via Bash:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/reset.js" --yes
+node "${CLAUDE_PLUGIN_ROOT}/scripts/reset.js" --yes --plugin-data "${CLAUDE_PLUGIN_DATA}"
 ```
 
 Without `--yes` the script prints what it would delete and exits. With `--yes` it deletes `.claude/mindwright/mindwright.db` (plus its `-wal` / `-shm` WAL sidecars) and the entire `.claude/mindwright/mirrors/` tree.

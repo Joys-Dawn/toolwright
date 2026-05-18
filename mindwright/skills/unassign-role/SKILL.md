@@ -8,7 +8,7 @@ description: Remove a role tag from a session.
 Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" unassign_role --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" unassign_role --session-id '${CLAUDE_SESSION_ID}' --plugin-data "${CLAUDE_PLUGIN_DATA}" <<'MINDWRIGHT_ARGS'
 {"target": "bob-42", "role": "planner", "confirm_cross_session": true}
 MINDWRIGHT_ARGS
 ```

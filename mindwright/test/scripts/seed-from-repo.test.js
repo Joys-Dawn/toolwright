@@ -533,7 +533,7 @@ test('deps-absent: emits the deps_not_installed structured result and never call
   // PLUGIN_ROOT from its own location → the sandbox). store.js is copied but
   // never imported (the branch returns before `await import('../lib/store.js')`).
   // MINDWRIGHT_AUTO_INSTALL=false keeps maybeAutoInstall() from spawning a
-  // real npm install; the result contract is independent of that call.
+  // real npm ci; the result contract is independent of that call.
   const pluginCopy = mkdtempSync(join(tmpdir(), 'mindwright-seed-plugin-'));
   const projectDir = mkdtempSync(join(tmpdir(), 'mindwright-seed-da-proj-'));
   try {

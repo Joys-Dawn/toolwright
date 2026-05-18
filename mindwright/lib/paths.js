@@ -13,10 +13,52 @@ const __dirname = dirname(__filename);
 // Only LOCATES bundled read-only plugin files (db/migrations, package.json).
 export const PLUGIN_ROOT = resolve(__dirname, '..');
 
+// The Claude-Code-substituted persistent data dir, read from the
+// `--plugin-data <dir>` argument every entrypoint is launched with. Claude
+// Code substitutes `${CLAUDE_PLUGIN_DATA}` inline into hook commands and skill
+// content (docs: "Environment variables") — the SAME substitution channel
+// that resolves `${CLAUDE_PLUGIN_ROOT}` (without which no hook would run at
+// all), so it is reliably present in production. Returns null when the flag is
+// absent or still an un-substituted `${...}` literal: that means we are NOT
+// running under Claude Code (dev tree, test suite, manual run) and the
+// PLUGIN_ROOT fallback is correct. Exported pure for direct unit testing.
+export function pluginDataArg(argv = process.argv) {
+  for (let i = 2; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--plugin-data') {
+      const v = argv[i + 1];
+      return v && !v.includes('${') ? v : null;
+    }
+    if (a.startsWith('--plugin-data=')) {
+      const v = a.slice('--plugin-data='.length);
+      return v && !v.includes('${') ? v : null;
+    }
+  }
+  return null;
+}
+
 // PERSISTENT plugin data dir — survives plugin updates; node_modules + the
-// ABI marker live here. Fallback to PLUGIN_ROOT when the env var is absent
-// (dev tree / test suite); production always has the env.
+// ABI marker live here.
+//
+// Claude Code documents `${CLAUDE_PLUGIN_DATA}` as both substituted inline
+// into commands AND exported to hook/MCP subprocesses. The env-export half is
+// NOT delivered to a Node process on every platform — relying on it silently
+// rooted the install at the EPHEMERAL PLUGIN_ROOT (the bug this guards). So
+// every entrypoint is launched with `--plugin-data "${CLAUDE_PLUGIN_DATA}"`
+// (the always-substituted half) and we promote that value into the
+// environment ONCE here, the single place CLAUDE_PLUGIN_DATA is read: the
+// detached install-worker / model daemon are spawned with `{...process.env}`
+// AFTER their parent has called this (the depsInstalled() gate), so they
+// inherit the correct dir for free with no per-spawn wiring. Idempotent and
+// guarded (only writes when unset) so an already-exported env value, the dev
+// tree, and the test suite all keep their existing behavior. Fallback to
+// PLUGIN_ROOT only when neither the arg nor the env is present (dev / test /
+// manual run).
 export function pluginDataDir() {
+  if (!process.env.CLAUDE_PLUGIN_DATA) {
+    const fromArg = pluginDataArg();
+    if (fromArg) process.env.CLAUDE_PLUGIN_DATA = fromArg;
+  }
   return process.env.CLAUDE_PLUGIN_DATA || PLUGIN_ROOT;
 }
 

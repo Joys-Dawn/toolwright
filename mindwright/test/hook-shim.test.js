@@ -374,7 +374,7 @@ test('installingNotice: npm missing → actionable (names /mindwright:setup + th
 
 test('installingNotice: npm present but a prior install already wrote its log (deps still absent) → actionable, NOT optimistic-forever (behavior-1)', () => {
   // The hostile dead-end this fixes: on an un-buildable host (no C/C++
-  // toolchain, no registry, disk full) the background `npm install` fails,
+  // toolchain, no registry, disk full) the background `npm ci` fails,
   // deps stay absent, and every subsequent SessionStart used to repeat
   // "just wait, a session or two" forever with no signal anything is wrong.
   // installFailing()=true ⇒ the notice must escalate to name the install log
@@ -788,7 +788,7 @@ test('staticImportSpecifiers also captures `export … from` re-exports (load-ti
 // branch BEFORE the dynamic import of <name>-impl.js — the -impl files are
 // copied but, correctly, never loaded). MINDWRIGHT_AUTO_INSTALL=false makes
 // maybeAutoInstall() return at its first line (auto-setup.js) BEFORE any
-// lock/spawn/fs-write, so no real `npm install` is ever launched.
+// lock/spawn/fs-write, so no real `npm ci` is ever launched.
 const HOOK_ENTRYPOINTS = ENTRYPOINTS.filter((p) => p.startsWith('hooks/'));
 
 // Coverage-matrix invariant pinned independently of the per-entrypoint tests:

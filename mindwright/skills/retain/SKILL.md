@@ -8,7 +8,7 @@ description: Explicitly save a fact to memory. Bypasses the consolidator — use
 Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" retain --session-id '${CLAUDE_SESSION_ID}' <<'MINDWRIGHT_ARGS'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" retain --session-id '${CLAUDE_SESSION_ID}' --plugin-data "${CLAUDE_PLUGIN_DATA}" <<'MINDWRIGHT_ARGS'
 {"content": "...", "kind": "fact", "tier": "long"}
 MINDWRIGHT_ARGS
 ```

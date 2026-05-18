@@ -1,7 +1,7 @@
 // Coverage for scripts/install-worker.js — the detached dependency installer.
 //
 // Hard constraint (identical to auto-setup.test.js): this suite must NEVER run
-// a real `npm install`, NEVER dynamic-import a real native binding, and NEVER
+// a real `npm ci`, NEVER dynamic-import a real native binding, and NEVER
 // write the real node_modules/.mindwright-health.json (a real-tree marker
 // write races the parallel `node --test` workers). Every unit test injects the
 // probe / npm / marker / removeLock collaborators via the established seam
@@ -15,7 +15,7 @@
 // the irreducible contract: skip npm ONLY when the deps both load (probe ok)
 // AND match what this plugin version bundles (manifestUpToDate) — otherwise
 // (probe fail OR manifest drift after a plugin update) prepare the persistent
-// install dir + `npm install`, and ONLY if npm exited 0 re-probe + write the
+// install dir + `npm ci`, and ONLY if npm exited 0 re-probe + write the
 // ABI marker (a non-zero npm exit ⇒ NO marker: a partial install where the
 // two ABI deps landed but the pure-JS transformers/SDK did not must never
 // masquerade as ready). ALWAYS release the lock on exit.
@@ -78,7 +78,7 @@ function lockSpy() {
 
 test('deps present, probe ok AND manifest current → skips npm, writes the marker, releases the lock', async () => {
   // The dev-tree fast self-heal: node_modules is there and loads AND is the
-  // set this plugin bundles, only the ABI marker is missing. `npm install` is
+  // set this plugin bundles, only the ABI marker is missing. `npm ci` is
   // NEVER run here (the tripwire proves it), the marker is written, the lock
   // is released. manifestOk is injected explicitly so the skip condition is
   // self-documenting and not silently reliant on the dev-tree same-file path.
@@ -88,7 +88,7 @@ test('deps present, probe ok AND manifest current → skips npm, writes the mark
   await main({
     probe: async () => ({ ok: true }),
     manifestOk: () => true,
-    runNpmInstall: () => assert.fail('deps present + manifest current: `npm install` must NOT run'),
+    runNpmInstall: () => assert.fail('deps present + manifest current: `npm ci` must NOT run'),
     writeHealthMarker: () => {
       markerWritten += 1;
       return true;
@@ -134,7 +134,7 @@ test('deps present + probe ok but manifest drifted (plugin update bumped a dep) 
 
 test('deps-absent (probe fails, then ok) → runs npm once, re-probes, writes marker, releases the lock', async () => {
   // The fresh-marketplace path: first probe fails (no node_modules),
-  // prepareInstallDir() + `npm install` run, the re-probe passes, the marker
+  // prepareInstallDir() + `npm ci` run, the re-probe passes, the marker
   // is written, and the DEFAULT removeLock releases the lock on exit.
   let probeCalls = 0;
   let npmCalls = 0;
@@ -156,7 +156,7 @@ test('deps-absent (probe fails, then ok) → runs npm once, re-probes, writes ma
   });
 
   assert.equal(probeCalls, 2, 'probe-first then re-probe AFTER the awaited install');
-  assert.equal(npmCalls, 1, '`npm install` runs exactly once when the first probe fails');
+  assert.equal(npmCalls, 1, '`npm ci` runs exactly once when the first probe fails');
   assert.equal(markerWritten, 1, 'the re-probe passed → marker written');
   assert.equal(existsSync(installLockPath()), false, 'the default removeLock releases the lock on exit');
 });

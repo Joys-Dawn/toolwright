@@ -10,7 +10,7 @@ Two paths:
 1. Run the following for the structured payload:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" status --session-id '${CLAUDE_SESSION_ID}'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" status --session-id '${CLAUDE_SESSION_ID}' --plugin-data "${CLAUDE_PLUGIN_DATA}"
 ```
 
    It prints `{short_count, long_count, by_category, by_category_scope, last_consolidation, model_cached, session_alive, model_daemon_alive, pending_embeds, poison_embeds, unbound_count, oldest_preference_at, consolidator, warnings}`. `session_alive` = a Claude session is bound to this project; `model_daemon_alive` = the machine-wide embedder/reranker daemon is serving. `by_category_scope` keys are strings like `'fact/user'`, `'procedural/role:planner'`, `'episodic/project'`. `consolidator` is `{ session_id, handle, first_seen, last_spawn }` when this requester has ever spawned a background consolidator session for this project, otherwise `null`.
@@ -18,7 +18,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/mindwright.mjs" status --session-id '${CLAUD
 2. Or run the diagnostic script directly for a human-readable dump:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/status.js"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/status.js" --plugin-data "${CLAUDE_PLUGIN_DATA}"
 ```
 
 The script prints the same fields as path 1 plus mirror paths and the resolved data directory. One field differs: the script has no caller context, so instead of the per-caller `consolidator` it emits `consolidators` (plural) — every `consolidator_for:*` record so you can see the full project-level set when debugging dream-cycle issues.

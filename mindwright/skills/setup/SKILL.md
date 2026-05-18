@@ -7,7 +7,7 @@ allowed-tools: Bash(node *)
 Download the local models mindwright needs and verify the environment is sane. This is a one-time setup step. Subsequent sessions reuse the cached models.
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/setup.js
+node "${CLAUDE_PLUGIN_ROOT}/scripts/setup.js" --plugin-data "${CLAUDE_PLUGIN_DATA}"
 ```
 
 The script:
