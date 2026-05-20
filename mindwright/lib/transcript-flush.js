@@ -2,8 +2,16 @@
 // rows + setOffset under one transaction, owned in one place for all hooks.
 //
 // Returns { chunks, prevOffset, newOffset, insertedIds, error? }.
-// `insertedIds` is passed to retrieve() as excludeIds so just-flushed content
-// can't echo back as its own recall candidate.
+// `insertedIds` is the row ids of the just-staged pending rows; callers don't
+// need to thread them anywhere (the self-echo concern is gone — pending rows
+// are filtered out of every retriever's SQL) but the field stays for tests
+// and ad-hoc inspection.
+//
+// Every chunk is staged with `pendingSessionId = sessionId`: rows are
+// invisible to retrieval, drain, and cap counts until the shared
+// promote-pending handler flips pending_session_id to NULL at PreCompact /
+// SessionEnd, or until SessionStart's orphan sweep does it on behalf of a
+// crashed session.
 //
 // NEVER throws — sets `error` so the caller emits its `{}` no-op. A flush
 // failure must not crash the session.
@@ -85,9 +93,16 @@ export function flushTranscript({ store, sessionId, transcriptPath }) {
           // one); lets the seed loop carry true historical event time
           // instead of collapsing every row to seed-run time.
           eventTs: c.timestamp ?? null,
+          // Stage as pending under the calling session so retrieval, drain,
+          // and cap counts ignore it until the next PreCompact / SessionEnd
+          // promotes it. The originating session still has this content in
+          // its context window, so memory recall is unnecessary; promoting
+          // only at the boundary where context is about to be lost is the
+          // whole point of the staging design.
+          pendingSessionId: sessionId,
         });
-        // Normalize BigInt → Number so callers can use a Set (BigInt and
-        // Number compare false in Set membership even for equal values).
+        // Normalize BigInt → Number so the returned ids are comparable as
+        // plain numbers (Set membership, equality with retrieve() output).
         insertedIds.push(typeof id === 'bigint' ? Number(id) : id);
       }
       store.setOffset(sessionId, newOffset);

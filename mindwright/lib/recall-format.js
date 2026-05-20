@@ -18,6 +18,14 @@ const SELF_KINDS = new Set([
   'thinking',
   'text',
   'outbound_send',  // this agent's own outbound wrightward broadcasts
+  // Paired tool_use+tool_result chunks from the calling agent's own
+  // transcript (Bash, Edit, Write, Read, Grep, Glob, MCP, …). The agent
+  // invoked the tool and saw the output — same trust class as `thinking`
+  // and `text`. Without this, origin=external falsely tells the agent the
+  // line came from a third-party channel, AND multiline=false collapses
+  // multi-line Bash output to a single line, destroying the structure the
+  // agent needs to interpret test failures / build errors on recall.
+  'tool_call',
   'fact',
   'seed',
   // User-typed retain kinds — a retain runs in the user's own session, so

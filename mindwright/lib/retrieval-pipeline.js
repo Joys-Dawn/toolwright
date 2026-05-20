@@ -3,6 +3,13 @@
 // timeout budget, and formatRecall + "Current time:" prefix can't diverge.
 // The hooks still own their outer flow (flush, source-specific embed, the
 // PreToolUse novelty gate).
+//
+// The historical self-echo workaround (`justFlushedIds → excludeIds`) is
+// retired: chunker writes land in `entries` with `pending_session_id` set,
+// and every retriever's SQL filters those rows out structurally. The
+// `excludeIds` channel into retrieve() is preserved for its remaining uses
+// (the injected-fact-ids per-session dedup, and the mindwright_recall MCP
+// tool's `exclude_ids` argument).
 
 import { retrieve } from './retriever.js';
 import { formatRecall } from './recall-format.js';
@@ -51,19 +58,20 @@ export function emitDaemonDownWarningIfFirst(store, sessionId) {
 // @param {string} args.queryText - the text to query against (prompt or thinking).
 // @param {Array|Float32Array} args.queryEmbedding - precomputed embedding for queryText.
 // @param {number} args.k - top-K for retrieval.
-// @param {number[]} [args.justFlushedIds] - row ids just written by the chunker; excluded.
 // @param {Promise} args.timeoutPromise - from createTimeoutBudget().
 // @param {() => boolean} args.isTimedOut - from createTimeoutBudget().
 // @returns {Promise<{additionalContext: string|null, timedOut: boolean, retrieveError: Error|null, appendError: Error|null}>}
 export async function fetchRecallContext({
   store, sessionId, pipe, queryText, queryEmbedding, k,
-  justFlushedIds = [], timeoutPromise, isTimedOut,
+  timeoutPromise, isTimedOut,
 }) {
   let roles = [];
   try { roles = store.getRoles(sessionId); } catch { /* default [] */ }
   let injectedIds = [];
   try { injectedIds = store.getInjectedFactIds(sessionId); } catch { /* default [] */ }
-  const excludeIds = [...justFlushedIds, ...injectedIds];
+  // excludeIds now carries only the per-session injected-ids dedup set
+  // (the self-echo problem is gone — pending rows are SQL-filtered out).
+  const excludeIds = injectedIds;
 
   let hits;
   try {

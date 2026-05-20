@@ -35,7 +35,7 @@ function writeTranscript(dir, recs) {
   return path;
 }
 
-test('flushTranscript inserts chunks and advances offset atomically', () => {
+test('flushTranscript stages chunks as pending under the calling session and advances offset atomically', () => {
   withStore((store, dir) => {
     const sessionId = 'sess-1';
     const path = writeTranscript(dir, [
@@ -60,8 +60,14 @@ test('flushTranscript inserts chunks and advances offset atomically', () => {
     assert.ok(result.newOffset > result.prevOffset, 'offset must advance');
     // Offset persisted.
     assert.equal(store.getOffset(sessionId), result.newOffset);
-    // Rows inserted under this session.
-    assert.equal(store.countShortTermFor(sessionId), result.chunks.length);
+    // Rows land as PENDING under the calling session, NOT in real short-term:
+    // the just-flushed content is still in the agent's context, so retrieval
+    // (and the cap counter) deliberately don't see it until PreCompact /
+    // SessionEnd promotes it.
+    assert.equal(store.countShortTermFor(sessionId), 0,
+      'no real short-term rows yet — pending until promotion');
+    assert.equal(store.countPendingFor(sessionId), result.chunks.length,
+      'every chunk is staged in pending under this session');
   });
 });
 
@@ -163,10 +169,14 @@ test('flushTranscript persists toolMap when slice contains only an assistant inb
 
     // The documented behavior: the chunker's map mutation MUST be persisted
     // so a later flushTranscript pass can classify the matching tool_result.
+    // The persisted shape is the object form `{ name, input, … }` so the
+    // late-arriving result can also emit a paired tool_call when applicable;
+    // here the inbox tool follows the decomposition path so only the name is
+    // needed.
     const persisted = store.loadToolMap(sessionId);
-    assert.equal(persisted.get(inboxId),
+    assert.equal(persisted.get(inboxId)?.name,
       'mcp__plugin_wrightward_wrightward-bus__wrightward_list_inbox',
-      'tool_use_id → name mapping must survive to the next pass');
+      'tool_use_id → { name, … } object must survive to the next pass');
   });
 });
 
@@ -415,7 +425,10 @@ test('backstop: fresh + SEED=1 + content — the flag IS honored (history ingest
       assert.equal(first.error, undefined);
       assert.ok(first.chunks.length >= 1, 'SEED=1 honored: the backstop left offset 0 so the flush ingests from the top');
       assert.equal(first.prevOffset, 0, 'opt-in offset is 0, NOT EOF — the silent-break guard at the integration level');
-      assert.ok(store.countShortTermFor(sessionId) >= 1, 'prior content was actually ingested');
+      // flushTranscript always stages rows as pending; the "ingested" check
+      // hits countPendingFor, not countShortTermFor. Promotion (PreCompact /
+      // SessionEnd) is what would move these into real short-term.
+      assert.ok(store.countPendingFor(sessionId) >= 1, 'prior content was actually staged in pending');
 
       const second = flushTranscript({ store, sessionId, transcriptPath: path });
       assert.equal(second.error, undefined);

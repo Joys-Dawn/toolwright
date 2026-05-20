@@ -614,6 +614,70 @@ test('pending nudges are per-session', () => {
   });
 });
 
+// correctness-3: a tool_use that never gets a paired tool_result (interrupted
+// Bash, killed Agent subtask, MCP timeout) would otherwise leak permanently
+// into the persisted toolMap. loadToolMap drops entries older than
+// TOOL_MAP_TTL_MS, and clearToolMap removes the meta row entirely on clean
+// session end / orphan sweep.
+test('loadToolMap drops entries whose timestamp is older than TOOL_MAP_TTL_MS', () => {
+  withStore((store) => {
+    const sessionId = 'sess-ttl';
+    const old = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(); // 4h old
+    const fresh = new Date(Date.now() - 1 * 60 * 1000).toISOString();   // 1m old
+    const map = new Map([
+      ['tu_stale', { name: 'Bash', input: { command: 'ls' }, source_ref: 's', timestamp: old }],
+      ['tu_fresh', { name: 'Bash', input: { command: 'pwd' }, source_ref: 's', timestamp: fresh }],
+    ]);
+    store.saveToolMap(sessionId, map);
+
+    const loaded = store.loadToolMap(sessionId);
+    assert.equal(loaded.size, 1, 'stale entry must be evicted');
+    assert.ok(loaded.has('tu_fresh'), 'fresh entry survives');
+    assert.ok(!loaded.has('tu_stale'), 'stale entry is dropped');
+  });
+});
+
+test('loadToolMap keeps legacy bare-string entries even though they lack a timestamp', () => {
+  // The pre-pairing schema stored `id → name`. Such entries can still classify
+  // a late inbox tool_result (the only data they need is the name), and they
+  // pre-date the timestamp field — evicting them on a TTL miss would drop
+  // valid legacy data instead of just leaked-this-session abandons.
+  withStore((store) => {
+    const sessionId = 'sess-legacy';
+    // Write a raw legacy blob via _metaSet to bypass saveToolMap's object
+    // normalization.
+    store._metaSet(`tool_map:${sessionId}`, JSON.stringify({
+      tu_legacy: 'mcp__plugin_wrightward_wrightward-bus__wrightward_list_inbox',
+    }));
+    const loaded = store.loadToolMap(sessionId);
+    assert.equal(loaded.size, 1);
+    assert.equal(loaded.get('tu_legacy').name,
+      'mcp__plugin_wrightward_wrightward-bus__wrightward_list_inbox');
+  });
+});
+
+test('clearToolMap removes the persisted blob; subsequent load returns an empty map', () => {
+  withStore((store) => {
+    const sessionId = 'sess-clear';
+    const map = new Map([
+      ['tu1', { name: 'Bash', input: {}, source_ref: 's', timestamp: new Date().toISOString() }],
+    ]);
+    store.saveToolMap(sessionId, map);
+    assert.equal(store.loadToolMap(sessionId).size, 1, 'precondition: blob persisted');
+
+    store.clearToolMap(sessionId);
+    assert.equal(store.loadToolMap(sessionId).size, 0, 'blob removed');
+    // _metaGet returns null when the row is absent — distinct from "row with empty map".
+    assert.equal(store._metaGet(`tool_map:${sessionId}`), null);
+  });
+});
+
+test('clearToolMap is a no-op when no blob exists (no error, no side effect)', () => {
+  withStore((store) => {
+    assert.doesNotThrow(() => store.clearToolMap('sess-never-existed'));
+  });
+});
+
 // best-practices-1: the meta upsert/point-read was copy-pasted ~18× with each
 // site re-deriving its own timestamp. _metaSet/_metaGet now own that SQL +
 // timestamp. The 18 routed public methods are covered by their own tests
@@ -715,5 +779,266 @@ test('shortTermBytes() measures UTF-8 byte length, not UTF-16 character count (t
 
     assert.equal(store.shortTermBytes(), utf8Bytes,
       `must equal Buffer.byteLength (${utf8Bytes}), not the ${content.length}-char UTF-16 count`);
+  });
+});
+
+// ---- pending-staging ------------------------------------------------------
+// The pending_session_id column stages chunks captured during a live session
+// without making them visible to retrieval, drain, or the cap. They become
+// "real" short-term only at PreCompact / SessionEnd / SessionStart-orphan-
+// sweep. The invariants below pin that contract directly against the store.
+
+test('insertEntry rejects pendingSessionId for tier=long (consolidator output must never stage)', () => {
+  withStore((store) => {
+    // A long-tier row produced by the consolidator MUST be visible to retrieval
+    // immediately; staging it silently would freeze the consolidator's output
+    // behind a flush that may never fire (long-tier distillation is not tied
+    // to PreCompact). The store rejects the misuse at the boundary so a bad
+    // caller fails loud instead of leaking phantom long-term rows.
+    assert.throws(
+      () => store.insertEntry({
+        tier: 'long', category: 'fact', scope: 'project', kind: 'fact',
+        content: 'should not stage', sessionId: 's',
+        pendingSessionId: 's',
+      }),
+      /pendingSessionId is only valid for tier='short'/,
+    );
+  });
+});
+
+test('insertEntry with pendingSessionId persists the marker and pending counts but not real-short counts', () => {
+  withStore((store) => {
+    // Plant ONE pending row + ONE non-pending row under the same session. The
+    // pending row carries the staging marker so countPendingFor sees it, but
+    // countShortTermFor / countShortTermAllSessions filter it out — that's
+    // what prevents pending chunks from tripping the cap.
+    const pendingId = store.insertEntry({
+      tier: 'short', kind: 'thinking', content: 'pending row',
+      sessionId: 's-pending', pendingSessionId: 's-pending',
+    });
+    const realId = store.insertEntry({
+      tier: 'short', kind: 'thinking', content: 'real row',
+      sessionId: 's-pending',
+    });
+    const pendingRow = store.fetch(pendingId);
+    const realRow = store.fetch(realId);
+    assert.equal(pendingRow.pending_session_id, 's-pending');
+    assert.equal(realRow.pending_session_id, null);
+
+    assert.equal(store.countPendingFor('s-pending'), 1, 'pending count is the marker');
+    assert.equal(store.countShortTermFor('s-pending'), 1, 'real short count excludes pending');
+    assert.equal(store.countShortTermAllSessions(), 1, 'project-wide excludes pending too');
+  });
+});
+
+test('promotePendingForSession flips the marker to NULL and returns the count moved', () => {
+  withStore((store) => {
+    for (let i = 0; i < 3; i++) {
+      store.insertEntry({
+        tier: 'short', kind: 'thinking', content: `pending ${i}`,
+        sessionId: 's-promote', pendingSessionId: 's-promote',
+      });
+    }
+    // A peer's row stays pending — promote is scoped to the named session.
+    store.insertEntry({
+      tier: 'short', kind: 'thinking', content: 'peer pending',
+      sessionId: 's-peer', pendingSessionId: 's-peer',
+    });
+
+    assert.equal(store.countPendingFor('s-promote'), 3);
+    const moved = store.promotePendingForSession('s-promote');
+    assert.equal(moved, 3, 'returns the rows-moved count');
+    assert.equal(store.countPendingFor('s-promote'), 0);
+    assert.equal(store.countShortTermFor('s-promote'), 3, 'promoted rows now count as real');
+
+    // Second call is a no-op (idempotent).
+    assert.equal(store.promotePendingForSession('s-promote'), 0);
+
+    // Peer's pending row is untouched — promote-pending must NEVER spill
+    // outside the named session.
+    assert.equal(store.countPendingFor('s-peer'), 1, 'peer pending must be untouched');
+  });
+});
+
+test('promotePendingForSession with maxCreatedAt promotes only rows older than the cutoff (orphan-sweep race guard)', () => {
+  // The orphan-sweep race: a session that was orphan-eligible at the SELECT
+  // can resurrect via /resume and write FRESH pending rows before the
+  // per-orphan UPDATE fires. Without a created_at bound on the UPDATE,
+  // those fresh rows would be promoted prematurely, re-creating the
+  // self-echo class the pending-staging design eliminates.
+  withStore((store) => {
+    const old = store.insertEntry({
+      tier: 'short', kind: 'thinking', content: 'stale pending',
+      sessionId: 's-race', pendingSessionId: 's-race',
+    });
+    const fresh = store.insertEntry({
+      tier: 'short', kind: 'thinking', content: 'fresh pending',
+      sessionId: 's-race', pendingSessionId: 's-race',
+    });
+    // Backdate the "old" row so the cutoff bites only it. created_at is set
+    // by insertEntry internally; we UPDATE here to simulate >threshold age.
+    const oldIso = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 1h ago
+    store.db.prepare('UPDATE entries SET created_at = ? WHERE id = ?').run(oldIso, old);
+
+    const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString(); // 30m ago
+    const moved = store.promotePendingForSession('s-race', { maxCreatedAt: cutoff });
+    assert.equal(moved, 1, 'only the row older than the cutoff is promoted');
+
+    // The stale row is now real short-term; the fresh row remains pending.
+    assert.equal(store.fetch(old).pending_session_id, null);
+    assert.equal(store.fetch(fresh).pending_session_id, 's-race');
+    assert.equal(store.countPendingFor('s-race'), 1, 'fresh row stays pending');
+  });
+});
+
+test('promotePendingForSession with no maxCreatedAt promotes ALL pending rows (PreCompact/SessionEnd own-session path unchanged)', () => {
+  withStore((store) => {
+    for (let i = 0; i < 3; i++) {
+      store.insertEntry({
+        tier: 'short', kind: 'thinking', content: `row ${i}`,
+        sessionId: 's-own', pendingSessionId: 's-own',
+      });
+    }
+    // No cutoff → bulk promote, same as the original semantics.
+    const moved = store.promotePendingForSession('s-own');
+    assert.equal(moved, 3);
+    assert.equal(store.countPendingFor('s-own'), 0);
+  });
+});
+
+test('promotePendingForSession rejects an invalid maxCreatedAt (not a parseable ISO string)', () => {
+  withStore((store) => {
+    store.insertEntry({
+      tier: 'short', kind: 'thinking', content: 'x',
+      sessionId: 's-bad', pendingSessionId: 's-bad',
+    });
+    assert.throws(
+      () => store.promotePendingForSession('s-bad', { maxCreatedAt: 'not-a-date' }),
+      /maxCreatedAt must be an ISO date string/,
+    );
+    // Underlying state untouched on the throw.
+    assert.equal(store.countPendingFor('s-bad'), 1);
+  });
+});
+
+test('promotePendingForSession leaves row id, content, embedding, and FTS intact (only the flag changes)', () => {
+  withStore((store) => {
+    const emb = fixedEmbedding(7);
+    const id = store.insertEntry({
+      tier: 'short', kind: 'thinking', content: 'staged chunk content',
+      sessionId: 's-int', pendingSessionId: 's-int',
+      embedding: emb,
+    });
+    // FTS5 sync trigger fires on INSERT regardless of pending; bm25Search is
+    // gated by the JOIN's `pending_session_id IS NULL`. Pre-promotion BM25
+    // returns nothing.
+    assert.equal(store.bm25Search('staged chunk', 5).length, 0,
+      'pre-promotion BM25 must not surface pending rows');
+
+    store.promotePendingForSession('s-int');
+
+    // Same id, same content, same embedding — only the flag changed.
+    const row = store.fetch(id);
+    assert.equal(row.content, 'staged chunk content');
+    assert.equal(row.pending_session_id, null);
+    const hits = store.bm25Search('staged chunk', 5);
+    assert.ok(hits.some((h) => Number(h.id) === Number(id)),
+      'post-promotion BM25 must surface the row that was pending');
+    // vec_index row exists (embedding was persisted at insert time).
+    const vec = store.db.prepare('SELECT 1 FROM vec_index WHERE rowid = ?').get(id);
+    assert.ok(vec, 'embedding survives promotion (it was written at insert time)');
+  });
+});
+
+test('semanticSearch / temporalSearch filter out pending rows (the self-echo class is structurally invisible)', () => {
+  withStore((store) => {
+    const emb = fixedEmbedding(3);
+    store.insertEntry({
+      tier: 'short', kind: 'thinking', content: 'pending content',
+      sessionId: 's-r', pendingSessionId: 's-r',
+      embedding: emb,
+    });
+    store.insertEntry({
+      tier: 'short', kind: 'thinking', content: 'real content',
+      sessionId: 's-r',
+      embedding: emb,
+    });
+    // Semantic: vec MATCH returns both rows by distance, but the JOIN drops
+    // the pending one.
+    const sem = store.semanticSearch(emb, 10);
+    const semIds = sem.map((r) => Number(r.id));
+    assert.equal(semIds.length, 1, 'semantic should only see the real row');
+    // Temporal: same filter.
+    const tem = store.temporalSearch(10, 'short');
+    assert.equal(tem.length, 1, 'temporal should only see the real row');
+  });
+});
+
+test('orphanPendingSessions returns oldest-first and excludes the caller session', () => {
+  withStore((store) => {
+    const now = Date.now();
+    const longAgo = new Date(now - 60 * 60 * 1000).toISOString(); // 1h ago
+    const veryLongAgo = new Date(now - 2 * 60 * 60 * 1000).toISOString(); // 2h ago
+
+    // Two orphan sessions and one live (caller) session, all with pending rows.
+    const idA = store.insertEntry({
+      tier: 'short', kind: 'thinking', content: 'orphan A',
+      sessionId: 's-orphan-A', pendingSessionId: 's-orphan-A',
+    });
+    const idB = store.insertEntry({
+      tier: 'short', kind: 'thinking', content: 'orphan B',
+      sessionId: 's-orphan-B', pendingSessionId: 's-orphan-B',
+    });
+    store.insertEntry({
+      tier: 'short', kind: 'thinking', content: 'live caller',
+      sessionId: 's-live', pendingSessionId: 's-live',
+    });
+    // Backdate so the orphans cross the threshold; the caller's row stays
+    // recent.
+    store.db.prepare('UPDATE entries SET created_at = ? WHERE id = ?').run(veryLongAgo, idA);
+    store.db.prepare('UPDATE entries SET created_at = ? WHERE id = ?').run(longAgo, idB);
+
+    const orphans = store.orphanPendingSessions({
+      now,
+      thresholdMs: 30 * 60 * 1000, // 30 min
+      currentSessionId: 's-live',
+    });
+    const ids = orphans.map((o) => o.session_id);
+    assert.deepEqual(ids, ['s-orphan-A', 's-orphan-B'],
+      'oldest-first, caller excluded');
+    assert.equal(orphans[0].n, 1, 'count per orphan session reported correctly');
+  });
+});
+
+test('orphanPendingSessions: recent pending rows do not trigger', () => {
+  withStore((store) => {
+    store.insertEntry({
+      tier: 'short', kind: 'thinking', content: 'fresh pending',
+      sessionId: 's-recent', pendingSessionId: 's-recent',
+    });
+    // created_at = now (default). Threshold is 30 min.
+    const orphans = store.orphanPendingSessions({
+      now: Date.now(),
+      thresholdMs: 30 * 60 * 1000,
+    });
+    assert.deepEqual(orphans, [],
+      'fresh pending rows must not register as orphaned');
+  });
+});
+
+test('orphanPendingSessions rejects a missing or non-positive thresholdMs', () => {
+  withStore((store) => {
+    assert.throws(
+      () => store.orphanPendingSessions({ now: Date.now() }),
+      /thresholdMs must be a positive finite number/,
+    );
+    assert.throws(
+      () => store.orphanPendingSessions({ now: Date.now(), thresholdMs: 0 }),
+      /thresholdMs must be a positive finite number/,
+    );
+    assert.throws(
+      () => store.orphanPendingSessions({ now: Date.now(), thresholdMs: -1 }),
+      /thresholdMs must be a positive finite number/,
+    );
   });
 });

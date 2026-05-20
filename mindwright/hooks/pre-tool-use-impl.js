@@ -82,17 +82,16 @@ export async function main() {
   let additionalContext = '';
 
   try {
-    // Step 1 — read + chunk + write under one transaction.
+    // Step 1 — read + chunk + write under one transaction. Rows land as
+    // pending under this session so the just-flushed thinking block won't
+    // echo back in step 5's retrieve() — the SQL filter on
+    // `pending_session_id IS NULL` is what makes that structural.
     const flushed = flushTranscript({ store, sessionId, transcriptPath });
     if (flushed.error) {
       logHookError('pre-tool-use', 'flush failed', flushed.error);
       return;
     }
     const chunks = flushed.chunks;
-    // Exclude the rows just written: the just-flushed thinking block IS the
-    // query, so without this it scores ~1.0 against itself and dominates its
-    // own recall context.
-    const justFlushedIds = flushed.insertedIds || [];
 
     // Step 2 — identify the latest thinking block.
     const thinking = lastThinkingChunk(chunks);
@@ -145,7 +144,6 @@ export async function main() {
       queryText: thinking.content,
       queryEmbedding: promptEmb,
       k: topKForLength(thinking.content.length),
-      justFlushedIds,
       timeoutPromise: overallTimeout,
       isTimedOut,
     });

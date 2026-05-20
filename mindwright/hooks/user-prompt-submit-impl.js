@@ -82,16 +82,15 @@ export async function main() {
     }
 
     // 2) Sweep new transcript content. Single writer (the chunker) avoids
-    //    the duplicates two write paths produced. Capture insertedIds so
-    //    retrieval below excludes the just-flushed cli_prompt — else it
-    //    scores near-perfect against itself and the prompt echoes back.
-    let justFlushedIds = [];
+    //    the duplicates two write paths produced. Rows land as pending under
+    //    this session — invisible to the retrieve() call below until the
+    //    next PreCompact / SessionEnd promotes them — so the self-echo
+    //    workaround (passing flushed.insertedIds back in as excludeIds) is
+    //    no longer needed.
     if (transcriptPath) {
       const flushed = flushTranscript({ store, sessionId, transcriptPath });
       if (flushed.error) {
         logHookError('user-prompt-submit', 'chunk failed', flushed.error);
-      } else {
-        justFlushedIds = flushed.insertedIds || [];
       }
     }
 
@@ -104,7 +103,6 @@ export async function main() {
         queryText: prompt,
         queryEmbedding: promptEmb,
         k: TOP_K_DEFAULT,
-        justFlushedIds,
         timeoutPromise: overallTimeout,
         isTimedOut,
       });

@@ -6,7 +6,12 @@ export const RRF_K = 60;
 export const PER_RETRIEVER_N = 50;
 
 // Floor on the cross-encoder sigmoid score; candidates below it are dropped.
-export const RERANK_FLOOR = 0.10;
+// Calibrated against gte-reranker-modernbert-base — its score distribution is
+// narrower than bge-reranker-v2-m3's (typical relevant 0.80–0.98, noise drops
+// off below 0.70). 0.75 captured every true positive in local six-query
+// validation (lowest TP score was 0.834); bge's old 0.10 floor lets too much
+// noise through on gte's calibration.
+export const RERANK_FLOOR = 0.75;
 
 // Window over which the semantic recency boost decays linearly to zero.
 export const RECENCY_BOOST_DAYS = 14;
@@ -17,9 +22,20 @@ export const RECENCY_BOOST_DAYS = 14;
 export const RECENCY_BOOST_MAX = 0.05;
 
 // Candidates passed into the cross-encoder rerank pass; the pass scales
-// linearly in count and dominates retrieval wall time, so this caps PreToolUse
-// hook latency.
-export const RRF_TOP_FOR_RERANK = 20;
+// linearly in count and dominates retrieval wall time, so this caps hook
+// latency. Per-tier values: short-term is the hot recall path (called every
+// turn) so runs lean; long-term recall is rarer and operates on shorter
+// distilled facts so it can afford a deeper rerank.
+export const RRF_TOP_FOR_RERANK_SHORT = 5;
+export const RRF_TOP_FOR_RERANK_LONG = 10;
+
+// Per-candidate token-length threshold for the rerank length-bucketing policy
+// (see lib/models.js rerank()). Candidates with <THRESHOLD tokens go in the
+// "short" bucket, the rest in "long"; each bucket is forwarded as one padded
+// batch. Calibrated against gte-reranker-modernbert-base fp32/DML — the
+// crossover where padding waste from including a ~2k-token outlier among
+// ~500-token candidates starts dominating per-call ORT overhead.
+export const RERANK_BUCKET_THRESHOLD = 1000;
 
 // Subset of wrightward URGENT_TYPES (source of truth:
 // wrightward/lib/bus-schema.js) that opens a new exchange in the chunker.
@@ -201,8 +217,9 @@ export const MODEL_DAEMON_IDLE_EXIT_MS = 15 * 60 * 1000;
 // self-recycle (close socket → dispose models → exit; the next client
 // respawns via the lock election) — the only fully reliable reclaim.
 // Override with MINDWRIGHT_MODEL_DAEMON_RSS_MB. Default 8 GB: well above the
-// healthy resident set of bge-m3 + bge-reranker (a few GB with the arena
-// off) but far below the tens-of-GB pathology it guards against.
+// healthy resident set of bge-m3 + gte-reranker-modernbert-base (a few GB
+// with the arena off) but far below the tens-of-GB pathology it guards
+// against.
 export const MODEL_DAEMON_RSS_LIMIT_BYTES = (() => {
   const mb = Number(process.env.MINDWRIGHT_MODEL_DAEMON_RSS_MB);
   return Number.isFinite(mb) && mb > 0
@@ -246,3 +263,33 @@ export const NUDGE_STATES = Object.freeze({
   ARMED: 'armed',
   FIRED: 'fired',
 });
+
+// Pending rows whose owning session hasn't touched them in this long are
+// treated as orphan (the session crashed before its PreCompact/SessionEnd
+// flush). SessionStart in another session "consolidates" them — promotes them
+// to real short-term — instead of leaving them stranded in pending. Threshold
+// must be longer than typical parked-session windows (a /resume after lunch)
+// or a live session's pending bucket gets prematurely promoted; 30 min is the
+// default, tunable via MINDWRIGHT_ORPHAN_FLUSH_MIN.
+export const ORPHAN_FLUSH_THRESHOLD_MS = (() => {
+  const m = Number(process.env.MINDWRIGHT_ORPHAN_FLUSH_MIN);
+  return Number.isFinite(m) && m > 0
+    ? Math.floor(m) * 60 * 1000
+    : 30 * 60 * 1000;
+})();
+
+// Maximum age of a tool_use entry in the persisted toolMap (the buffer that
+// pairs a tool_use with its later tool_result for the tool_call chunk path).
+// A tool_use that never receives a paired tool_result — user-interrupted Bash,
+// killed session mid-tool, abandoned Agent subtask, MCP timeout, transcript
+// truncation between assistant turn and result — would otherwise leak
+// permanently into meta.tool_map:<sessionId>, growing unbounded across a long
+// session. 2 hours is well past every real tool's natural lifetime (Bash hard
+// caps at 10 min, Task subagents typically <30 min) but bounds the worst-case
+// leakage. Override with MINDWRIGHT_TOOL_MAP_TTL_MIN.
+export const TOOL_MAP_TTL_MS = (() => {
+  const m = Number(process.env.MINDWRIGHT_TOOL_MAP_TTL_MIN);
+  return Number.isFinite(m) && m > 0
+    ? Math.floor(m) * 60 * 1000
+    : 2 * 60 * 60 * 1000;
+})();

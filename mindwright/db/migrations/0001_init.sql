@@ -43,6 +43,18 @@ CREATE TABLE IF NOT EXISTS entries (
   -- can't block the backfill queue forever. mindwright_status surfaces the
   -- skipped count.
   embed_failures INTEGER NOT NULL DEFAULT 0,
+  -- Staging marker for short-tier rows captured live but not yet "in" memory.
+  -- NULL = real short-term (visible to retrieval, drain, all counts). NOT NULL
+  -- = pending: the row was captured by the hooks during this session
+  -- (`pending_session_id` = the live session id) and is held back from
+  -- retrieval/drain/cap so the just-typed prompt/thinking can't echo back as
+  -- its own recall hit. Promoted to NULL at PreCompact / SessionEnd by the
+  -- shared flush handler (lib/promote-pending.js) once the originating
+  -- session's context window is about to be lost — that's when memory
+  -- actually needs to know about it. The orphan-pending sweep at SessionStart
+  -- promotes rows whose owning session went stale (crashed before flushing)
+  -- so abandoned content still consolidates instead of stranding.
+  pending_session_id TEXT,
   -- Self-supersedes would corrupt audit traversal (a cycle of length 1).
   -- SQLite evaluates row-level CHECKs against the inserted/updated row's
   -- column values, so `supersedes <> id` is safe on modern SQLite.
@@ -95,6 +107,12 @@ CREATE INDEX IF NOT EXISTS idx_entries_active_created ON entries(active, created
 CREATE INDEX IF NOT EXISTS idx_entries_active_effective_ts
   ON entries(active, COALESCE(event_ts, created_at) DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_entries_embed_failures ON entries(embed_failures) WHERE embed_failures > 0;
+-- Partial index over the orphan-sweep lookup: SessionStart scans pending rows
+-- grouped by pending_session_id to find sessions whose latest row is older
+-- than ORPHAN_FLUSH_THRESHOLD_MS. The partial WHERE keeps the index size
+-- proportional to live pending volume, not the whole table.
+CREATE INDEX IF NOT EXISTS idx_entries_pending_session
+  ON entries(pending_session_id, created_at) WHERE pending_session_id IS NOT NULL;
 
 -- sqlite-vec virtual table. int8 quantization gives ~2.7x faster brute-force scan
 -- at 1024-dim vs float32. vec_index.rowid mirrors entries.id.
@@ -201,9 +219,14 @@ CREATE TABLE IF NOT EXISTS meta (
 -- needs to be exposed, add it to each view here (DB never created in prod —
 -- this file is edited in place, not migrated).
 -- Order matches the entries CREATE above for readability.
+-- `observations` excludes pending rows by design — pending content is held
+-- in `entries` for staging only; it must not surface in any "what's in
+-- short-term?" view. Promotion (lib/promote-pending.js) flips pending to
+-- NULL and the row appears here. The long-tier views never need the filter
+-- (consolidator output is always real, never pending).
 CREATE VIEW IF NOT EXISTS observations AS
   SELECT id, tier, category, scope, kind, content, source_ref, session_id, created_at, event_ts, supersedes, confidence, active
-  FROM entries WHERE tier='short' AND active=1;
+  FROM entries WHERE tier='short' AND active=1 AND pending_session_id IS NULL;
 CREATE VIEW IF NOT EXISTS facts AS
   SELECT id, tier, category, scope, kind, content, source_ref, session_id, created_at, event_ts, supersedes, confidence, active
   FROM entries WHERE tier='long' AND active=1;

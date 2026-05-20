@@ -227,8 +227,12 @@ test('model_cached / reranker_cached reflect the model-cache dir contents', () =
     assert.equal(out.model_cached, true, 'embedder dir present → model_cached=true');
     assert.equal(out.reranker_cached, false, 'reranker still missing → reranker_cached=false');
 
-    // Plant the reranker too.
-    plantModelCache(cacheDir, [['onnx-community', 'bge-reranker-v2-m3-ONNX']]);
+    // Plant the reranker too. Path must match RERANKER_MODEL_ID in
+    // lib/models.js (Alibaba-NLP/gte-reranker-modernbert-base) — a stale
+    // literal here (e.g. the old onnx-community/bge-reranker-v2-m3-ONNX)
+    // would silently keep the test green while real users see
+    // reranker_cached=false after the reranker swap.
+    plantModelCache(cacheDir, [['Alibaba-NLP', 'gte-reranker-modernbert-base']]);
     res = runStatus(projectDir, homeDir, cacheDir);
     out = JSON.parse(res.stdout.trim().split('\n').pop());
     assert.equal(out.model_cached, true);

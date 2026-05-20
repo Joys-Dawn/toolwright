@@ -44,23 +44,29 @@ export function drainBatch({
     // enter drain selection or the finalize cursor. It is NULL for live rows
     // and non-monotonic within a seeded batch, so ordering on it would corrupt
     // which rows drain/delete. ORDER BY stays (created_at ASC, id ASC).
-    const allShortTerm = sessionId
-      ? store.db.prepare(`
-          SELECT id, kind, content, session_id, created_at, event_ts
-            FROM entries
-           WHERE tier='short' AND active=1 AND session_id=?
-             AND id NOT IN (SELECT entry_id FROM drain_locks)
-           ORDER BY created_at ASC, id ASC
-           LIMIT ?
-        `).all(sessionId, DRAIN_MAX_ROWS)
-      : store.db.prepare(`
-          SELECT id, kind, content, session_id, created_at, event_ts
-            FROM entries
-           WHERE tier='short' AND active=1
-             AND id NOT IN (SELECT entry_id FROM drain_locks)
-           ORDER BY created_at ASC, id ASC
-           LIMIT ?
-        `).all(DRAIN_MAX_ROWS);
+    //
+    // `pending_session_id IS NULL` keeps live-staged rows out of the drain.
+    // Pending rows are tier='short' but not yet "in" memory; draining them
+    // would distill content the originating session still has live in
+    // context, doubling it as a long-tier fact while the same content is
+    // about to land as a normal short-term row at the next PreCompact.
+    //
+    // Session-scope is one optional predicate. Building the WHERE once
+    // avoids the drift hazard of two near-identical SQL bodies — any future
+    // filter change (a new column, an ORDER BY tweak) lands in exactly one
+    // place. better-sqlite3 caches prepared statements by SQL text, so the
+    // dynamic variant just becomes two distinct cache entries (same as the
+    // old ternary) without losing the preparation benefit.
+    const sessionFilter = sessionId ? ' AND session_id=?' : '';
+    const sessionParams = sessionId ? [sessionId] : [];
+    const allShortTerm = store.db.prepare(`
+      SELECT id, kind, content, session_id, created_at, event_ts
+        FROM entries
+       WHERE tier='short' AND active=1 AND pending_session_id IS NULL${sessionFilter}
+         AND id NOT IN (SELECT entry_id FROM drain_locks)
+       ORDER BY created_at ASC, id ASC
+       LIMIT ?
+    `).all(...sessionParams, DRAIN_MAX_ROWS);
 
     if (!allShortTerm.length) {
       return {
@@ -352,7 +358,11 @@ export function finalizeDrain({
   // cutoff tuple stays as defense-in-depth so a stale lock can't expand the
   // delete window past the original cutoff.
   const params = [drainId];
-  let where = "tier='short' AND active=1"
+  // pending_session_id IS NULL is defense-in-depth: drain_locks acquired in
+  // drainBatch already exclude pending (the SELECT filters it), so no
+  // pending row can hold a drain_locks row. Match the SELECT shape anyway in
+  // case a future caller seeds drain_locks from another path.
+  let where = "tier='short' AND active=1 AND pending_session_id IS NULL"
     + ' AND id IN (SELECT entry_id FROM drain_locks WHERE drain_id = ?)'
     + ' AND (created_at, id) <= (?, ?)';
   params.push(drainCutoff, cutoffIdBig);

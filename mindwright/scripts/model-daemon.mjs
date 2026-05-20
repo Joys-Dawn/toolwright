@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // mindwright machine-wide model daemon: ONE process per machine owns the
-// bge-m3 embedder + bge-reranker and serves embed/rerank to every session
+// bge-m3 embedder + gte-reranker-modernbert-base and serves embed/rerank to every session
 // across every project over a single fixed global socket — exactly one copy
 // of the multi-GB resident model set regardless of how many sessions are open.
 //

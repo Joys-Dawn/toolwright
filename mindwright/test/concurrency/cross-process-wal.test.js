@@ -144,12 +144,16 @@ test('daemon_dies_mid_write: hook completes its write with embedding=NULL when p
 
     const store = openStore();
     try {
-      const count = store.countShortTermFor(sessionId);
-      assert.ok(count >= 2, `chunks must still write under pipe-down; got ${count}`);
+      // Under pending-staging, flushed chunks land as PENDING (invisible to
+      // countShortTermFor by design). The contract is still "chunks land"
+      // — just in the pending bucket until PreCompact/SessionEnd promotes.
+      const count = store.countPendingFor(sessionId);
+      assert.ok(count >= 2, `chunks must still write under pipe-down (pending); got ${count}`);
       // Every freshly-inserted row for this session must have NO entry in
       // vec_index — i.e. embedding was deferred because the daemon was
       // unreachable. We query directly because pendingEmbedSweep returns
-      // {id, content} without session_id.
+      // {id, content} without session_id. tier='short' covers pending rows
+      // too (pending is a flag on top of the short tier, not a separate tier).
       const rows = store.db.prepare(`
         SELECT e.id, v.rowid AS vec_rowid
           FROM entries e
@@ -214,7 +218,11 @@ test('two_hooks_race_offsets: offset advances monotonically when two hooks race 
     try {
       const finalOffset = store.getOffset(sessionId);
       assert.equal(finalOffset, fileSize, `offset should be at EOF; got ${finalOffset}/${fileSize}`);
-      const count = store.countShortTermFor(sessionId);
+      // Under pending-staging, racing hooks both write into the PENDING
+      // bucket. countShortTermFor filters pending out; the contract being
+      // pinned (no row drops, bounded overshoot) is on total chunked rows,
+      // which is countPendingFor here.
+      const count = store.countPendingFor(sessionId);
       // Two hooks race over a 3-record transcript. Worst case: both hooks
       // see offset=0 and each writes all 3 records → 6 rows. Anything below
       // 3 means a record was dropped; anything above 6 means a regression
@@ -417,10 +425,14 @@ test('second_peer_writes: two peer sessions writing concurrently both land with 
 
     const store = openStore();
     try {
-      const countA = store.countShortTermFor('peerA');
-      const countB = store.countShortTermFor('peerB');
-      assert.ok(countA >= 2, `peerA rows expected ≥2; got ${countA}`);
-      assert.ok(countB >= 2, `peerB rows expected ≥2; got ${countB}`);
+      // Under pending-staging, flushTranscript writes to PENDING (not real
+      // short-term). The cross-session contract is unchanged: each peer's
+      // rows must land tagged with its own session_id — we just look in the
+      // pending bucket now.
+      const countA = store.countPendingFor('peerA');
+      const countB = store.countPendingFor('peerB');
+      assert.ok(countA >= 2, `peerA pending rows expected ≥2; got ${countA}`);
+      assert.ok(countB >= 2, `peerB pending rows expected ≥2; got ${countB}`);
       // Spot-check that the content under each session is from THAT session's transcript.
       const rowsA = store.db.prepare(
         "SELECT content FROM entries WHERE session_id=? AND tier='short'"

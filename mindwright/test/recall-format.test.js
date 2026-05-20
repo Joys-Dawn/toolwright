@@ -23,6 +23,11 @@ test('originOf classifies kinds into self / external / peer', () => {
   assert.equal(originOf('blocker'), 'peer');
   // outbound_send is the agent's OWN bus broadcast — classify as self, not peer.
   assert.equal(originOf('outbound_send'), 'self');
+  // tool_call is the paired tool_use+tool_result chunk from the agent's own
+  // transcript (Bash, Edit, Write, Read, etc.). origin=external would
+  // mislabel the agent's own past actions AND collapse multi-line Bash
+  // output to a single line via defang's safe-mode branch.
+  assert.equal(originOf('tool_call'), 'self');
   // User-typed retain kinds from /mindwright:retain — these run in the
   // user's own session, so they must be self-origin and keep their multi-
   // line structure when later recalled.

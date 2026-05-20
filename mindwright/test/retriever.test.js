@@ -75,7 +75,7 @@ test('returns ranked results above rerank_floor', async () => {
     });
     assert.ok(out.length >= 1);
     for (const r of out) {
-      assert.ok(r.rerank_score >= 0.10);
+      assert.ok(r.rerank_score >= 0.75);
     }
   });
 });
@@ -175,7 +175,7 @@ test('recency boost lifts very recent items only', async () => {
     const out = await retrieve({
       store, queryText: 'fact',
       embed: STUB_EMBED,
-      rerank: async (q, cs) => cs.map(() => 0.5), // tie before boost
+      rerank: async (q, cs) => cs.map(() => 0.9), // tie above floor; boost is the only tiebreaker
       options: { recencyBoostMax: 0.05, recencyBoostDays: 14 },
     });
     // Fresh fact should now beat old fact.
@@ -204,7 +204,7 @@ test('recency boost ranks on event_ts when present (a fresh-event_ts row beats a
     const out = await retrieve({
       store, queryText: 'fact',
       embed: STUB_EMBED,
-      rerank: async (q, cs) => cs.map(() => 0.5), // tie before boost
+      rerank: async (q, cs) => cs.map(() => 0.9), // tie above floor; boost is the only tiebreaker
       options: { recencyBoostMax: 0.05, recencyBoostDays: 14 },
     });
     // The recent-event_ts row must lead despite identical created_at.
@@ -238,7 +238,7 @@ test('a future-dated event_ts gets NO recency boost (clock-skew guard), not the 
     const out = await retrieve({
       store, queryText: 'fact',
       embed: STUB_EMBED,
-      rerank: async (q, cs) => cs.map(() => 0.5), // tie before boost
+      rerank: async (q, cs) => cs.map(() => 0.9), // tie above floor; boost is the only tiebreaker
       options: { recencyBoostMax: 0.05, recencyBoostDays: 14 },
     });
     // Pre-fix: futureSkewed got maxBoost (0.05) > genuinelyRecent's ~0.039
@@ -268,7 +268,7 @@ test('recency boost falls back to created_at when event_ts is NULL (zero-regress
     const out = await retrieve({
       store, queryText: 'fact',
       embed: STUB_EMBED,
-      rerank: async (q, cs) => cs.map(() => 0.5),
+      rerank: async (q, cs) => cs.map(() => 0.9), // tie above floor; boost is the only tiebreaker
       options: { recencyBoostMax: 0.05, recencyBoostDays: 14 },
     });
     assert.equal(out[0].content, 'fresh fact',
@@ -290,11 +290,90 @@ test('a fresh event_ts cannot resurrect a row whose raw rerank is below the floo
     const out = await retrieve({
       store, queryText: 'something unrelated',
       embed: STUB_EMBED,
-      rerank: STUB_RERANK_ALL_LOW, // every raw rerank below 0.10 floor
+      rerank: STUB_RERANK_ALL_LOW, // every raw rerank below 0.75 floor
       options: { recencyBoostMax: 0.05, recencyBoostDays: 14 },
     });
     assert.deepEqual(out, [],
       'fresh event_ts must not lift a sub-floor row over the abstention floor');
+  });
+});
+
+// Seed BOTH tiers with >10 rows so each tier-specific retrieve actually has
+// candidates to slice. Without this, a tier='short' query against a long-only
+// corpus would return [] before the spy ever ran, masking the rerank-cap
+// assertion.
+function seedBothTiers(store) {
+  for (let i = 0; i < 15; i++) {
+    store.insertEntry({
+      tier: 'long', category: 'fact', scope: 'project', kind: 'fact',
+      content: `long fact ${i} about tabs`, sessionId: 's',
+      embedding: unit(i + 1),
+    });
+    store.insertEntry({
+      tier: 'short', kind: 'thinking',
+      content: `short thought ${i} about tabs`, sessionId: 's',
+      embedding: unit(100 + i),
+    });
+  }
+}
+
+test('rrfTopForRerank defaults to 5 for tier=short / null (capping the per-turn rerank wall time)', async () => {
+  // The throttle on cross-encoder wall time for every hook turn. A regression
+  // that flipped the default to 10 would silently double rerank cost on
+  // every PreToolUse/UserPromptSubmit pass; a regression to 1 would starve
+  // recall to a single candidate. Seed enough rows in both tiers to exceed
+  // both defaults so the cap actually slices.
+  await withStore(async (store) => {
+    seedBothTiers(store);
+    let seenCount = -1;
+    const spy = async (q, cs) => { seenCount = cs.length; return cs.map(() => 0.9); };
+    // tier=null (default) → short cap (mixed-tier callers still pay the
+    // short-cap default; only an explicit tier='long' opts into the deeper
+    // rerank).
+    await retrieve({ store, queryText: 'tabs', embed: STUB_EMBED, rerank: spy });
+    assert.equal(seenCount, 5,
+      `tier=null must pass at most RRF_TOP_FOR_RERANK_SHORT (5) candidates to rerank, got ${seenCount}`);
+
+    // tier='short' → same cap.
+    seenCount = -1;
+    await retrieve({ store, queryText: 'tabs', tier: 'short', embed: STUB_EMBED, rerank: spy });
+    assert.equal(seenCount, 5,
+      `tier='short' must pass at most 5 candidates to rerank, got ${seenCount}`);
+  });
+});
+
+test('rrfTopForRerank defaults to 10 for tier=long (deeper rerank for the rarer long-tier path)', async () => {
+  await withStore(async (store) => {
+    seedBothTiers(store);
+    let seenCount = -1;
+    const spy = async (q, cs) => { seenCount = cs.length; return cs.map(() => 0.9); };
+    await retrieve({ store, queryText: 'tabs', tier: 'long', embed: STUB_EMBED, rerank: spy });
+    assert.equal(seenCount, 10,
+      `tier='long' must pass at most RRF_TOP_FOR_RERANK_LONG (10) candidates to rerank, got ${seenCount}`);
+  });
+});
+
+test('explicit options.rrfTopForRerank overrides the per-tier default for both tiers', async () => {
+  await withStore(async (store) => {
+    seedBothTiers(store);
+    let seenCount = -1;
+    const spy = async (q, cs) => { seenCount = cs.length; return cs.map(() => 0.9); };
+    // Explicit 3 — tighter than both tier defaults.
+    await retrieve({
+      store, queryText: 'tabs', tier: 'long',
+      embed: STUB_EMBED, rerank: spy, options: { rrfTopForRerank: 3 },
+    });
+    assert.equal(seenCount, 3,
+      `explicit options.rrfTopForRerank=3 must beat the tier=long default of 10, got ${seenCount}`);
+
+    // Same override from the short-tier path.
+    seenCount = -1;
+    await retrieve({
+      store, queryText: 'tabs', tier: 'short',
+      embed: STUB_EMBED, rerank: spy, options: { rrfTopForRerank: 3 },
+    });
+    assert.equal(seenCount, 3,
+      `explicit options.rrfTopForRerank=3 must beat the tier=short default of 5, got ${seenCount}`);
   });
 });
 
@@ -488,7 +567,7 @@ test('excludeIds filters self-echo rows (UPS / PreToolUse just-flushed prompt or
   // (or the assistant's just-emitted thinking) into short-term BEFORE
   // running retrieval. semanticSearch misses the new row (NULL embedding),
   // but bm25Search and temporalSearch surface it, and the cross-encoder
-  // scores (query, identical-candidate) ~1.0 — well above the 0.10 floor.
+  // scores (query, identical-candidate) ~1.0 — well above the 0.75 floor.
   // Without excludeIds, the user's own prompt echoes back as additionalContext.
   await withStore(async (store) => {
     // Plant a genuinely useful long-term hit AND the self-echo short-term row.

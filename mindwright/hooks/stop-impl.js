@@ -1,41 +1,27 @@
 #!/usr/bin/env node
 // Stop hook. Two jobs: (1) flush final transcript content from offset → EOF
-// (same chunker path as PreToolUse, no retrieval gate); (2) check the
-// consolidation trigger and, since Stop has no user-visible context surface,
-// stage a nudge for the next UserPromptSubmit to surface. On any error, exit
-// with `{}` so the session isn't disrupted.
+// (same chunker path as PreToolUse — chunks land in the pending bucket);
+// (2) run the AGE safety-net trigger (the cap trigger has moved to the
+// PreCompact/SessionEnd/orphan-sweep promote handler, since pending rows
+// don't count toward cap and the cap can only cross at promotion). Stop has
+// no user-visible context surface, so when age fires we stage a nudge for
+// the next UserPromptSubmit to surface. On any error, exit with `{}` so the
+// session isn't disrupted.
 
 import { readFileSync } from 'node:fs';
 import { openStore } from '../lib/store.js';
 import { flushTranscript } from '../lib/transcript-flush.js';
-import { evaluateNudgeTriggers, nudgeReason, suggestScopeAll } from '../lib/nudge.js';
+import { evaluateNudgeTriggers } from '../lib/nudge.js';
 import { logHookError } from '../lib/hook-log.js';
 import { NUDGE_STATES, CONSOLIDATOR_COMPLETION_GRACE_MS } from '../lib/constants.js';
 // isConsolidatorSession is the self-spawn guard: never spawn a consolidator
 // from inside a consolidator session (co-located with the sentinel it reads).
-import { spawnConsolidator, isConsolidatorSession } from '../lib/consolidator-spawn.js';
+import { isConsolidatorSession } from '../lib/consolidator-spawn.js';
 import { deriveHandle } from '../lib/handles.js';
-
-// Auto-spawn the background consolidator. Returns true on successful spawn.
-// While MINDWRIGHT_SEED_TRANSCRIPT=1, suspend auto-spawn and fall back to the
-// manual nudge: seed re-ingest from byte 0 doubles row counts and trips
-// capCrossed, so auto-spawning then would burn tokens deduplicating something
-// the user already knows is duplicated. Let the user control when dream runs.
-function trySpawnConsolidator(store, sessionId, triggers) {
-  if (process.env.MINDWRIGHT_SEED_TRANSCRIPT === '1') return false;
-  try {
-    const requesterHandle = deriveHandle(sessionId);
-    const r = spawnConsolidator({
-      requesterHandle,
-      reason: triggers.capCrossed ? 'cap_crossed' : 'age_crossed',
-      store,
-    });
-    return !!(r && r.ok === true);
-  } catch (e) {
-    logHookError('stop', 'spawnConsolidator failed', e);
-    return false;
-  }
-}
+// Spawn + nudge fallback semantics shared with lib/promote-pending.js — both
+// the age trigger (here) and the cap trigger (there) use the same seed-mode
+// guard, reason mapping, and nudge body format.
+import { trySpawnConsolidator, stagePendingNudge } from '../lib/spawn-or-nudge.js';
 
 // Reconciliation read: trySpawnConsolidator only confirms the OS accepted the
 // detached spawn, NOT that /mindwright:dream ran to completion. A completed
@@ -66,23 +52,24 @@ function spawnedConsolidatorNeverCompleted(store, sessionId, now = Date.now()) {
   }
 }
 
-function stagePendingNudge(store, sessionId, triggers) {
-  const reason = nudgeReason(triggers);
-  const ownN = store.countShortTermFor(sessionId);
-  const scopeHint = suggestScopeAll(ownN, triggers.n);
-  const tail = scopeHint
-    ? ` ${scopeHint}`
-    : ' Run /mindwright:dream when convenient to consolidate.';
-  store.setPendingNudge(sessionId, `mindwright: ${reason}.${tail}`);
-}
-
-// Cap check. Edge-trigger: fire the nudge the FIRST time short-term crosses
-// CAP_EXCHANGES, then stay quiet until the count drops below cap and a later
-// crossing re-arms it — without this gate the same nudge re-stages every turn.
-// When the session IS a consolidator, skip BOTH the spawn and the staged nudge
-// (the consolidator loop already runs dream; no user-facing surface) but still
-// run the nudge_state transitions so the gate re-arms if it leaves that role.
-function handleCapCheck(store, sessionId) {
+// Stop's safety-net checks. Two responsibilities:
+//
+//   1. Age FIRE — Stop is the sole owner of the age trigger. A project with
+//      promoted-but-never-distilled short-term rows still needs the safety
+//      net even if no /compact has happened in days; promote-pending.js
+//      can't catch that because promote sites are rare. Edge-triggered:
+//      fire once per crossing, re-arm only after clear.
+//   2. Reconcile (cap OR age) — detect silently-dead background
+//      consolidators regardless of WHICH trigger originally spawned them.
+//      Stop runs every turn, so users find out within ~one turn after the
+//      completion lease elapses. The cap-spawn site (promote-pending.js) is
+//      too infrequent to be the reconciler.
+//
+// Stop does NOT fire on cap — that's promote-pending.js's job at promotion
+// boundaries where the real short-term count actually changes. But Stop
+// still reads capCrossed to (a) gate the cross-trigger reconcile and (b)
+// avoid prematurely re-arming a FIRED state while cap is still tripping.
+function handleSafetyChecks(store, sessionId) {
   try {
     // Triggers AND nudge_state are both project-wide so quiet users with many
     // short sessions still get a nudge when total rows pile up, and a fired
@@ -90,36 +77,47 @@ function handleCapCheck(store, sessionId) {
     const triggers = evaluateNudgeTriggers(store);
     const state = store.getNudgeState();
 
-    if (triggers.capCrossed || triggers.ageCrossed) {
-      if (state !== NUDGE_STATES.FIRED) {
-        if (!isConsolidatorSession(store, sessionId)) {
-          // Auto-spawn first; fall back to the manual nudge if spawn refuses
-          // (seed mode) or fails.
-          if (!trySpawnConsolidator(store, sessionId, triggers)) {
-            stagePendingNudge(store, sessionId, triggers);
-          }
+    // Age FIRE — edge-triggered. Only Stop owns the age path.
+    if (triggers.ageCrossed && state !== NUDGE_STATES.FIRED) {
+      if (!isConsolidatorSession(store, sessionId)) {
+        // Auto-spawn first; fall back to the manual nudge if spawn refuses
+        // (seed mode) or fails.
+        if (!trySpawnConsolidator(store, sessionId, triggers, { logTag: 'stop' })) {
+          stagePendingNudge(store, sessionId, triggers, { logTag: 'stop' });
         }
-        // Always mark FIRED — anti-spam holds whether we spawned, nudged, or
-        // skipped both as the consolidator. The next cap-clear→cross re-arms.
-        store.setNudgeState(NUDGE_STATES.FIRED);
-      } else if (
-        !isConsolidatorSession(store, sessionId)
-        && spawnedConsolidatorNeverCompleted(store, sessionId)
-      ) {
-        // Auto-spawned consolidator died silently (lease elapsed, no
-        // consolidations row, still over trigger). Re-surface the manual
-        // nudge and re-arm so the next crossing retries instead of leaving
-        // the user blind behind a sticky FIRED. Bounded to ~one retry per
-        // lease window.
-        stagePendingNudge(store, sessionId, triggers);
-        store.setNudgeState(NUDGE_STATES.ARMED);
       }
-    } else if (state === NUDGE_STATES.FIRED) {
-      // Both conditions cleared — re-arm for the next trip.
+      // Always mark FIRED — anti-spam holds whether we spawned, nudged, or
+      // skipped both as the consolidator. The next age-clear→cross re-arms.
+      store.setNudgeState(NUDGE_STATES.FIRED);
+      return;
+    }
+
+    // Reconcile — covers BOTH cap-triggered and age-triggered spawns. A
+    // silently-dead consolidator (lease elapsed, no consolidations row, still
+    // tripping) gets the manual nudge re-surfaced and the state re-armed so
+    // the next crossing retries the spawn instead of leaving the user blind
+    // behind a sticky FIRED. Bounded to ~one retry per lease window.
+    if (
+      state === NUDGE_STATES.FIRED
+      && (triggers.capCrossed || triggers.ageCrossed)
+      && !isConsolidatorSession(store, sessionId)
+      && spawnedConsolidatorNeverCompleted(store, sessionId)
+    ) {
+      stagePendingNudge(store, sessionId, triggers, { logTag: 'stop' });
+      store.setNudgeState(NUDGE_STATES.ARMED);
+      return;
+    }
+
+    // Re-arm when BOTH conditions clear. Including capCrossed in the
+    // condition is necessary even though Stop doesn't own cap-firing: a
+    // prior cap-fire in promote-pending.js should stay FIRED until cap
+    // clears too, and Stop shouldn't accidentally reset state that the cap
+    // path still needs.
+    if (state === NUDGE_STATES.FIRED && !triggers.capCrossed && !triggers.ageCrossed) {
       store.setNudgeState(NUDGE_STATES.ARMED);
     }
   } catch (e) {
-    logHookError('stop', 'cap check failed', e);
+    logHookError('stop', 'safety check failed', e);
   }
 }
 
@@ -157,10 +155,12 @@ export async function main() {
       }
     }
 
-    // 2) Cap check. MINDWRIGHT_NUDGE=off skips the whole staging path
-    //    (no spawn, no nudge, no state-machine update).
+    // 2) Safety-net checks: age FIRE (Stop owns this) + cross-trigger
+    //    reconcile for silently-dead consolidators (cap OR age).
+    //    MINDWRIGHT_NUDGE=off skips the whole path. Cap FIRE lives in
+    //    lib/promote-pending.js now.
     if (process.env.MINDWRIGHT_NUDGE !== 'off') {
-      handleCapCheck(store, sessionId);
+      handleSafetyChecks(store, sessionId);
     }
   } finally {
     store.close();

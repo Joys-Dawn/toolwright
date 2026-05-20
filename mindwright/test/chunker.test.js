@@ -29,8 +29,26 @@ function loadLines(name) {
   return text.split('\n').filter((l) => l.length > 0);
 }
 
+// Track every mkdtempSync'd dir so a single process-exit cleanup removes
+// them all — without this, each `npm test` run leaked ~10 transient dirs
+// under os.tmpdir() (the suite's other helpers, e.g. sweeper.test.js's
+// withStore, already wrap in try/finally; this matches that hygiene without
+// rewriting all ten chunker call sites). `force: true` swallows the
+// already-deleted case; the listener is `once`-registered so multiple test
+// files importing this helper share a single cleanup.
+const _tmpFileDirs = new Set();
+let _tmpFileCleanupRegistered = false;
 function tmpFile(name, body) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mw-chunker-'));
+  _tmpFileDirs.add(dir);
+  if (!_tmpFileCleanupRegistered) {
+    _tmpFileCleanupRegistered = true;
+    process.on('exit', () => {
+      for (const d of _tmpFileDirs) {
+        try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best-effort */ }
+      }
+    });
+  }
   const p = path.join(dir, name);
   fs.writeFileSync(p, body);
   return p;
@@ -41,7 +59,7 @@ function tmpFile(name, body) {
 test('constants: numeric defaults match DESIGN.md', () => {
   assert.equal(RRF_K, 60);
   assert.equal(PER_RETRIEVER_N, 50);
-  assert.equal(RERANK_FLOOR, 0.10);
+  assert.equal(RERANK_FLOOR, 0.75);
   assert.equal(RECENCY_BOOST_DAYS, 14);
 });
 
@@ -96,11 +114,18 @@ test('KEEP outbound wrightward_send_message tool_use as outbound_send chunk', ()
   assert.equal(chunks[1].meta.audience, 'user');
 });
 
-test('DROP non-allowlisted assistant tool_use blocks (Edit / Bash)', () => {
-  const chunks = chunkTranscript(loadLines('blocklisted_tool_use.jsonl'));
-  // CLI prompt is kept; Edit + Bash blocks are dropped → only one chunk.
+test('Unpaired assistant tool_use blocks (no matching tool_result yet) buffer silently', () => {
+  // The fixture only has the assistant tool_use side; the tool_result for
+  // Edit/Bash never arrives. The chunker buffers the originating tool_use in
+  // the toolMap and emits NO standalone row — pairing IS the memory unit.
+  // The cli_prompt that came before is still emitted.
+  const toolMap = new Map();
+  const chunks = chunkTranscript(loadLines('blocklisted_tool_use.jsonl'), toolMap);
   assert.equal(chunks.length, 1);
   assert.equal(chunks[0].kind, 'cli_prompt');
+  // Both tool_use ids landed in the pending buffer for a future tool_result.
+  assert.equal(toolMap.get('toolu_EDIT1')?.name, 'Edit');
+  assert.equal(toolMap.get('toolu_BASH1')?.name, 'Bash');
 });
 
 test('KEEP each primary inbox event type', () => {
@@ -232,6 +257,271 @@ test('DROP isCompactSummary records but keep the user prompt that follows', () =
   assert.equal(chunks.length, 1);
   assert.equal(chunks[0].kind, 'cli_prompt');
   assert.equal(chunks[0].content, 'continue from where we left off');
+});
+
+// ----- fake-user-prompt filters --------------------------------------------
+// Claude Code emits several `user`-role records that aren't user input:
+// slash-command invocation blocks, their stdout, isMeta-tagged synthetics,
+// and Task-tool completion pings. Before this filter set, all of them were
+// stored as cli_prompt rows and polluted recall ("the user said /compact
+// then /context" etc.). Each test pins exactly one filter rule.
+
+test('DROP user record with isMeta=true (caveats, /context output, etc.)', () => {
+  const lines = [JSON.stringify({
+    type: 'user',
+    isMeta: true,
+    timestamp: '2026-05-13T01:00:00.000Z',
+    message: { role: 'user', content: '## Context Usage\n\n**Model:** ...' },
+  })];
+  assert.deepEqual(chunkTranscript(lines), []);
+});
+
+test('DROP <command-name> slash-command invocation user records', () => {
+  const lines = [JSON.stringify({
+    type: 'user',
+    timestamp: '2026-05-13T01:00:00.000Z',
+    message: { role: 'user', content: '<command-name>/compact</command-name>\n<command-message>compact</command-message>' },
+  })];
+  assert.deepEqual(chunkTranscript(lines), []);
+});
+
+test('DROP <command-message>-led slash-command invocations (no leading <command-name>)', () => {
+  // Some skill invocations start with <command-message> first (observed for
+  // agentwright:feature-planning, forgewright:workflow-run). The filter must
+  // catch this header too or those invocations leak through as cli_prompt.
+  const lines = [JSON.stringify({
+    type: 'user',
+    timestamp: '2026-05-13T01:00:00.000Z',
+    message: { role: 'user', content: '<command-message>agentwright:feature-planning</command-message>\n<command-name>/agentwright:feature-planning</command-name>' },
+  })];
+  assert.deepEqual(chunkTranscript(lines), []);
+});
+
+test('DROP <local-command-stdout> slash-command stdout user records', () => {
+  const lines = [JSON.stringify({
+    type: 'user',
+    timestamp: '2026-05-13T01:00:00.000Z',
+    message: { role: 'user', content: '<local-command-stdout>Auto-compact window set to 300k tokens</local-command-stdout>' },
+  })];
+  assert.deepEqual(chunkTranscript(lines), []);
+});
+
+test('DROP <task-notification> Task-tool completion pings', () => {
+  const lines = [JSON.stringify({
+    type: 'user',
+    timestamp: '2026-05-13T01:00:00.000Z',
+    origin: '{"kind":"task-notification"}',
+    message: { role: 'user', content: '<task-notification>\n<task-id>x</task-id>\n</task-notification>' },
+  })];
+  assert.deepEqual(chunkTranscript(lines), []);
+});
+
+test('KEEP a real prompt that happens to mention a filtered tag mid-content', () => {
+  // The filters are header-only (startsWith on the trimmed content). A real
+  // prompt quoting "<command-name>" in the body must still surface.
+  const lines = [JSON.stringify({
+    type: 'user',
+    timestamp: '2026-05-13T01:00:00.000Z',
+    message: { role: 'user', content: 'why does <command-name> show up in transcripts?' },
+  })];
+  const chunks = chunkTranscript(lines);
+  assert.equal(chunks.length, 1);
+  assert.equal(chunks[0].kind, 'cli_prompt');
+});
+
+// ----- tool_use + tool_result pairing --------------------------------------
+// Generic non-wrightward tool_use blocks buffer in the toolMap until the
+// matching tool_result arrives, at which point ONE tool_call chunk is emitted
+// carrying the originating tool_use input. Bash additionally includes the
+// raw result body (it's the only tool whose stdout/stderr regularly carries
+// embedding-sized semantic signal — test failures, build errors, etc.).
+// Every other tool's result body is dropped (the agent's next thinking block
+// has the interpretation).
+
+test('Paired Bash tool_use + tool_result → ONE tool_call chunk with input AND result body', () => {
+  const lines = [
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-05-13T01:00:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tu_bash_1', name: 'Bash', input: { command: 'npm test', description: 'run tests' } }],
+      },
+    }),
+    JSON.stringify({
+      type: 'user',
+      timestamp: '2026-05-13T01:00:05.000Z',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tu_bash_1', content: '5 tests failed:\n  ✗ retriever recency boost\n  ...' }],
+      },
+    }),
+  ];
+  const chunks = chunkTranscript(lines);
+  assert.equal(chunks.length, 1);
+  assert.equal(chunks[0].kind, 'tool_call');
+  assert.equal(chunks[0].meta.tool, 'Bash');
+  assert.equal(chunks[0].meta.tool_use_id, 'tu_bash_1');
+  assert.equal(chunks[0].meta.has_result, true);
+  assert.match(chunks[0].content, /^Bash input: /, 'content leads with `Bash input: <json>`');
+  assert.match(chunks[0].content, /"command":"npm test"/, 'input JSON carries the command verbatim');
+  assert.match(chunks[0].content, /Bash result: 5 tests failed/, 'result body is appended for Bash');
+  // The chunk inherits the originating tool_use's timestamp, not the result's.
+  assert.equal(chunks[0].timestamp, '2026-05-13T01:00:00.000Z');
+});
+
+test('Paired non-Bash tool_use + tool_result → tool_call chunk with input ONLY (no result body)', () => {
+  // Read's raw result body is the file contents — the agent already has them
+  // in its context, and embedding a file dump pollutes recall. The tool_use
+  // input (file_path) IS the durable memory.
+  const lines = [
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-05-13T01:00:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tu_read_1', name: 'Read', input: { file_path: '/Users/yiann/x.js' } }],
+      },
+    }),
+    JSON.stringify({
+      type: 'user',
+      timestamp: '2026-05-13T01:00:01.000Z',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tu_read_1', content: '// 200 lines of x.js content...' }],
+      },
+    }),
+  ];
+  const chunks = chunkTranscript(lines);
+  assert.equal(chunks.length, 1);
+  assert.equal(chunks[0].kind, 'tool_call');
+  assert.equal(chunks[0].meta.tool, 'Read');
+  assert.equal(chunks[0].meta.has_result, false);
+  assert.match(chunks[0].content, /^Read input: /);
+  assert.match(chunks[0].content, /"file_path":"\/Users\/yiann\/x\.js"/);
+  assert.ok(!chunks[0].content.includes('result:'), 'non-Bash tools must not emit a result section');
+});
+
+test('Pairing emits ONE chunk anchored to the tool_use timestamp, not the result', () => {
+  // The memory unit is "agent ACTED at time T". The result arrives later but
+  // doesn't change when the action happened. Recency-boost downstream relies
+  // on this — using the result timestamp would over-rank long-running tools.
+  const lines = [
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-05-13T01:00:00.000Z',
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_A', name: 'Bash', input: { command: 'ls' } }] },
+    }),
+    JSON.stringify({
+      type: 'user',
+      timestamp: '2026-05-13T01:05:00.000Z', // five minutes later
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_A', content: '...' }] },
+    }),
+  ];
+  const chunks = chunkTranscript(lines);
+  assert.equal(chunks.length, 1);
+  assert.equal(chunks[0].timestamp, '2026-05-13T01:00:00.000Z');
+});
+
+test('Cross-pass pairing: tool_use in pass 1, tool_result in pass 2 → tool_call still emits', () => {
+  // Real hooks see tool_use and tool_result in different passes. The toolMap
+  // is persisted via store.loadToolMap/saveToolMap between passes; here we
+  // simulate the same by reusing the JS Map across two chunkStreaming calls.
+  const assistantLine = JSON.stringify({
+    type: 'assistant',
+    timestamp: '2026-05-13T02:00:00.000Z',
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_x', name: 'Bash', input: { command: 'pwd' } }] },
+  }) + '\n';
+  const userLine = JSON.stringify({
+    type: 'user',
+    timestamp: '2026-05-13T02:00:01.000Z',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_x', content: '/tmp' }] },
+  }) + '\n';
+  const p = tmpFile('paired.jsonl', assistantLine);
+  const map = new Map();
+  const r1 = chunkStreaming(p, 0, map);
+  assert.equal(r1.chunks.length, 0, 'tool_use alone emits nothing');
+  assert.equal(map.get('tu_x')?.name, 'Bash', 'pending tool_use buffered');
+  // Append the result and chunk from the prior offset.
+  fs.appendFileSync(p, userLine);
+  const r2 = chunkStreaming(p, r1.newOffset, map);
+  assert.equal(r2.chunks.length, 1);
+  assert.equal(r2.chunks[0].kind, 'tool_call');
+  assert.match(r2.chunks[0].content, /Bash result: \/tmp/);
+  assert.equal(map.has('tu_x'), false, 'paired entry must be removed after emit');
+});
+
+test('Orphan tool_result (no matching tool_use in flight) is dropped silently', () => {
+  // No prior assistant tool_use → no toolMap entry → result has nothing to
+  // pair with. Drop rather than emit a half-record.
+  const lines = [JSON.stringify({
+    type: 'user',
+    timestamp: '2026-05-13T01:00:00.000Z',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_orphan', content: 'output' }] },
+  })];
+  assert.deepEqual(chunkTranscript(lines), []);
+});
+
+test('Wrightward outbound send still emits ONLY outbound_send (NOT also a paired tool_call)', () => {
+  // Double-capture regression: if wrightward_send_message ALSO buffered for
+  // pairing, the ack tool_result would emit a second tool_call row carrying
+  // duplicate body text. The outbound path short-circuits before the toolMap
+  // write to keep one-row-per-send.
+  const lines = [
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-05-13T01:00:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'tu_send_1',
+          name: 'mcp__plugin_wrightward_wrightward-bus__wrightward_send_message',
+          input: { body: 'hi from agent', audience: 'user' },
+        }],
+      },
+    }),
+    JSON.stringify({
+      type: 'user',
+      timestamp: '2026-05-13T01:00:00.500Z',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tu_send_1', content: '{"ok":true}' }],
+      },
+    }),
+  ];
+  const chunks = chunkTranscript(lines);
+  assert.equal(chunks.length, 1);
+  assert.equal(chunks[0].kind, 'outbound_send');
+  assert.equal(chunks[0].content, 'hi from agent');
+});
+
+test('Pairing supports tool_result content shaped as an array of text blocks (not just plain string)', () => {
+  // Claude Code sometimes wraps Bash output as `[{type:'text', text:'...'}]`
+  // (same multi-shape source as parseInboxEvents handles). The pairing path
+  // must read both shapes or array-shaped Bash results silently lose stdout.
+  const lines = [
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-05-13T01:00:00.000Z',
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_B', name: 'Bash', input: { command: 'echo hi' } }] },
+    }),
+    JSON.stringify({
+      type: 'user',
+      timestamp: '2026-05-13T01:00:01.000Z',
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'tu_B',
+          content: [{ type: 'text', text: 'hi\n' }],
+        }],
+      },
+    }),
+  ];
+  const chunks = chunkTranscript(lines);
+  assert.equal(chunks.length, 1);
+  assert.match(chunks[0].content, /Bash result: hi/);
 });
 
 // ----- chunk ordering / inbox-followed-by-thinking --------------------------
@@ -387,9 +677,12 @@ test('chunkStreaming persists tool_use_id→name across passes — inbox tool_re
   const toolMap = new Map();
   const first = chunkStreaming(p, 0, toolMap);
   // The tool_use is non-outbound so it produces no chunks, but the map MUST
-  // have recorded the id → name mapping for the next pass.
+  // have recorded the id → { name, input, … } object for the next pass.
   assert.equal(first.chunks.length, 0);
-  assert.equal(toolMap.get('toolu_LATE'), 'mcp__plugin_wrightward_wrightward-bus__wrightward_list_inbox');
+  assert.equal(
+    toolMap.get('toolu_LATE')?.name,
+    'mcp__plugin_wrightward_wrightward-bus__wrightward_list_inbox',
+  );
   // Second pass: tool_result is appended; offset advances from the first
   // pass's newOffset. The same map is reused.
   fs.appendFileSync(p, userLine);
@@ -571,10 +864,14 @@ test('Bare-tool-name matching handles both old and new MCP namespacing', () => {
 
 // ----- tool_result classification edge cases --------------------------------
 
-test('tool_result whose tool_use_id maps to a non-inbox tool is dropped', () => {
-  // Assistant calls a non-inbox tool (e.g. Read). The user record carrying
-  // that tool_result must NOT be parsed as inbox events even if its content
-  // happens to look JSON-shaped.
+test('tool_result whose tool_use_id maps to a non-inbox tool emits a paired tool_call (NEVER parsed as inbox events)', () => {
+  // Spoof-prevention regression: a tool_result for a non-inbox tool (e.g.
+  // Read) whose body happens to look like `{"events":[...]}` must NEVER be
+  // parsed as inbox events — otherwise a Read of a malicious file could
+  // inject fake handoff/finding/decision rows. The pairing path classifies
+  // by the originating tool's NAME (Read here), not by content shape: a
+  // non-Bash tool emits an input-only tool_call, and the spoofed events
+  // body is silently dropped along with every other non-Bash result body.
   const lines = [
     JSON.stringify({
       type: 'assistant',
@@ -616,7 +913,17 @@ test('tool_result whose tool_use_id maps to a non-inbox tool is dropped', () => 
     }),
   ];
   const chunks = chunkTranscript(lines);
-  assert.equal(chunks.length, 0);
+  assert.equal(chunks.length, 1, 'paired tool_call for Read');
+  assert.equal(chunks[0].kind, 'tool_call');
+  assert.equal(chunks[0].meta.tool, 'Read');
+  assert.equal(chunks[0].meta.has_result, false);
+  // The spoofed events body must NOT have leaked into the content.
+  assert.ok(!chunks[0].content.includes('should not appear'),
+    'non-Bash result body is dropped, including spoofed-event payloads');
+  // And no chunk with the spoofed kind was emitted.
+  for (const c of chunks) {
+    assert.notEqual(c.kind, 'handoff', 'spoofed inbox-event must never become a real chunk');
+  }
 });
 
 test('inbox tool_result with malformed inner JSON yields no chunks', () => {

@@ -35,7 +35,7 @@ const TOOL_DEFINITIONS = [
   {
     name: 'mindwright_recall',
     description:
-      'Run the TEMPR retrieval pipeline against this project\'s memory and return relevance-ranked hits. Returns `{results: []}` when nothing passes the rerank_floor (0.10) — handle the empty case explicitly, do not fabricate. By default role-scoped rows (scope LIKE "role:%") are filtered to the calling session\'s assigned roles (matching what the hook-based retrieval surfaces); pass `roles` to override (e.g. to debug what another role would see). Dedup-aware: results already injected into the calling session\'s additionalContext during this session are filtered out automatically.',
+      'Run the TEMPR retrieval pipeline against this project\'s memory and return relevance-ranked hits. Returns `{results: []}` when nothing passes the rerank_floor (0.75) — handle the empty case explicitly, do not fabricate. By default role-scoped rows (scope LIKE "role:%") are filtered to the calling session\'s assigned roles (matching what the hook-based retrieval surfaces); pass `roles` to override (e.g. to debug what another role would see). Dedup-aware: results already injected into the calling session\'s additionalContext during this session are filtered out automatically.',
     inputSchema: {
       type: 'object',
       properties: {

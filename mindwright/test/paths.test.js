@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   embedderCached,
+  rerankerCached,
   projectSlug,
   claudeProjectsDir,
   transcriptsDir,
@@ -16,6 +17,7 @@ import {
   pluginDataDir,
   PLUGIN_ROOT,
 } from '../lib/paths.js';
+import { RERANKER_MODEL_ID } from '../lib/models.js';
 
 test('embedderCached returns true under MINDWRIGHT_USE_STUB_MODELS=1', () => {
   const prevStub = process.env.MINDWRIGHT_USE_STUB_MODELS;
@@ -63,6 +65,50 @@ test('embedderCached returns true when the bge-m3 dir is present (planted) and s
     assert.equal(embedderCached(), true);
   } finally {
     if (prevStub !== undefined) process.env.MINDWRIGHT_USE_STUB_MODELS = prevStub;
+    if (prevCacheDir === undefined) delete process.env.MINDWRIGHT_MODEL_CACHE_DIR;
+    else process.env.MINDWRIGHT_MODEL_CACHE_DIR = prevCacheDir;
+    rmSync(cacheDir, { recursive: true, force: true });
+  }
+});
+
+test('rerankerCached probes the directory matching RERANKER_MODEL_ID (load and probe agree)', () => {
+  // The load (lib/models.js) and the probe (lib/paths.js) MUST resolve to
+  // the same cache dir or status reports "cached" while load triggers a
+  // multi-GB redownload — exactly the migration-state lie behavior-2
+  // caught. Pin them together: derive the dirs from RERANKER_MODEL_ID's
+  // <org>/<name> shape and assert the probe sees them.
+  const [org, name] = RERANKER_MODEL_ID.split('/');
+  assert.ok(org && name, `RERANKER_MODEL_ID must split into org/name, got ${RERANKER_MODEL_ID}`);
+  const prevStub = process.env.MINDWRIGHT_USE_STUB_MODELS;
+  const prevCacheDir = process.env.MINDWRIGHT_MODEL_CACHE_DIR;
+  const cacheDir = mkdtempSync(join(tmpdir(), 'mw-paths-reranker-'));
+  process.env.MINDWRIGHT_MODEL_CACHE_DIR = cacheDir;
+  delete process.env.MINDWRIGHT_USE_STUB_MODELS;
+  try {
+    // Empty cache → false.
+    assert.equal(rerankerCached(), false);
+    // Plant the dir transformers.js writes to → true.
+    mkdirSync(join(cacheDir, org, name), { recursive: true });
+    assert.equal(rerankerCached(), true);
+  } finally {
+    if (prevStub !== undefined) process.env.MINDWRIGHT_USE_STUB_MODELS = prevStub;
+    if (prevCacheDir === undefined) delete process.env.MINDWRIGHT_MODEL_CACHE_DIR;
+    else process.env.MINDWRIGHT_MODEL_CACHE_DIR = prevCacheDir;
+    rmSync(cacheDir, { recursive: true, force: true });
+  }
+});
+
+test('rerankerCached returns true under MINDWRIGHT_USE_STUB_MODELS=1 (mirrors embedderCached)', () => {
+  const prevStub = process.env.MINDWRIGHT_USE_STUB_MODELS;
+  const prevCacheDir = process.env.MINDWRIGHT_MODEL_CACHE_DIR;
+  const cacheDir = mkdtempSync(join(tmpdir(), 'mw-paths-reranker-stub-'));
+  process.env.MINDWRIGHT_MODEL_CACHE_DIR = cacheDir;
+  process.env.MINDWRIGHT_USE_STUB_MODELS = '1';
+  try {
+    assert.equal(rerankerCached(), true);
+  } finally {
+    if (prevStub === undefined) delete process.env.MINDWRIGHT_USE_STUB_MODELS;
+    else process.env.MINDWRIGHT_USE_STUB_MODELS = prevStub;
     if (prevCacheDir === undefined) delete process.env.MINDWRIGHT_MODEL_CACHE_DIR;
     else process.env.MINDWRIGHT_MODEL_CACHE_DIR = prevCacheDir;
     rmSync(cacheDir, { recursive: true, force: true });

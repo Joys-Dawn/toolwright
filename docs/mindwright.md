@@ -2,7 +2,7 @@
 
 > Per-agent memory and cross-session learning for Claude Code multi-agent setups. Each session quietly accumulates short-term observations as you work, then — automatically or on demand — distills them into long-term facts (preferences, conventions, role know-how, lessons learned). Future prompts pull from that memory by relevance; nothing is dumped at session start, nothing irrelevant is injected.
 
-**Version**: 0.3.1 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/mindwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/mindwright/README.md)
+**Version**: 0.4.0 · [Source](https://github.com/Joys-Dawn/toolwright/tree/master/mindwright) · [README](https://github.com/Joys-Dawn/toolwright/blob/master/mindwright/README.md)
 
 ## Install
 
@@ -21,7 +21,7 @@ Requires **Node.js ≥ 20**. Ships native npm dependencies (`better-sqlite3`, `s
 
 ### Model supply-chain trust
 
-`/mindwright:setup` downloads two ONNX models from Hugging Face — `Xenova/bge-m3` (embedder) and `onnx-community/bge-reranker-v2-m3-ONNX` (cross-encoder). They run inside ONNX Runtime in a single machine-wide model daemon (one process per machine, shared by every session and project), so a tampered model could in principle exfiltrate query text or bias retrieval. The download is HTTPS to Hugging Face's CDN — the trust root is HF infrastructure plus your system CA bundle. If your threat model includes a CA compromise or DNS hijack on the install machine, fetch the models manually on a trusted host, copy them into `~/.cache/huggingface/hub/`, and skip `/mindwright:setup` (the model daemon picks up the on-disk cache). Model revision hashes are not pinned; an upstream update is picked up on the next setup.
+`/mindwright:setup` downloads two ONNX models from Hugging Face — `Xenova/bge-m3` (embedder) and `Alibaba-NLP/gte-reranker-modernbert-base` (cross-encoder). They run inside ONNX Runtime in a single machine-wide model daemon (one process per machine, shared by every session and project), so a tampered model could in principle exfiltrate query text or bias retrieval. The download is HTTPS to Hugging Face's CDN — the trust root is HF infrastructure plus your system CA bundle. If your threat model includes a CA compromise or DNS hijack on the install machine, fetch the models manually on a trusted host, copy them into the model cache (`${CLAUDE_PLUGIN_DATA}/model-cache`, overridable with `MINDWRIGHT_MODEL_CACHE_DIR`, laid out as `<org>/<name>/`), and skip `/mindwright:setup` (the model daemon picks up the on-disk cache). Model revision hashes are not pinned; an upstream update is picked up on the next setup.
 
 ## What you'll notice
 
@@ -95,7 +95,7 @@ Defaults are baked into `lib/constants.js`. There is no config file — to chang
 | `cap_exchanges` | 50 | Short-term row count that surfaces the "time to dream" hint. Raise on quiet projects; lower if you want long-term hotter. |
 | `drain_pct` | 0.70 | Fraction of oldest short-term rows consumed per dream. |
 | `safety_net_days` | 3 | Surfaces the same nudge when any short-term row is older than this — catches quiet sessions that never cross the row-count cap. |
-| `rerank_floor` | 0.10 | Cross-encoder sigmoid score below which a retrieval candidate is dropped. |
+| `rerank_floor` | 0.75 | Cross-encoder sigmoid score below which a retrieval candidate is dropped. Calibrated against `gte-reranker-modernbert-base` — its score distribution is narrower than the older bge-reranker's, so the floor sits much higher than the legacy 0.10. |
 | `recency_boost_days` | 14 | Recent rows get an additive boost on the semantic path (ordering only — the abstention floor still applies). |
 
 ### Environment variables
@@ -125,7 +125,7 @@ Each is read at hook-firing time, so toggling mid-session works on the next even
 └── tickets/                            # transient session-id files (SessionStart writes; scripts + liveness read)
 ```
 
-**`.claude/mindwright/` should be gitignored.** Mirrors regenerate on every consolidation, and tracking the DB pollutes diffs. Models cache to `~/.cache/huggingface/hub/` — they survive `/mindwright:reset` and project-level cleanup.
+**`.claude/mindwright/` should be gitignored.** Mirrors regenerate on every consolidation, and tracking the DB pollutes diffs. Models cache to `${CLAUDE_PLUGIN_DATA}/model-cache/` (overridable with `MINDWRIGHT_MODEL_CACHE_DIR`) — they survive `/mindwright:reset` and project-level cleanup.
 
 ## Cost
 
@@ -138,7 +138,7 @@ Each is read at hook-firing time, so toggling mid-session works on the next even
 
 Every prompt, tool call, and reasoning block writes a short-term row (local SQLite, ~10 ms per write — no network). Inbound peer messages and Discord events from wrightward are captured too.
 
-The prompt text and each thinking block are embedded and compared against the previous retrieval's query embedding via cosine similarity. If similarity exceeds the novelty threshold (`0.85`), retrieval is skipped — no fresh injection of nearly-identical context. Otherwise the embedding becomes the retrieval query, mindwright pulls top-K candidates (K scales with query length: 3 / 5 / 8), filters against a per-session `injected_fact_ids` set so the same fact never re-injects, and the cross-encoder drops anything below the `0.10` sigmoid floor; if nothing survives, you see nothing.
+The prompt text and each thinking block are embedded and compared against the previous retrieval's query embedding via cosine similarity. If similarity exceeds the novelty threshold (`0.85`), retrieval is skipped — no fresh injection of nearly-identical context. Otherwise the embedding becomes the retrieval query, mindwright pulls top-K candidates (K scales with query length: 3 / 5 / 8), filters against a per-session `injected_fact_ids` set so the same fact never re-injects, and the cross-encoder drops anything below the `0.75` sigmoid floor (calibrated for `gte-reranker-modernbert-base`); if nothing survives, you see nothing.
 
 When you run `/mindwright:dream`, the calling session reads the oldest 70% of short-term in exchange-grouped batches, distills durable facts in its own context, categorizes each, marks contradictions against existing long-term, and writes the result through deterministic helper commands (`node scripts/mindwright.mjs <tool>`, the path every memory skill uses — there is no MCP server). The whole loop is reversible until the `finalize_drain` call that hard-deletes the consumed rows.
 

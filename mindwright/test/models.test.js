@@ -93,69 +93,75 @@ test('_loadEmbedderWithFallback propagates errors when both dtypes fail', async 
   }
 });
 
-// ---------- network-free: reranker dtype fallback ----------
+// ---------- network-free: reranker device fallback ----------
+// gte-reranker-modernbert-base ships only fp32 ONNX for our purposes (q8 works
+// but is slower than fp32/DML, and fp16/DML is silently broken — every logit
+// collapses to ~0). The loader therefore tries fp32 on DirectML and falls
+// back to fp32/CPU when DML is unavailable.
 
-test('_loadRerankerWithFallback returns dtype=q8 when q8 load succeeds', async () => {
+test('_loadRerankerWithFallback returns device=dml when DML load succeeds', async () => {
   const calls = [];
   const stubModel = { _tag: 'stub-model' };
   const stubTok = { _tag: 'stub-tok' };
   const modelFn = async (modelId, opts) => {
-    calls.push({ kind: 'model', modelId, dtype: opts && opts.dtype });
+    calls.push({ kind: 'model', modelId, dtype: opts && opts.dtype, device: opts && opts.device });
     return stubModel;
   };
   const tokenizerFn = async (modelId) => {
     calls.push({ kind: 'tokenizer', modelId });
     return stubTok;
   };
-  const { model, tokenizer, dtype } = await _loadRerankerWithFallback(modelFn, tokenizerFn, 'fake/reranker');
+  const { model, tokenizer, dtype, device } = await _loadRerankerWithFallback(modelFn, tokenizerFn, 'fake/reranker');
   assert.equal(model, stubModel);
   assert.equal(tokenizer, stubTok);
-  assert.equal(dtype, 'q8');
-  // q8 model attempt + 1 tokenizer attempt, no fp16 fallback.
+  assert.equal(dtype, 'fp32');
+  assert.equal(device, 'dml');
+  // One DML model attempt + one tokenizer attempt; no CPU fallback fired.
   const modelCalls = calls.filter((c) => c.kind === 'model');
   assert.equal(modelCalls.length, 1);
-  assert.equal(modelCalls[0].dtype, 'q8');
+  assert.equal(modelCalls[0].dtype, 'fp32');
+  assert.equal(modelCalls[0].device, 'dml');
 });
 
-test('_loadRerankerWithFallback falls back to fp16 when q8 load fails (missing model_quantized.onnx)', async () => {
+test('_loadRerankerWithFallback falls back to device=cpu when DML load fails (no DirectML)', async () => {
   const calls = [];
-  const fp16Model = { _tag: 'fp16-model' };
+  const cpuModel = { _tag: 'cpu-model' };
   const stubTok = { _tag: 'stub-tok' };
   const modelFn = async (modelId, opts) => {
-    calls.push({ modelId, dtype: opts && opts.dtype });
-    if (opts && opts.dtype === 'q8') {
-      const err = new Error(
-        'Could not locate file "https://huggingface.co/fake/reranker/resolve/main/onnx/model_quantized.onnx"'
-      );
-      err.name = 'AggregateError';
+    calls.push({ modelId, dtype: opts && opts.dtype, device: opts && opts.device });
+    if (opts && opts.device === 'dml') {
+      // Mirrors the kind of error ORT raises when the DML EP is missing from
+      // the build, or when the platform driver isn't present.
+      const err = new Error('DmlExecutionProvider is not registered with this build');
       throw err;
     }
-    return fp16Model;
+    return cpuModel;
   };
   const tokenizerFn = async () => stubTok;
   const originalWarn = console.warn;
   const warnings = [];
   console.warn = (...args) => warnings.push(args.join(' '));
   try {
-    const { model, tokenizer, dtype } = await _loadRerankerWithFallback(modelFn, tokenizerFn, 'fake/reranker');
-    assert.equal(model, fp16Model);
+    const { model, tokenizer, dtype, device } = await _loadRerankerWithFallback(modelFn, tokenizerFn, 'fake/reranker');
+    assert.equal(model, cpuModel);
     assert.equal(tokenizer, stubTok);
-    assert.equal(dtype, 'fp16');
+    assert.equal(dtype, 'fp32');
+    assert.equal(device, 'cpu');
     assert.equal(calls.length, 2);
-    assert.equal(calls[0].dtype, 'q8');
-    assert.equal(calls[1].dtype, 'fp16');
+    assert.equal(calls[0].device, 'dml');
+    assert.equal(calls[1].device, 'cpu');
     assert.ok(
-      warnings.some((w) => w.includes("dtype='q8'") && w.includes("dtype='fp16'")),
-      `expected q8→fp16 fallback warning, got: ${JSON.stringify(warnings)}`,
+      warnings.some((w) => w.includes('DirectML') && w.includes('fp32/CPU')),
+      `expected a DML→CPU fallback warning, got: ${JSON.stringify(warnings)}`,
     );
   } finally {
     console.warn = originalWarn;
   }
 });
 
-test('_loadRerankerWithFallback propagates errors when both dtypes fail', async () => {
+test('_loadRerankerWithFallback propagates errors when both DML and CPU fail', async () => {
   const modelFn = async (_modelId, opts) => {
-    throw new Error(`reranker load failed for dtype=${opts && opts.dtype}`);
+    throw new Error(`reranker load failed for device=${opts && opts.device}`);
   };
   const tokenizerFn = async () => ({ _tag: 'tok' });
   const originalWarn = console.warn;
@@ -163,7 +169,7 @@ test('_loadRerankerWithFallback propagates errors when both dtypes fail', async 
   try {
     await assert.rejects(
       _loadRerankerWithFallback(modelFn, tokenizerFn, 'fake/reranker'),
-      /reranker load failed for dtype=fp16/,
+      /reranker load failed for device=cpu/,
     );
   } finally {
     console.warn = originalWarn;
@@ -204,11 +210,11 @@ test('_loadEmbedderWithFallback keeps the arena disabled on the fp16 fallback pa
   for (const so of seen) assert.deepEqual(so, { enableCpuMemArena: false });
 });
 
-test('_loadRerankerWithFallback disables the ONNX CPU arena on both dtype paths', async () => {
+test('_loadRerankerWithFallback disables the ONNX CPU arena on both device paths', async () => {
   const seen = [];
   const modelFn = async (_modelId, o) => {
     seen.push(o.session_options);
-    if (o.dtype === 'q8') throw new Error('no model_quantized.onnx shipped');
+    if (o.device === 'dml') throw new Error('no DirectML EP in this ORT build');
     return { _tag: 'm' };
   };
   const tokenizerFn = async () => ({ _tag: 't' });
@@ -219,7 +225,7 @@ test('_loadRerankerWithFallback disables the ONNX CPU arena on both dtype paths'
   } finally {
     console.warn = origWarn;
   }
-  assert.equal(seen.length, 2, 'q8 attempt + fp16 fallback');
+  assert.equal(seen.length, 2, 'DML attempt + CPU fallback');
   for (const so of seen) assert.deepEqual(so, { enableCpuMemArena: false });
 });
 
@@ -320,7 +326,7 @@ test('disposeModels is a safe, idempotent no-op when nothing is loaded', async (
 });
 
 // ---------- real model behavior (always runs; pulls ~5 GB if cache cold) ----------
-// These exercise the real bge-m3 + bge-reranker pipeline end to end.
+// These exercise the real bge-m3 + gte-reranker-modernbert-base pipeline end to end.
 
 test(
   'embed("hello") returns one Float32Array of dim EMBEDDING_DIM, unit-normalized',
@@ -436,6 +442,119 @@ test(
     );
   }
 );
+
+// ---------- network-free: rerank 2-bucket batching ----------
+// rerank() must split candidates at RERANK_BUCKET_THRESHOLD into a short
+// bucket (<THRESHOLD) and a long bucket (>=THRESHOLD), forward each as one
+// padded batch, and write logits back at their ORIGINAL candidate indices so
+// the caller's order is preserved across the split.
+
+test('rerank: 2-bucket batching forwards each non-empty bucket once and preserves input order', async () => {
+  _resetForTesting();
+  // Stub tokenizer: treats each candidate's string length as its token count.
+  // Returns the {input_ids:{dims:[batch, max_len]}} shape rerank() reads.
+  const stubTokenizer = (queries, opts) => {
+    const cands = (opts && opts.text_pair) || [];
+    const lens = cands.map((c) => c.length);
+    const maxLen = lens.length ? Math.max(...lens) : 0;
+    return {
+      input_ids: { dims: [cands.length, maxLen], data: new BigInt64Array(cands.length * maxLen) },
+      attention_mask: { dims: [cands.length, maxLen], data: new BigInt64Array(cands.length * maxLen) },
+    };
+  };
+  const modelCalls = [];
+  // Stub model: records each forward (batch_size, padded_seq_len) and returns
+  // a deterministic logit = batch index, so we can verify reorder-by-index.
+  const stubModel = async (inputs) => {
+    const [batch, seqLen] = inputs.input_ids.dims;
+    modelCalls.push({ batch, seqLen });
+    const data = new Float32Array(batch);
+    for (let i = 0; i < batch; i++) data[i] = i; // 0, 1, 2, ...
+    return { logits: { data } };
+  };
+  // Seed the loader cache so rerank() picks up our stubs.
+  await getReranker({ _modelFn: async () => stubModel, _tokenizerFn: async () => stubTokenizer });
+
+  // Build candidates straddling the 1000-token threshold: indices 0, 2 are
+  // "long" (string length 1500 / 2000); 1, 3 are "short" (length 200 / 400).
+  // The two buckets force two distinct forwards.
+  const candidates = [
+    'L'.repeat(1500), // index 0 → long bucket
+    'S'.repeat(200),  // index 1 → short bucket
+    'L'.repeat(2000), // index 2 → long bucket
+    'S'.repeat(400),  // index 3 → short bucket
+  ];
+  const scores = await rerank('query', candidates);
+
+  // Exactly two model invocations: one per non-empty bucket.
+  assert.equal(modelCalls.length, 2, `expected 2 forwards (one per bucket), got ${modelCalls.length}`);
+
+  // Each bucket padded to its OWN bucket max, never to the global max.
+  const shortCall = modelCalls.find((c) => c.batch === 2 && c.seqLen === 400);
+  const longCall  = modelCalls.find((c) => c.batch === 2 && c.seqLen === 2000);
+  assert.ok(shortCall, `short bucket should forward batch=2 padded to 400, got ${JSON.stringify(modelCalls)}`);
+  assert.ok(longCall,  `long bucket should forward batch=2 padded to 2000, got ${JSON.stringify(modelCalls)}`);
+
+  // Scores: input order must be preserved across the split. Each bucket's
+  // stub returns logits [0, 1] so the post-sigmoid score for the FIRST entry
+  // in each bucket is sigmoid(0)=0.5 and the SECOND is sigmoid(1)≈0.7311.
+  // Long bucket holds (in order) original indices [0, 2]; short bucket [1, 3].
+  // So scores[0]=sigmoid(0), scores[2]=sigmoid(1), scores[1]=sigmoid(0),
+  // scores[3]=sigmoid(1).
+  assert.equal(scores.length, 4);
+  assert.ok(Math.abs(scores[0] - 0.5) < 1e-6, `scores[0] (long-bucket idx 0) should be sigmoid(0)=0.5, got ${scores[0]}`);
+  assert.ok(Math.abs(scores[1] - 0.5) < 1e-6, `scores[1] (short-bucket idx 0) should be sigmoid(0)=0.5, got ${scores[1]}`);
+  assert.ok(Math.abs(scores[2] - 1 / (1 + Math.exp(-1))) < 1e-6, `scores[2] (long-bucket idx 1) should be sigmoid(1), got ${scores[2]}`);
+  assert.ok(Math.abs(scores[3] - 1 / (1 + Math.exp(-1))) < 1e-6, `scores[3] (short-bucket idx 1) should be sigmoid(1), got ${scores[3]}`);
+  _resetForTesting();
+});
+
+test('rerank: all candidates below threshold forwards a single short-bucket batch', async () => {
+  _resetForTesting();
+  const stubTokenizer = (queries, opts) => {
+    const cands = (opts && opts.text_pair) || [];
+    const lens = cands.map((c) => c.length);
+    const maxLen = lens.length ? Math.max(...lens) : 0;
+    return {
+      input_ids: { dims: [cands.length, maxLen], data: new BigInt64Array(cands.length * maxLen) },
+      attention_mask: { dims: [cands.length, maxLen], data: new BigInt64Array(cands.length * maxLen) },
+    };
+  };
+  const modelCalls = [];
+  const stubModel = async (inputs) => {
+    const [batch] = inputs.input_ids.dims;
+    modelCalls.push({ batch, seqLen: inputs.input_ids.dims[1] });
+    return { logits: { data: new Float32Array(batch).fill(0) } };
+  };
+  await getReranker({ _modelFn: async () => stubModel, _tokenizerFn: async () => stubTokenizer });
+  const scores = await rerank('q', ['a'.repeat(100), 'b'.repeat(200), 'c'.repeat(500)]);
+  assert.equal(modelCalls.length, 1, 'only short bucket non-empty -> single forward');
+  assert.equal(modelCalls[0].batch, 3);
+  assert.equal(modelCalls[0].seqLen, 500, 'short bucket padded to its own max (500), not threshold');
+  assert.equal(scores.length, 3);
+  _resetForTesting();
+});
+
+test('rerank: throws when a bucket returns fewer logits than candidates', async () => {
+  _resetForTesting();
+  const stubTokenizer = (queries, opts) => {
+    const cands = (opts && opts.text_pair) || [];
+    const maxLen = cands.length ? Math.max(...cands.map((c) => c.length)) : 0;
+    return {
+      input_ids: { dims: [cands.length, maxLen], data: new BigInt64Array(cands.length * maxLen) },
+      attention_mask: { dims: [cands.length, maxLen], data: new BigInt64Array(cands.length * maxLen) },
+    };
+  };
+  // Model returns only one logit no matter the batch — emulates a malformed
+  // response that previously slipped past `score >= floor` as NaN-then-drop.
+  const stubModel = async () => ({ logits: { data: new Float32Array([0.42]) } });
+  await getReranker({ _modelFn: async () => stubModel, _tokenizerFn: async () => stubTokenizer });
+  await assert.rejects(
+    rerank('q', ['x'.repeat(100), 'y'.repeat(200)]),
+    /returned 1 logits/,
+  );
+  _resetForTesting();
+});
 
 // ---------- network-free: argument validation ----------
 

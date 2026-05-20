@@ -6,13 +6,25 @@
 // pay the ONNX cold-load themselves.
 //
 // Embedder: Xenova/bge-m3, dtype q8 with fp16 fallback when q8 is missing.
-// Reranker: onnx-community/bge-reranker-v2-m3-ONNX, dtype q8 with fp16
-//   fallback. We explicitly opt into a single-file quantized variant because
-//   the upstream repo's default `model.onnx` is a 657 KB graph stub paired
-//   with a 2.27 GB `model.onnx_data` sidecar that transformers.js only fetches
-//   with `use_external_data_format: true`. Without the dtype hint the load
-//   completes with a missing sidecar and ONNX-runtime fails at first
-//   inference. Raw logits → manual sigmoid (the ONNX port omits sigmoid).
+//   q8 on CPU is intentional — DML embed regressed ~37% in benchmarking
+//   because the query is a batch-of-1 (no GPU parallelism win), and each new
+//   query length triggers a fresh DML/ORT shape compile.
+//
+// Reranker: Alibaba-NLP/gte-reranker-modernbert-base, dtype fp32 on DirectML
+//   with fp32/CPU fallback when DML is unavailable. Why fp32: q8/DML works
+//   but is ~12% slower than fp32/DML; fp16/DML is silently broken for
+//   ModernBERT on the current ORT+DML stack — every logit collapses to ~0
+//   (sigmoid 0.499) because the model's attention-mask "mask-out" constant
+//   overflows the fp16 range and DML doesn't upcast like CPU EP does. Same
+//   pattern reported for Gemma 3 fp16 on WebGPU (microsoft/onnxruntime#26732)
+//   and for BERT-family fp16 ONNX more broadly. fp32 sidesteps both.
+//   Raw logits → manual sigmoid (the ONNX port omits sigmoid).
+//
+// Rerank batching: candidates are split into two length-buckets at
+// RERANK_BUCKET_THRESHOLD (1000 tokens); each non-empty bucket forwards as
+// one padded batch. On the local six-query corpus this delivers ~5.5x vs
+// the prior bge-reranker q8/DML baseline, and ~1.6x vs naive batch-everything
+// on gte itself.
 
 // transformers.js resolved from the persistent node_modules via
 // lib/native-require.js. createRequire().resolve() picks the `require`
@@ -24,7 +36,7 @@ import { loadNativeDefault } from './native-require.js';
 const { pipeline, AutoModelForSequenceClassification, AutoTokenizer, env } =
   await loadNativeDefault('@huggingface/transformers');
 
-import { EMBEDDING_DIM } from './constants.js';
+import { EMBEDDING_DIM, RERANK_BUCKET_THRESHOLD } from './constants.js';
 import { modelCacheDir } from './paths.js';
 
 // Redirect transformers.js' model cache OFF its volatile package-local default
@@ -39,7 +51,7 @@ import { modelCacheDir } from './paths.js';
 env.cacheDir = modelCacheDir();
 
 export const EMBEDDER_MODEL_ID = 'Xenova/bge-m3';
-export const RERANKER_MODEL_ID = 'onnx-community/bge-reranker-v2-m3-ONNX';
+export const RERANKER_MODEL_ID = 'Alibaba-NLP/gte-reranker-modernbert-base';
 // Re-exported from lib/constants.js (single source of truth).
 export { EMBEDDING_DIM };
 
@@ -137,33 +149,45 @@ export async function getEmbedder({ _pipelineFn = pipeline } = {}) {
 }
 
 /**
- * Load the reranker at dtype='q8', falling back to 'fp16'. The tokenizer
- * load is dtype-agnostic so it runs in parallel with the first model attempt.
+ * Load the reranker at fp32 on DirectML, falling back to fp32 on CPU when
+ * DML is unavailable (non-Windows host, missing driver, ORT build without
+ * the DML EP). CPU fp32 rerank is ~10x slower than DML and is a degraded
+ * mode, not a target — but it keeps the daemon usable on any host that can
+ * run ONNX at all. The tokenizer load is device-agnostic so it runs in
+ * parallel with the first model attempt.
  *
  * @param {(modelId: string, opts: object) => Promise<any>} modelFn
  * @param {(modelId: string) => Promise<any>} tokenizerFn
  * @param {string} modelId
- * @returns {Promise<{ model: any, tokenizer: any, dtype: 'q8'|'fp16' }>}
+ * @returns {Promise<{ model: any, tokenizer: any, dtype: 'fp32', device: 'dml'|'cpu' }>}
  */
 export async function _loadRerankerWithFallback(modelFn, tokenizerFn, modelId) {
   const tokenizerPromise = tokenizerFn(modelId);
   let model;
-  let dtype;
+  let device;
   try {
-    model = await modelFn(modelId, { dtype: 'q8', session_options: ONNX_SESSION_OPTIONS });
-    dtype = 'q8';
+    model = await modelFn(modelId, {
+      dtype: 'fp32',
+      device: 'dml',
+      session_options: ONNX_SESSION_OPTIONS,
+    });
+    device = 'dml';
   } catch (err) {
     const message = err && err.message ? err.message : String(err);
     console.warn(
-      `[mindwright/models] reranker load with dtype='q8' failed (${message}); ` +
-        `falling back to dtype='fp16'. This is expected when the upstream repo ` +
-        `does not ship model_quantized.onnx.`
+      `[mindwright/models] reranker load on DirectML failed (${message}); ` +
+        `falling back to fp32/CPU. This degrades rerank latency ~10x and is ` +
+        `expected only on non-DirectML hosts (non-Windows, missing driver).`
     );
-    model = await modelFn(modelId, { dtype: 'fp16', session_options: ONNX_SESSION_OPTIONS });
-    dtype = 'fp16';
+    model = await modelFn(modelId, {
+      dtype: 'fp32',
+      device: 'cpu',
+      session_options: ONNX_SESSION_OPTIONS,
+    });
+    device = 'cpu';
   }
   const tokenizer = await tokenizerPromise;
-  return { model, tokenizer, dtype };
+  return { model, tokenizer, dtype: 'fp32', device };
 }
 
 // _modelFn / _tokenizerFn are test-only seams.
@@ -215,7 +239,14 @@ export async function embed(texts) {
 }
 
 /**
- * Score (query, candidate) pairs through bge-reranker-v2-m3.
+ * Score (query, candidate) pairs through gte-reranker-modernbert-base, using
+ * a two-bucket length-batched policy: per-candidate tokenize-only call learns
+ * each pair's length, candidates split at RERANK_BUCKET_THRESHOLD, then each
+ * non-empty bucket forwards as one padded batch. This avoids paying the
+ * batch-max padding cost across all candidates when one is much longer than
+ * the rest, while still amortizing per-call ORT overhead within each bucket.
+ *
+ * Output order matches input order regardless of bucket assignment.
  *
  * @param {string} query
  * @param {string[]} candidates
@@ -230,27 +261,62 @@ export async function rerank(query, candidates) {
   }
   if (candidates.length === 0) return [];
   const { model, tokenizer } = await getReranker();
-  const queries = new Array(candidates.length).fill(query);
-  const inputs = tokenizer(queries, {
-    text_pair: candidates,
-    padding: true,
-    truncation: true,
-  });
-  const outputs = await model(inputs);
-  const logits = outputs?.logits?.data;
-  // Fail loud on shape mismatch rather than emit NaN scores: `Math.exp(
-  // -undefined)===NaN` gets silently dropped by `score >= floor`, looking
-  // like rerank-floor abstention. The daemon-pipe handler converts a throw
-  // into a null response that pipe-client + retriever degrade against
-  // (1.0-per-row fallback).
-  if (!logits || logits.length < candidates.length) {
-    throw new Error(
-      `rerank: expected at least ${candidates.length} logits, got ${logits ? logits.length : 'undefined'}`,
-    );
-  }
-  const out = new Array(candidates.length);
+
+  // Step 1: tokenize each (query, candidate) pair alone to learn lengths. This
+  // is cheap (~few ms across all candidates) and is the only way to know each
+  // pair's true token count BEFORE we commit to a batch shape — the alternative
+  // (one batched tokenize) tells us only the batch max, not the per-row spread.
+  // Step 3 re-tokenizes each bucket from scratch, so we only need the length
+  // here — the tensor itself goes straight to GC after this iteration.
+  // `padding: false` on a batch-of-1 skips the no-op pad-mask alloc.
+  const candLens = new Array(candidates.length);
   for (let i = 0; i < candidates.length; i++) {
-    out[i] = 1 / (1 + Math.exp(-logits[i]));
+    const inp = tokenizer([query], {
+      text_pair: [candidates[i]],
+      padding: false,
+      truncation: true,
+    });
+    candLens[i] = inp?.input_ids?.dims?.[1] ?? 0;
+  }
+
+  // Step 2: partition into short/long buckets by RERANK_BUCKET_THRESHOLD.
+  const shortIdx = [];
+  const longIdx = [];
+  for (let i = 0; i < candidates.length; i++) {
+    if (candLens[i] < RERANK_BUCKET_THRESHOLD) shortIdx.push(i);
+    else longIdx.push(i);
+  }
+
+  // Step 3: forward each non-empty bucket as one padded batch. Re-tokenize
+  // the bucket (cheap) instead of trying to splice per-cand tensors — this
+  // keeps padding/attention_mask alignment in tokenizer-owned code.
+  const out = new Array(candidates.length);
+  for (const bucket of [shortIdx, longIdx]) {
+    if (!bucket.length) continue;
+    const bQueries = new Array(bucket.length).fill(query);
+    const bCands = bucket.map((i) => candidates[i]);
+    const inputs = tokenizer(bQueries, {
+      text_pair: bCands,
+      padding: true,
+      truncation: true,
+    });
+    const outputs = await model(inputs);
+    const logits = outputs?.logits?.data;
+    // Fail loud on shape mismatch rather than emit NaN scores: `Math.exp(
+    // -undefined)===NaN` gets silently dropped by `score >= floor`, looking
+    // like rerank-floor abstention. The daemon-pipe handler converts a throw
+    // into a null response that pipe-client + retriever degrade against
+    // (1.0-per-row fallback).
+    if (!logits || logits.length < bucket.length) {
+      throw new Error(
+        `rerank: bucket of ${bucket.length} candidates returned ${logits ? logits.length : 'undefined'} logits`,
+      );
+    }
+    // Place each bucket-local logit back at its ORIGINAL candidate index, so
+    // the caller's order is preserved across the short/long split.
+    for (let j = 0; j < bucket.length; j++) {
+      out[bucket[j]] = 1 / (1 + Math.exp(-logits[j]));
+    }
   }
   return out;
 }

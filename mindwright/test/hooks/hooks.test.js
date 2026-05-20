@@ -161,13 +161,19 @@ function seedTrackedFromZero(sessionId) {
 }
 
 // Mechanical setup shared by the three behavior-5 reconcile tests: seed the
-// project past CAP_EXCHANGES, then run one Stop with auto-spawn enabled (a
-// fake `claude` binary so spawnConsolidator succeeds and persists the
-// consolidator_for record with last_spawn, but no real dream runs → no
-// consolidations row). Asserts the post-spawn state and returns the pieces
-// each test needs to drive its own scenario (backdate the lease, record a
-// consolidation, etc.). Scenario-specific manipulation stays inline in the
-// tests (DAMP) — only this boilerplate is extracted.
+// project past CAP_EXCHANGES as PENDING rows, then run one PreCompact with
+// auto-spawn enabled (a fake `claude` binary so spawnConsolidator succeeds
+// and persists the consolidator_for record with last_spawn, but no real
+// dream runs → no consolidations row). Cap-fire moved from Stop to
+// PreCompact/SessionEnd under the pending-staging design — the trigger fires
+// at the promotion boundary, not on every Stop. Asserts the post-spawn
+// state and returns the pieces each test needs to drive its own scenario
+// (backdate the lease, record a consolidation, etc.). Scenario-specific
+// manipulation stays inline in the tests (DAMP) — only this boilerplate is
+// extracted.
+//
+// Returns `stopInput`/`stopEnv` for tests that then drive Stop (where
+// reconcile lives) AFTER priming the FIRED+last_spawn state at PreCompact.
 function primeAutoSpawnedConsolidator(dir, sessionId) {
   const transcriptPath = writeTranscript(dir, sessionId, [userRec('x')]);
   const fakeBin = process.platform === 'win32'
@@ -180,21 +186,37 @@ function primeAutoSpawnedConsolidator(dir, sessionId) {
       })();
   let store = openStore();
   try {
+    // Seed CAP_EXCHANGES rows as PENDING for this session. PreCompact will
+    // promote them all in one go, the cap will cross at promotion, and
+    // promote-pending.js will fire the spawn.
     for (let i = 0; i < CAP_EXCHANGES; i++) {
-      store.insertEntry({ tier: 'short', kind: 'thinking', content: `seed ${i}`, sessionId });
+      store.insertEntry({
+        tier: 'short', kind: 'thinking',
+        content: `seed ${i}`, sessionId, pendingSessionId: sessionId,
+      });
     }
   } finally { store.close(); }
 
   const input = {
     session_id: sessionId,
     transcript_path: transcriptPath,
-    hook_event_name: 'Stop',
-    stop_hook_active: false,
+    hook_event_name: 'PreCompact',
+    trigger: 'manual',
   };
   // Clear the suite-wide MINDWRIGHT_SPAWN_DISABLE=1 so the spawn path runs.
   const spawnEnv = { MINDWRIGHT_SPAWN_DISABLE: '', MINDWRIGHT_SPAWN_FAKE: fakeBin };
 
-  runHook('stop.js', input, dir, null, spawnEnv);
+  runHook('pre-compact.js', input, dir, null, spawnEnv);
+
+  // After PreCompact: pending rows promoted, cap crossed, spawn fired, state
+  // FIRED. The Stop reconcile path will be exercised by the caller using the
+  // stopInput/stopEnv pair.
+  const stopInput = {
+    session_id: sessionId,
+    transcript_path: transcriptPath,
+    hook_event_name: 'Stop',
+    stop_hook_active: false,
+  };
 
   const handle = deriveHandle(sessionId);
   store = openStore();
@@ -210,7 +232,7 @@ function primeAutoSpawnedConsolidator(dir, sessionId) {
       'precondition: the auto-spawn path does NOT stage a fallback nudge');
     assert.equal(store.lastConsolidation(), undefined,
       'precondition: a fake spawn writes no consolidations row');
-    return { handle, input, spawnEnv, rec };
+    return { handle, input: stopInput, spawnEnv, rec };
   } finally { store.close(); }
 }
 
@@ -554,6 +576,180 @@ test('session-start injects a Current time: ISO line so agents can ground tempor
   }
 });
 
+test('session-start orphan-sweep promotes a quiet crashed session pending bucket', () => {
+  // The orphan-pending sweep at SessionStart is the safety net for sessions
+  // that crashed, were killed, or otherwise never fired their final
+  // PreCompact / SessionEnd. Their pending rows would otherwise sit forever
+  // invisible to retrieval. The sweep promotes them on behalf of the dead
+  // session so the content joins long-term memory normally.
+  const { dir, cleanup } = setupIsolatedRoot();
+  try {
+    // Plant pending rows under a CRASHED session, backdated well past the
+    // 30-minute default threshold so the sweep flags them.
+    const seedStore = openStore();
+    try {
+      seedStore.insertEntry({
+        tier: 'short', kind: 'thinking',
+        content: 'orphan content from a dead session',
+        sessionId: 'sess-crashed', pendingSessionId: 'sess-crashed',
+      });
+      const longAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 1h ago
+      seedStore.db.prepare('UPDATE entries SET created_at = ? WHERE pending_session_id = ?')
+        .run(longAgo, 'sess-crashed');
+    } finally { seedStore.close(); }
+
+    // A FRESH session starts up — its SessionStart triggers the sweep.
+    const transcriptPath = writeTranscript(dir, 'sess-new', [userRec('hi')]);
+    runHook('session-start.js', {
+      session_id: 'sess-new',
+      transcript_path: transcriptPath,
+      hook_event_name: 'SessionStart',
+      source: 'startup',
+    }, dir);
+
+    const verify = openStore();
+    try {
+      // Orphaned rows promoted on the dead session's behalf.
+      assert.equal(verify.countPendingFor('sess-crashed'), 0,
+        'orphan-sweep must promote the dead session\'s pending bucket');
+      assert.equal(verify.countShortTermFor('sess-crashed'), 1,
+        'promoted row must now count as real short-term under the dead session');
+    } finally { verify.close(); }
+  } finally {
+    cleanup();
+  }
+});
+
+test('session-start orphan-sweep does NOT touch the LIVE caller\'s pending bucket', () => {
+  // A /resume after lunch must not have its half-typed pending bucket
+  // hijacked by its own SessionStart sweep. The exclusion is on
+  // currentSessionId — if it ever regresses, every resume would prematurely
+  // promote (and potentially trip the cap nudge for) its OWN unfinished
+  // turn.
+  const { dir, cleanup } = setupIsolatedRoot();
+  try {
+    const seedStore = openStore();
+    try {
+      // The live (resuming) session's pending row — backdated well past the
+      // threshold, exactly the way a long-running session would look.
+      seedStore.insertEntry({
+        tier: 'short', kind: 'thinking',
+        content: 'live caller pending',
+        sessionId: 'sess-live', pendingSessionId: 'sess-live',
+      });
+      const longAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      seedStore.db.prepare('UPDATE entries SET created_at = ? WHERE pending_session_id = ?')
+        .run(longAgo, 'sess-live');
+    } finally { seedStore.close(); }
+
+    const transcriptPath = writeTranscript(dir, 'sess-live', [userRec('resumed')]);
+    runHook('session-start.js', {
+      session_id: 'sess-live',
+      transcript_path: transcriptPath,
+      hook_event_name: 'SessionStart',
+      source: 'resume',
+    }, dir);
+
+    const verify = openStore();
+    try {
+      assert.equal(verify.countPendingFor('sess-live'), 1,
+        'the LIVE caller\'s pending bucket must NEVER be swept by its own SessionStart');
+      assert.equal(verify.countShortTermFor('sess-live'), 0,
+        'no premature promotion of the caller\'s own rows');
+    } finally { verify.close(); }
+  } finally {
+    cleanup();
+  }
+});
+
+test('session-start orphan-sweep skips a fresh pending bucket below the threshold', () => {
+  // Quiet-session protection: a peer session whose pending is just a minute
+  // old must NOT be promoted — that session is probably still alive and the
+  // sweep would otherwise strand its in-flight context. The threshold gates
+  // on MAX(created_at), not COUNT, so a single recent row is enough to keep
+  // the whole bucket pinned to the live session.
+  const { dir, cleanup } = setupIsolatedRoot();
+  try {
+    const seedStore = openStore();
+    try {
+      // Peer's pending row at "now" — well within the 30-minute threshold.
+      seedStore.insertEntry({
+        tier: 'short', kind: 'thinking', content: 'fresh peer pending',
+        sessionId: 'sess-fresh-peer', pendingSessionId: 'sess-fresh-peer',
+      });
+    } finally { seedStore.close(); }
+
+    const transcriptPath = writeTranscript(dir, 'sess-other', [userRec('hi')]);
+    runHook('session-start.js', {
+      session_id: 'sess-other',
+      transcript_path: transcriptPath,
+      hook_event_name: 'SessionStart',
+      source: 'startup',
+    }, dir);
+
+    const verify = openStore();
+    try {
+      assert.equal(verify.countPendingFor('sess-fresh-peer'), 1,
+        'fresh peer pending must NOT be swept (peer may still be alive)');
+      assert.equal(verify.countShortTermFor('sess-fresh-peer'), 0);
+    } finally { verify.close(); }
+  } finally {
+    cleanup();
+  }
+});
+
+test('session-start orphan-sweep clears the orphan\'s persisted tool_map row', () => {
+  // The orphan-sweep promotes the dead session's pending bucket AND must
+  // clean up its persisted tool_map — an orphan session by definition
+  // won't run its own SessionEnd to do so, and without this cleanup every
+  // crashed session would leave a meta row that lingers forever. Pairs
+  // with the SessionEnd clearToolMap path; the orphan sweep is the
+  // crashed-session equivalent.
+  const { dir, cleanup } = setupIsolatedRoot();
+  try {
+    const seedStore = openStore();
+    try {
+      // Plant the orphan's pending row, backdated past the threshold.
+      seedStore.insertEntry({
+        tier: 'short', kind: 'thinking', content: 'orphan content',
+        sessionId: 'sess-crashed-tm', pendingSessionId: 'sess-crashed-tm',
+      });
+      const longAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      seedStore.db.prepare('UPDATE entries SET created_at = ? WHERE pending_session_id = ?')
+        .run(longAgo, 'sess-crashed-tm');
+      // Plant the orphan's tool_map row — exactly what a session that
+      // crashed mid-tool would leave behind.
+      seedStore.saveToolMap('sess-crashed-tm', new Map([
+        ['tu_orphan', { name: 'Bash', input: { command: 'cargo build' }, source_ref: 's', timestamp: longAgo }],
+      ]));
+      assert.equal(seedStore.loadToolMap('sess-crashed-tm').size, 1,
+        'precondition: orphan tool_map exists');
+    } finally { seedStore.close(); }
+
+    const transcriptPath = writeTranscript(dir, 'sess-new-tm', [userRec('hi')]);
+    runHook('session-start.js', {
+      session_id: 'sess-new-tm',
+      transcript_path: transcriptPath,
+      hook_event_name: 'SessionStart',
+      source: 'startup',
+    }, dir);
+
+    const verify = openStore();
+    try {
+      // Promotion still happens.
+      assert.equal(verify.countPendingFor('sess-crashed-tm'), 0);
+      // AND the tool_map blob is gone — the meta row is fully deleted, not
+      // just left as a serialized empty map.
+      assert.equal(verify.loadToolMap('sess-crashed-tm').size, 0,
+        'orphan tool_map must be cleared by the sweep');
+      assert.equal(verify._metaGet('tool_map:sess-crashed-tm'), null,
+        'meta row must be deleted, not left as a serialized empty map');
+    } finally { verify.close(); }
+  } finally {
+    cleanup();
+  }
+});
+
 test('session-start emits empty {} on malformed stdin', () => {
   const { dir, cleanup } = setupIsolatedRoot();
   try {
@@ -582,6 +778,11 @@ test('user-prompt-submit chunks the prompt from the transcript', () => {
   // fires, UPS's chunk sweep catches it on its own pass; otherwise the
   // next PreToolUse/Stop chunker call picks it up (covered in those
   // hooks' own tests).
+  //
+  // Under the pending-staging design chunks land in short_term as PENDING
+  // (pending_session_id != NULL) and are invisible to bm25Search until
+  // PreCompact/SessionEnd promotes them. Mirror that boundary by promoting
+  // before searching — production code path is byte-identical.
   const { dir, cleanup } = setupIsolatedRoot();
   try {
     const prompt = 'where are the auth helpers defined?';
@@ -595,11 +796,14 @@ test('user-prompt-submit chunks the prompt from the transcript', () => {
     }, dir);
     const store = openStore();
     try {
+      // Chunk lands in pending; promote so bm25Search can see it.
+      assert.ok(store.countPendingFor('sess-C') >= 1, 'prompt must chunk into pending');
+      store.promotePendingForSession('sess-C');
       const rows = store.bm25Search('auth helpers', 5);
       const fetched = rows.map((r) => store.fetch(r.id)).filter(Boolean);
       assert.ok(
         fetched.some((r) => r.content.includes('where are the auth helpers')),
-        'cli_prompt row should be searchable'
+        'cli_prompt row should be searchable after promotion'
       );
       // Exactly one cli_prompt row — no duplicates from a direct insert
       // path running alongside the chunker.
@@ -722,9 +926,13 @@ test('pre-tool-use writes new chunks and advances offset', () => {
 
     const store = openStore();
     try {
-      // Three rows: cli_prompt, thinking, text
-      const count = store.countShortTermFor('sess-E');
-      assert.ok(count >= 3, `expected ≥3 short-term rows, got ${count}`);
+      // Three rows: cli_prompt, thinking, text — staged as PENDING (visible
+      // only via countPendingFor; countShortTermFor filters pending out by
+      // design so the cap can't be tripped by mid-turn chunks).
+      const count = store.countPendingFor('sess-E');
+      assert.ok(count >= 3, `expected ≥3 pending rows, got ${count}`);
+      assert.equal(store.countShortTermFor('sess-E'), 0,
+        'pending rows must NOT count toward real short-term');
       assert.equal(store.getOffset('sess-E'), sizeBefore);
     } finally {
       store.close();
@@ -756,10 +964,11 @@ test('pre-tool-use gate case: no thinking block in new chunks → no retrieval',
     assert.equal(ac, '', 'no thinking block → retrieval skipped → no additionalContext');
     // Observable side effect proving the hook ran to completion (didn't
     // crash) while only retrieval was skipped: the transcript's two records
-    // (userRec → cli_prompt, assistantTextRec → text) still flush as chunks.
+    // (userRec → cli_prompt, assistantTextRec → text) still flush as chunks
+    // — into PENDING under the new design.
     const store = openStore();
     try {
-      const count = store.countShortTermFor('sess-G');
+      const count = store.countPendingFor('sess-G');
       assert.ok(count >= 2,
         `chunks must still flush even though retrieval was gated off; got ${count}`);
     } finally {
@@ -794,14 +1003,17 @@ test('pre-tool-use gate case: thinking present but pipe down → silently skips 
       tool_name: 'Bash',
       tool_input: {},
     }, dir);
-    if (stdout.hookSpecificOutput) {
-      const ac = stdout.hookSpecificOutput.additionalContext || '';
-      assert.equal(ac, '', 'pipe down → no additionalContext');
-    }
+    // Unconditional negative assertion: whether the hook emits {} or a
+    // hookSpecificOutput envelope, the additionalContext on the pipe-down
+    // path must be empty. The earlier conditional `if (stdout.hookSpecificOutput)`
+    // form let the {} shape pass with zero assertions — see the matching
+    // fix at the no-relevant-memory test above.
+    const ac = stdout.hookSpecificOutput?.additionalContext || '';
+    assert.equal(ac, '', 'pipe down → no additionalContext');
     const store = openStore();
     try {
-      const count = store.countShortTermFor('sess-H');
-      assert.ok(count >= 2, `chunks must still be written; got ${count}`);
+      const count = store.countPendingFor('sess-H');
+      assert.ok(count >= 2, `chunks must still be written (pending); got ${count}`);
     } finally {
       store.close();
     }
@@ -968,8 +1180,12 @@ test('stop flushes tail content', () => {
     }, dir);
     const store = openStore();
     try {
-      const count = store.countShortTermFor('sess-J');
-      assert.ok(count >= 2, `expected ≥2 short-term rows after stop flush, got ${count}`);
+      // Stop flushes into PENDING (same path as PreToolUse / UPS). Promotion
+      // happens at PreCompact/SessionEnd, not at Stop.
+      const count = store.countPendingFor('sess-J');
+      assert.ok(count >= 2, `expected ≥2 pending rows after stop flush, got ${count}`);
+      assert.equal(store.countShortTermFor('sess-J'), 0,
+        'Stop must not promote — pending must NOT count toward real short-term');
     } finally {
       store.close();
     }
@@ -978,13 +1194,123 @@ test('stop flushes tail content', () => {
   }
 });
 
-test('stop stages a pending nudge for the next UserPromptSubmit when cap fires', () => {
-  // Stop doesn't honor additionalContext (DESIGN.md:379), so the cap warning
-  // is staged in `meta` and the next UserPromptSubmit drains it.
+test('pre-compact flushes transcript tail into pending THEN promotes pending → real (under-cap path)', () => {
+  // Under-cap basic flow: PreCompact is the boundary between live-staged
+  // chunks and durable retrievable short-term. The hook chains:
+  //   transcript tail → pending (via flushTranscript)
+  //   pending → real short-term (via promoteAndMaybeSpawn)
+  // and emits `{}` (PreCompact does not surface context). We assert both
+  // halves so a regression that reverses the order (promote before flush)
+  // would leave fresh tail content stranded as pending.
+  const { dir, cleanup } = setupIsolatedRoot();
+  try {
+    const transcriptPath = writeTranscript(dir, 'sess-pc-basic', [
+      userRec('hello'),
+      assistantTextRec('answer'),
+    ]);
+    seedTrackedFromZero('sess-pc-basic');
+
+    const { stdout } = runHook('pre-compact.js', {
+      session_id: 'sess-pc-basic',
+      transcript_path: transcriptPath,
+      hook_event_name: 'PreCompact',
+      trigger: 'manual',
+    }, dir);
+    assert.deepEqual(stdout, {});
+
+    const store = openStore();
+    try {
+      // Tail flushed AND promoted. Pending should be 0; real short-term should
+      // have at least 2 rows (cli_prompt + text).
+      assert.equal(store.countPendingFor('sess-pc-basic'), 0,
+        'PreCompact must promote pending → real (no pending leftovers)');
+      assert.ok(store.countShortTermFor('sess-pc-basic') >= 2,
+        `expected ≥2 real short-term rows after PreCompact flush+promote, got ${store.countShortTermFor('sess-pc-basic')}`);
+      // Under-cap → no nudge staged.
+      const nudge = store.db.prepare('SELECT value FROM meta WHERE key = ?').get('pending_nudge:sess-pc-basic');
+      assert.equal(nudge, undefined, 'under-cap PreCompact must not stage a nudge');
+    } finally {
+      store.close();
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('pre-compact emits {} and no-ops when session_id is missing', () => {
+  // Defensive input validation parity with session-end: a malformed payload
+  // must short-circuit to {} BEFORE touching the store. Without this guard,
+  // promoteAndMaybeSpawn would be called with sessionId=undefined and the
+  // store would error on the bound parameter — the user sees a crash at the
+  // exact moment they invoked /compact.
+  const { dir, cleanup } = setupIsolatedRoot();
+  try {
+    const transcriptPath = writeTranscript(dir, 'no-id', [userRec('x')]);
+    const { stdout, status } = runHook('pre-compact.js', {
+      transcript_path: transcriptPath,
+      hook_event_name: 'PreCompact',
+      trigger: 'manual',
+    }, dir);
+    assert.equal(status, 0);
+    assert.deepEqual(stdout, {});
+    const store = openStore();
+    try {
+      const n = store.db.prepare('SELECT COUNT(*) AS n FROM entries').get().n;
+      assert.equal(n, 0, 'no entries should be written when session_id is missing');
+    } finally { store.close(); }
+  } finally {
+    cleanup();
+  }
+});
+
+test('pre-compact promotes already-pending rows even when transcript_path is missing', () => {
+  // Some hook payloads land without transcript_path (rare, but the input
+  // shape allows it). The hook must still promote whatever's already
+  // pending — otherwise the user's accumulated chunks sit invisible past
+  // the only natural promotion boundary they had.
+  const { dir, cleanup } = setupIsolatedRoot();
+  try {
+    const store = openStore();
+    try {
+      for (let i = 0; i < 3; i++) {
+        store.insertEntry({
+          tier: 'short', kind: 'thinking', content: `pending ${i}`,
+          sessionId: 'sess-pc-notx', pendingSessionId: 'sess-pc-notx',
+        });
+      }
+    } finally { store.close(); }
+
+    const { stdout } = runHook('pre-compact.js', {
+      session_id: 'sess-pc-notx',
+      // transcript_path deliberately omitted
+      hook_event_name: 'PreCompact',
+      trigger: 'manual',
+    }, dir);
+    assert.deepEqual(stdout, {});
+
+    const verify = openStore();
+    try {
+      assert.equal(verify.countPendingFor('sess-pc-notx'), 0,
+        'pending rows must promote even without transcript_path');
+      assert.equal(verify.countShortTermFor('sess-pc-notx'), 3);
+    } finally { verify.close(); }
+  } finally {
+    cleanup();
+  }
+});
+
+test('pre-compact stages a pending nudge for the next UserPromptSubmit when promotion crosses the cap', () => {
+  // PreCompact doesn't honor additionalContext (hook event has no
+  // user-visible surface for memory work), so the cap warning is staged in
+  // `meta` and the next UserPromptSubmit drains it. Under the pending-
+  // staging design the cap can only cross at promotion boundaries, so the
+  // cap-fire path lives in PreCompact (and SessionEnd / SessionStart
+  // orphan-sweep) rather than Stop.
   const { dir, cleanup } = setupIsolatedRoot();
   try {
     const transcriptPath = writeTranscript(dir, 'sess-K', [userRec('x')]);
-    // Pre-seed CAP_EXCHANGES rows directly so the cap fires.
+    // Pre-seed CAP_EXCHANGES rows as PENDING so PreCompact promotes them all
+    // at once and the cap crosses at promotion.
     const store = openStore();
     try {
       for (let i = 0; i < CAP_EXCHANGES; i++) {
@@ -993,19 +1319,20 @@ test('stop stages a pending nudge for the next UserPromptSubmit when cap fires',
           kind: 'thinking',
           content: `pre-seeded ${i}`,
           sessionId: 'sess-K',
+          pendingSessionId: 'sess-K',
         });
       }
     } finally {
       store.close();
     }
-    const { stdout } = runHook('stop.js', {
+    const { stdout } = runHook('pre-compact.js', {
       session_id: 'sess-K',
       transcript_path: transcriptPath,
-      hook_event_name: 'Stop',
-      stop_hook_active: false,
+      hook_event_name: 'PreCompact',
+      trigger: 'manual',
     }, dir);
-    // Stop emits `{}` — no user-visible surface here.
-    assert.deepEqual(stdout, {}, 'stop must not emit hookSpecificOutput');
+    // PreCompact emits `{}` — no user-visible surface here.
+    assert.deepEqual(stdout, {}, 'pre-compact must not emit hookSpecificOutput');
     // But the nudge is staged. Peek (without draining) by reading meta directly,
     // since takePendingNudge would clear it and the next assertion needs it.
     const store2 = openStore();
@@ -1014,6 +1341,10 @@ test('stop stages a pending nudge for the next UserPromptSubmit when cap fires',
       assert.ok(row, 'expected pending_nudge:sess-K to be staged');
       assert.match(row.value, /cap reached/i);
       assert.match(row.value, /\/mindwright:dream/);
+      // Sanity: pending rows were actually promoted.
+      assert.equal(store2.countPendingFor('sess-K'), 0, 'pending rows must be promoted');
+      assert.equal(store2.countShortTermFor('sess-K'), CAP_EXCHANGES,
+        'all pending rows must now count as real short-term');
     } finally {
       store2.close();
     }
@@ -1022,14 +1353,15 @@ test('stop stages a pending nudge for the next UserPromptSubmit when cap fires',
   }
 });
 
-test('stop SKIPS both spawn and nudge when MINDWRIGHT_IS_CONSOLIDATOR=1 (self-spawn loop guard)', () => {
+test('pre-compact SKIPS both spawn and nudge when MINDWRIGHT_IS_CONSOLIDATOR=1 (self-spawn loop guard)', () => {
   // Regression for the orphan-consolidator chain. Every spawned consolidator
   // inherits MINDWRIGHT_IS_CONSOLIDATOR=1 (lib/consolidator-spawn.js exports
-  // CONSOLIDATOR_SPAWN_ENV_OVERRIDES). When its own Stop hook fires with
-  // cap crossed, the hook must short-circuit: no child spawn (avoids the
-  // infinite chain), no pending_nudge row staged (the consolidator IS the
-  // worker — staging a self-reminder is dead text). Only nudge_state
-  // transitions still run so the gate re-arms correctly.
+  // CONSOLIDATOR_SPAWN_ENV_OVERRIDES). When its own PreCompact hook fires
+  // with the cap crossed at promotion, the hook must short-circuit: no
+  // child spawn (avoids the infinite chain), no pending_nudge row staged
+  // (the consolidator IS the worker — staging a self-reminder is dead
+  // text). Only nudge_state transitions still run so the gate re-arms
+  // correctly.
   const { dir, cleanup } = setupIsolatedRoot();
   try {
     const transcriptPath = writeTranscript(dir, 'sess-consol-self', [userRec('x')]);
@@ -1039,15 +1371,16 @@ test('stop SKIPS both spawn and nudge when MINDWRIGHT_IS_CONSOLIDATOR=1 (self-sp
         seedStore.insertEntry({
           tier: 'short', kind: 'thinking',
           content: `seed ${i}`, sessionId: 'sess-consol-self',
+          pendingSessionId: 'sess-consol-self',
         });
       }
     } finally { seedStore.close(); }
 
-    const { stdout } = runHook('stop.js', {
+    const { stdout } = runHook('pre-compact.js', {
       session_id: 'sess-consol-self',
       transcript_path: transcriptPath,
-      hook_event_name: 'Stop',
-      stop_hook_active: false,
+      hook_event_name: 'PreCompact',
+      trigger: 'manual',
     }, dir, null, { MINDWRIGHT_IS_CONSOLIDATOR: '1' });
     assert.deepEqual(stdout, {});
 
@@ -1069,7 +1402,7 @@ test('stop SKIPS both spawn and nudge when MINDWRIGHT_IS_CONSOLIDATOR=1 (self-sp
   }
 });
 
-test('stop SKIPS spawn and nudge when the session carries the consolidator role (no env var)', () => {
+test('pre-compact SKIPS spawn and nudge when the session carries the consolidator role (no env var)', () => {
   // Secondary signal: explicit assign_role(role='consolidator') marks the
   // session as a consolidator without the env-var sentinel. Same skip
   // behavior — covers the "interactive /mindwright:assign-role consolidator"
@@ -1084,15 +1417,16 @@ test('stop SKIPS spawn and nudge when the session carries the consolidator role 
         seedStore.insertEntry({
           tier: 'short', kind: 'thinking',
           content: `seed ${i}`, sessionId: 'sess-consol-role',
+          pendingSessionId: 'sess-consol-role',
         });
       }
     } finally { seedStore.close(); }
 
-    const { stdout } = runHook('stop.js', {
+    const { stdout } = runHook('pre-compact.js', {
       session_id: 'sess-consol-role',
       transcript_path: transcriptPath,
-      hook_event_name: 'Stop',
-      stop_hook_active: false,
+      hook_event_name: 'PreCompact',
+      trigger: 'manual',
     }, dir);
     assert.deepEqual(stdout, {});
 
@@ -1110,15 +1444,16 @@ test('stop SKIPS spawn and nudge when the session carries the consolidator role 
   }
 });
 
-test('stop SUSPENDS auto-spawn when MINDWRIGHT_SEED_TRANSCRIPT=1 — falls back to nudge so seed re-ingest does not silently auto-consolidate', () => {
+test('pre-compact SUSPENDS auto-spawn when MINDWRIGHT_SEED_TRANSCRIPT=1 — falls back to nudge so seed re-ingest does not silently auto-consolidate', () => {
   // Regression for the seed-mode-induced auto-spawn surprise: when a user
   // sets MINDWRIGHT_SEED_TRANSCRIPT=1 to backfill historical transcript
   // content, the re-ingest doubles short-term row count on already-tracked
   // sessions. That pushes them over CAP_EXCHANGES, and the unguarded path
   // would auto-spawn a `claude --bg` consolidator that consumes subscription
   // tokens deduplicating content the user already knows is duplicated and
-  // hadn't inspected yet. The guard suspends auto-spawn while the env is
-  // set and falls back to the manual nudge.
+  // hadn't inspected yet. The guard (now in promote-pending.js, since
+  // cap-fire moved there) suspends auto-spawn while the env is set and
+  // falls back to the manual nudge.
   const { dir, cleanup } = setupIsolatedRoot();
   try {
     const transcriptPath = writeTranscript(dir, 'sess-seed-guard', [userRec('x')]);
@@ -1140,15 +1475,16 @@ test('stop SUSPENDS auto-spawn when MINDWRIGHT_SEED_TRANSCRIPT=1 — falls back 
         seedStore.insertEntry({
           tier: 'short', kind: 'thinking',
           content: `seed ${i}`, sessionId: 'sess-seed-guard',
+          pendingSessionId: 'sess-seed-guard',
         });
       }
     } finally { seedStore.close(); }
 
-    const { stdout } = runHook('stop.js', {
+    const { stdout } = runHook('pre-compact.js', {
       session_id: 'sess-seed-guard',
       transcript_path: transcriptPath,
-      hook_event_name: 'Stop',
-      stop_hook_active: false,
+      hook_event_name: 'PreCompact',
+      trigger: 'manual',
     }, dir, null, {
       // Clear the test fixture's MINDWRIGHT_SPAWN_DISABLE=1 — without
       // clearing it we couldn't distinguish "spawn suppressed by seed mode"
@@ -1188,82 +1524,119 @@ test('stop SUSPENDS auto-spawn when MINDWRIGHT_SEED_TRANSCRIPT=1 — falls back 
   }
 });
 
-test('stop edge-triggers the nudge — fires once per cap trip, re-arms only after rows drop below cap', () => {
-  // Without an edge-trigger, every Stop hook would re-stage the SAME nudge
-  // every turn until the user runs /mindwright:dream. The user already saw
-  // the reminder; spamming it on every subsequent prompt is hostile.
+test('pre-compact edge-triggers the cap nudge — fires once per crossing, re-arms only after rows drop below cap', () => {
+  // Without an edge-trigger, every PreCompact that promotes pending rows
+  // into an over-cap short-term would re-stage the SAME nudge every time
+  // until the user runs /mindwright:dream. The user already saw the
+  // reminder; spamming it on every subsequent /compact is hostile.
   // Expected state machine:
-  //   armed/null + count >= CAP  → stage nudge, state := 'fired'
-  //   fired      + count >= CAP  → no-op (already nudged this trip)
-  //   fired      + count <  CAP  → state := 'armed' (dream ran)
-  //   armed      + count >= CAP  → stage nudge, state := 'fired' (next trip)
+  //   armed/null + promotion crosses cap → stage nudge, state := 'fired'
+  //   fired      + still over cap         → no-op (already nudged this trip)
+  //   fired      + count < cap            → state := 'armed' (dream ran)
+  //   armed      + promotion crosses cap  → stage nudge, state := 'fired'
+  //
+  // Under the pending-staging design, count changes only happen at
+  // promotion (PreCompact/SessionEnd/orphan-sweep) — so we exercise the
+  // state machine through PreCompact, not Stop. Stop tests for re-arm-on-
+  // clear live separately (Stop owns the re-arm side-effect at every
+  // turn, since age can trip independently of /compact rhythm).
   const { dir, cleanup } = setupIsolatedRoot();
   try {
     const transcriptPath = writeTranscript(dir, 'sess-edge', [userRec('x')]);
 
-    const store = openStore();
-    try {
-      for (let i = 0; i < CAP_EXCHANGES; i++) {
-        store.insertEntry({ tier: 'short', kind: 'thinking', content: `seed ${i}`, sessionId: 'sess-edge' });
-      }
-    } finally {
-      store.close();
-    }
-
     const input = {
       session_id: 'sess-edge',
       transcript_path: transcriptPath,
-      hook_event_name: 'Stop',
-      stop_hook_active: false,
+      hook_event_name: 'PreCompact',
+      trigger: 'manual',
     };
 
-    // First Stop after crossing cap → nudge staged.
-    runHook('stop.js', input, dir);
+    // Seed CAP_EXCHANGES pending rows and run PreCompact: promotes them all,
+    // promotion crosses cap, nudge staged, state → FIRED.
     let s = openStore();
     try {
+      for (let i = 0; i < CAP_EXCHANGES; i++) {
+        s.insertEntry({
+          tier: 'short', kind: 'thinking',
+          content: `seed ${i}`, sessionId: 'sess-edge',
+          pendingSessionId: 'sess-edge',
+        });
+      }
+    } finally { s.close(); }
+    runHook('pre-compact.js', input, dir);
+    s = openStore();
+    try {
       const row = s.db.prepare('SELECT value FROM meta WHERE key = ?').get('pending_nudge:sess-edge');
-      assert.ok(row, 'first cap-crossing Stop must stage the nudge');
+      assert.ok(row, 'first cap-crossing PreCompact must stage the nudge');
       assert.equal(s.getNudgeState(), 'fired');
       // Drain the nudge to simulate UserPromptSubmit firing.
       s.takePendingNudge('sess-edge');
     } finally { s.close(); }
 
-    // Second Stop while still over cap → must NOT re-stage. This is the
-    // anti-spam guarantee.
-    runHook('stop.js', input, dir);
+    // Stage MORE pending rows and run PreCompact while still over cap →
+    // must NOT re-stage. This is the anti-spam guarantee at the promotion
+    // boundary.
+    s = openStore();
+    try {
+      for (let i = 0; i < 3; i++) {
+        s.insertEntry({
+          tier: 'short', kind: 'thinking',
+          content: `more pending ${i}`, sessionId: 'sess-edge',
+          pendingSessionId: 'sess-edge',
+        });
+      }
+    } finally { s.close(); }
+    runHook('pre-compact.js', input, dir);
     s = openStore();
     try {
       const row = s.db.prepare('SELECT value FROM meta WHERE key = ?').get('pending_nudge:sess-edge');
-      assert.equal(row, undefined, 'second over-cap Stop must NOT re-stage the nudge');
+      assert.equal(row, undefined, 'second over-cap PreCompact must NOT re-stage the nudge');
       assert.equal(s.getNudgeState(), 'fired');
     } finally { s.close(); }
 
     // Simulate /mindwright:dream draining short-term below cap.
     s = openStore();
     try {
-      const rows = s.db.prepare(`SELECT id FROM entries WHERE session_id = ? AND tier = 'short'`).all('sess-edge');
+      const rows = s.db.prepare(
+        `SELECT id FROM entries WHERE session_id = ? AND tier = 'short' AND pending_session_id IS NULL`
+      ).all('sess-edge');
       // Hard-delete enough rows to drop below cap.
       const toDelete = rows.slice(0, Math.ceil(rows.length * 0.5)).map((r) => r.id);
       s.hardDeleteShortTerm(toDelete);
     } finally { s.close(); }
 
-    // Third Stop with count < cap → re-arm; still no new nudge.
-    runHook('stop.js', input, dir);
+    // Stage one more pending row and run PreCompact: promotion happens (so
+    // promote-pending runs the cap check), count is now under cap → re-arm.
+    s = openStore();
+    try {
+      s.insertEntry({
+        tier: 'short', kind: 'thinking',
+        content: 'post-dream pending', sessionId: 'sess-edge',
+        pendingSessionId: 'sess-edge',
+      });
+    } finally { s.close(); }
+    runHook('pre-compact.js', input, dir);
     s = openStore();
     try {
       const row = s.db.prepare('SELECT value FROM meta WHERE key = ?').get('pending_nudge:sess-edge');
-      assert.equal(row, undefined, 'under-cap Stop must not stage a nudge');
-      assert.equal(s.getNudgeState(), 'armed', 'state must re-arm once short-term drops below cap');
+      assert.equal(row, undefined, 'under-cap PreCompact must not stage a nudge');
+      assert.equal(s.getNudgeState(), 'armed',
+        'state must re-arm once short-term drops below cap and a promotion happens');
     } finally { s.close(); }
 
-    // Refill past cap again — the NEXT trip should re-fire.
+    // Refill past cap with another pending batch — the NEXT PreCompact
+    // should re-fire after the re-arm.
     s = openStore();
     try {
       for (let i = 0; i < CAP_EXCHANGES; i++) {
-        s.insertEntry({ tier: 'short', kind: 'thinking', content: `refill ${i}`, sessionId: 'sess-edge' });
+        s.insertEntry({
+          tier: 'short', kind: 'thinking',
+          content: `refill ${i}`, sessionId: 'sess-edge',
+          pendingSessionId: 'sess-edge',
+        });
       }
     } finally { s.close(); }
-    runHook('stop.js', input, dir);
+    runHook('pre-compact.js', input, dir);
     s = openStore();
     try {
       const row = s.db.prepare('SELECT value FROM meta WHERE key = ?').get('pending_nudge:sess-edge');
@@ -1575,47 +1948,63 @@ test('stop does NOT fire the safety-net nudge for fresh rows below cap', () => {
   }
 });
 
-test('stop fires the cap nudge based on PROJECT-WIDE short-term, even if the firing session owns zero rows', () => {
+test('pre-compact fires the cap nudge based on PROJECT-WIDE short-term, even if the firing session owns zero rows', () => {
   // Regression for behavior-4: short Claude Code sessions are typical, and
   // a per-session cap would let project-wide grow unbounded while no single
-  // session ever crossed 50 rows. evaluateNudgeTriggers() and the Stop
-  // hook's cap path must count rows project-wide so a "quiet" session whose
-  // peers have piled up rows still sees the nudge — AND the nudge body must
-  // include the scope='all' hint so the user doesn't run a session-scoped
-  // dream that strands every other session's rows.
+  // session ever crossed 50 rows. evaluateNudgeTriggers() and the cap path
+  // (now in lib/promote-pending.js) must count rows project-wide so a
+  // "quiet" session whose peers have piled up rows still sees the nudge —
+  // AND the nudge body must include the scope='all' hint so the user doesn't
+  // run a session-scoped dream that strands every other session's rows.
+  //
+  // Under pending-staging, "promotion crosses cap" means: SOMETHING was
+  // promoted on this PreCompact AND the resulting project-wide count is
+  // over the cap. To exercise the project-wide signal we plant peer rows
+  // as REAL short-term (they were promoted at some earlier event) and
+  // stage just one pending row under sess-quiet to give promote-pending
+  // a non-zero promotion count.
   const { dir, cleanup } = setupIsolatedRoot();
   try {
     const transcriptPath = writeTranscript(dir, 'sess-quiet', [userRec('x')]);
     const store = openStore();
     try {
-      // CAP_EXCHANGES rows live under a DIFFERENT session.
+      // CAP_EXCHANGES rows live under a DIFFERENT session, already promoted.
       for (let i = 0; i < CAP_EXCHANGES; i++) {
         store.insertEntry({
           tier: 'short', kind: 'thinking',
           content: `peer ${i}`, sessionId: 'sess-other',
         });
       }
-      // The firing session owns 0 rows of its own. Sanity-check the setup.
+      // One pending row under the firing session so PreCompact's promote
+      // step has something to move — without this, promote-pending.js
+      // early-exits (no count change = no cap re-eval, by design).
+      store.insertEntry({
+        tier: 'short', kind: 'thinking',
+        content: 'quiet row', sessionId: 'sess-quiet',
+        pendingSessionId: 'sess-quiet',
+      });
+      // The firing session owns 0 REAL short-term rows (only pending).
+      // Sanity-check the setup.
       assert.equal(store.countShortTermFor('sess-quiet'), 0);
       assert.equal(store.countShortTermAllSessions(), CAP_EXCHANGES);
     } finally {
       store.close();
     }
 
-    runHook('stop.js', {
+    runHook('pre-compact.js', {
       session_id: 'sess-quiet',
       transcript_path: transcriptPath,
-      hook_event_name: 'Stop',
-      stop_hook_active: false,
+      hook_event_name: 'PreCompact',
+      trigger: 'manual',
     }, dir);
 
     const store2 = openStore();
     try {
       const row = store2.db.prepare('SELECT value FROM meta WHERE key = ?').get('pending_nudge:sess-quiet');
-      assert.ok(row, 'project-wide cap must trigger the nudge even when the firing session owns 0 rows');
+      assert.ok(row, 'project-wide cap must trigger the nudge even when the firing session owns ~0 rows');
       assert.match(row.value, /cap reached/i);
-      // Scope hint: the firing session owns only a fraction (0 of CAP) so
-      // /mindwright:dream needs scope='all' or it'll do nothing useful.
+      // Scope hint: the firing session owns only a fraction (1 of CAP+1)
+      // so /mindwright:dream needs scope='all' or it'll do nothing useful.
       assert.match(row.value, /scope='all'/, `nudge must suggest scope='all'; got: ${row.value}`);
       assert.match(row.value, /confirm_all_sessions/, `nudge must mention confirm_all_sessions; got: ${row.value}`);
       assert.equal(store2.getNudgeState(), 'fired');
@@ -1627,7 +2016,7 @@ test('stop fires the cap nudge based on PROJECT-WIDE short-term, even if the fir
   }
 });
 
-test('stop does NOT re-fire the cap nudge for a sibling session once the project-wide cap was already fired', () => {
+test('pre-compact does NOT re-fire the cap nudge for a sibling session once the project-wide cap was already fired', () => {
   // Regression for behavior-5: nudge_state used to be keyed per-session
   // (`nudge_state:<sessionId>`) but the trigger is project-wide. Session A
   // fires the nudge → user dismisses by NOT running dream yet. Session B
@@ -1636,29 +2025,32 @@ test('stop does NOT re-fire the cap nudge for a sibling session once the project
   // ARMED and re-staged the nudge. The README's "once per cap crossing"
   // promise was a lie when peers existed.
   //
-  // Fix: nudge_state is now a single project-wide key. After A fires, B's
-  // Stop hook must observe state='fired' and skip restaging.
+  // Fix: nudge_state is now a single project-wide key. After A's PreCompact
+  // fires (cap-fire moved here from Stop under pending-staging), B's
+  // PreCompact must observe state='fired' and skip restaging.
   const { dir, cleanup } = setupIsolatedRoot();
   try {
-    // Plant CAP_EXCHANGES rows under sess-A so the cap is already crossed.
+    // Plant CAP_EXCHANGES PENDING rows under sess-A so PreCompact will
+    // promote them and the cap will cross.
     const store = openStore();
     try {
       for (let i = 0; i < CAP_EXCHANGES; i++) {
         store.insertEntry({
           tier: 'short', kind: 'thinking',
           content: `A row ${i}`, sessionId: 'sess-A',
+          pendingSessionId: 'sess-A',
         });
       }
     } finally {
       store.close();
     }
-    // Session A's Stop: stages the nudge, flips state to FIRED.
+    // Session A's PreCompact: promotes, stages the nudge, flips state to FIRED.
     const transcriptA = writeTranscript(dir, 'sess-A', [userRec('x')]);
-    runHook('stop.js', {
+    runHook('pre-compact.js', {
       session_id: 'sess-A',
       transcript_path: transcriptA,
-      hook_event_name: 'Stop',
-      stop_hook_active: false,
+      hook_event_name: 'PreCompact',
+      trigger: 'manual',
     }, dir);
 
     // Drain A's pending_nudge so it doesn't pollute the assertion below.
@@ -1668,13 +2060,27 @@ test('stop does NOT re-fire the cap nudge for a sibling session once the project
       finally { s.close(); }
     }
 
-    // Session B's Stop in the same cap-crossed state — must NOT re-stage.
+    // Session B stages a pending row of its own and runs PreCompact — needs
+    // SOMETHING to promote, otherwise promote-pending.js early-exits and the
+    // cap state machine never gets re-evaluated (which is the design: count
+    // changes only at promotion).
+    {
+      const s = openStore();
+      try {
+        s.insertEntry({
+          tier: 'short', kind: 'thinking',
+          content: 'B row', sessionId: 'sess-B',
+          pendingSessionId: 'sess-B',
+        });
+      } finally { s.close(); }
+    }
+    // Session B's PreCompact in the same cap-crossed state — must NOT re-stage.
     const transcriptB = writeTranscript(dir, 'sess-B', [userRec('y')]);
-    runHook('stop.js', {
+    runHook('pre-compact.js', {
       session_id: 'sess-B',
       transcript_path: transcriptB,
-      hook_event_name: 'Stop',
-      stop_hook_active: false,
+      hook_event_name: 'PreCompact',
+      trigger: 'manual',
     }, dir);
 
     const store2 = openStore();
@@ -1773,10 +2179,12 @@ test('user-prompt-submit drains a staged nudge and emits it as additionalContext
       hook_event_name: 'UserPromptSubmit',
       prompt: 'next prompt 2',
     }, dir);
-    if (stdout2.hookSpecificOutput) {
-      const ac = stdout2.hookSpecificOutput.additionalContext || '';
-      assert.ok(!/cap reached/i.test(ac), 'nudge must be consumed on first drain');
-    }
+    // Unconditional: whether the hook emits {} or hookSpecificOutput, the
+    // additionalContext on a second-drain must not carry the cap-reached
+    // body. Conditional gating let the {} shape silently pass without
+    // running the negative assertion.
+    const ac = stdout2.hookSpecificOutput?.additionalContext || '';
+    assert.ok(!/cap reached/i.test(ac), 'nudge must be consumed on first drain');
   } finally {
     cleanup();
   }
@@ -1924,6 +2332,127 @@ test('session-end emits empty {} when transcript_path is missing from input', ()
     } finally {
       store.close();
     }
+  } finally {
+    cleanup();
+  }
+});
+
+test('session-end promotes the session\'s pending rows even when transcript_path is missing (no-flush path)', () => {
+  // logout / bypass_permissions / unusual termination paths sometimes invoke
+  // SessionEnd with no transcript_path. The flush step is skipped, but the
+  // session's pending bucket (rows already staged by earlier PreToolUse /
+  // UserPromptSubmit passes) MUST still be promoted to real short-term —
+  // otherwise the content would sit in pending until the SessionStart
+  // orphan-sweep in some other session ~30 min later. Mirrors the
+  // pre-compact-without-transcript_path test, but for the SessionEnd path.
+  const { dir, cleanup } = setupIsolatedRoot();
+  try {
+    const store = openStore();
+    try {
+      for (let i = 0; i < 3; i++) {
+        store.insertEntry({
+          tier: 'short', kind: 'thinking', content: `pending ${i}`,
+          sessionId: 'sess-se-notx', pendingSessionId: 'sess-se-notx',
+        });
+      }
+    } finally { store.close(); }
+
+    const { stdout } = runHook('session-end.js', {
+      session_id: 'sess-se-notx',
+      // transcript_path deliberately omitted
+      hook_event_name: 'SessionEnd',
+      reason: 'logout',
+    }, dir);
+    assert.deepEqual(stdout, {});
+
+    const verify = openStore();
+    try {
+      assert.equal(verify.countPendingFor('sess-se-notx'), 0,
+        'pending rows must promote even without transcript_path');
+      assert.equal(verify.countShortTermFor('sess-se-notx'), 3);
+    } finally { verify.close(); }
+  } finally {
+    cleanup();
+  }
+});
+
+test('session-end stages a pending nudge when promotion crosses the cap (parallel of the PreCompact cap path)', () => {
+  // SessionEnd promotes via the same shared promote-pending handler as
+  // PreCompact, so a session that crosses CAP_EXCHANGES at session-end
+  // boundary must stage the dream nudge for the next session's
+  // UserPromptSubmit. Without this assertion a wiring regression (e.g.
+  // promote running but the cap pass being short-circuited because
+  // ownerSessionId/callerSessionId got swapped or omitted) would only fail
+  // in production. Mirrors the PreCompact cap-firing test.
+  const { dir, cleanup } = setupIsolatedRoot();
+  try {
+    const store = openStore();
+    try {
+      for (let i = 0; i < CAP_EXCHANGES; i++) {
+        store.insertEntry({
+          tier: 'short', kind: 'thinking', content: `pre-seeded ${i}`,
+          sessionId: 'sess-se-cap', pendingSessionId: 'sess-se-cap',
+        });
+      }
+    } finally { store.close(); }
+
+    const { stdout } = runHook('session-end.js', {
+      session_id: 'sess-se-cap',
+      // transcript_path deliberately omitted — the cap path must not require it.
+      hook_event_name: 'SessionEnd',
+      reason: 'logout',
+    }, dir);
+    assert.deepEqual(stdout, {});
+
+    const verify = openStore();
+    try {
+      // The nudge is staged against the firing session (sess-se-cap) — the
+      // shared handler keys pending_nudge to callerSessionId.
+      const row = verify.db.prepare('SELECT value FROM meta WHERE key = ?').get('pending_nudge:sess-se-cap');
+      assert.ok(row, 'expected pending_nudge:sess-se-cap to be staged at session-end');
+      assert.match(row.value, /cap reached/i);
+      assert.match(row.value, /\/mindwright:dream/);
+      // Sanity: the promote actually ran (cap couldn't cross otherwise).
+      assert.equal(verify.countPendingFor('sess-se-cap'), 0);
+      assert.equal(verify.countShortTermFor('sess-se-cap'), CAP_EXCHANGES);
+    } finally { verify.close(); }
+  } finally {
+    cleanup();
+  }
+});
+
+test('session-end clears the persisted tool_map for the ending session (no leak across sessions)', () => {
+  // SessionEnd is the clean-shutdown cleanup point for the tool_map blob —
+  // any in-flight tool_use that never received its paired tool_result is
+  // abandoned by definition once the session ends. Without this cleanup
+  // the persisted map row would leak in meta indefinitely (one row per
+  // session that ever ran, growing the meta table unboundedly across
+  // installs).
+  const { dir, cleanup } = setupIsolatedRoot();
+  try {
+    const store = openStore();
+    try {
+      store.saveToolMap('sess-se-cleanup', new Map([
+        ['tu_orphan', { name: 'Bash', input: { command: 'ls' }, source_ref: 's', timestamp: new Date().toISOString() }],
+      ]));
+      // Sanity: the row exists before the hook fires.
+      assert.equal(store.loadToolMap('sess-se-cleanup').size, 1);
+    } finally { store.close(); }
+
+    runHook('session-end.js', {
+      session_id: 'sess-se-cleanup',
+      hook_event_name: 'SessionEnd',
+      reason: 'logout',
+    }, dir);
+
+    const verify = openStore();
+    try {
+      assert.equal(verify.loadToolMap('sess-se-cleanup').size, 0,
+        'tool_map must be cleared on session end');
+      // _metaGet null == the row is gone, not just an empty serialized map.
+      assert.equal(verify._metaGet('tool_map:sess-se-cleanup'), null,
+        'meta row must be deleted, not left as a serialized empty map');
+    } finally { verify.close(); }
   } finally {
     cleanup();
   }

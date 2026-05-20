@@ -1,8 +1,9 @@
 // TEMPR retrieval pipeline:
 //   four retrievers (semantic, bm25, graph, temporal) → top-N each
-//   → RRF (k=60) → top-20 fused → cross-encoder rerank → sigmoid scores
+//   → RRF (k=60) → top-rrfTopForRerank fused (per-tier: 5 short, 10 long)
+//   → cross-encoder rerank → sigmoid scores
 //   → recency boost on semantic-only path
-//   → drop below rerank_floor (0.10) → top-K
+//   → drop below rerank_floor (0.75) → top-K
 
 import { rrfFuse } from './rrf.js';
 import { semanticSearch, bm25Search, graphSearch, temporalSearch } from './retrievers.js';
@@ -12,15 +13,18 @@ import {
   RERANK_FLOOR,
   RECENCY_BOOST_DAYS,
   RECENCY_BOOST_MAX,
-  RRF_TOP_FOR_RERANK,
+  RRF_TOP_FOR_RERANK_SHORT,
+  RRF_TOP_FOR_RERANK_LONG,
   TOP_K_DEFAULT,
   MS_PER_DAY,
 } from './constants.js';
 
-// Numeric defaults sourced from lib/constants.js so a retune lands in one place.
+// Numeric defaults sourced from lib/constants.js so a retune lands in one
+// place. rrfTopForRerank is NOT here because its default depends on `tier`
+// (see retrieve() below); putting a single value here would force long-tier
+// callers to remember to pass an override.
 const DEFAULTS = {
   perRetrieverN: PER_RETRIEVER_N,
-  rrfTopForRerank: RRF_TOP_FOR_RERANK,
   rerankFloor: RERANK_FLOOR,
   recencyBoostDays: RECENCY_BOOST_DAYS,
   recencyBoostMax: RECENCY_BOOST_MAX,
@@ -40,15 +44,25 @@ export async function retrieve({
   // Role scoping for role-scoped long-tier rows. See lib/scope-filter.js for
   // exact semantics; null/undefined → no filter.
   roles = null,
-  // Entry ids dropped from the candidate pool BEFORE rerank. Hooks pass the
-  // ids they just flushed — otherwise the just-typed prompt/thinking surfaces
-  // via bm25/temporal (semantic misses it: NULL embedding) and the
-  // cross-encoder scores it ~1.0 against itself, echoing the prompt back as
-  // additionalContext. Post-RRF so it runs once on the de-duped fused list.
+  // Entry ids dropped from the candidate pool BEFORE rerank. Two callers
+  // still need this: (1) retrieval-pipeline carries the per-session
+  // injected-fact-ids dedup so the same fact isn't re-injected twice in one
+  // session, and (2) the mindwright_recall MCP tool accepts an explicit
+  // exclude_ids argument. The original self-echo concern (just-flushed
+  // prompt/thinking surfacing as its own recall) is now handled
+  // structurally: chunker writes carry pending_session_id, and every
+  // retriever's SQL filters those out — they never reach this stage.
+  // Post-RRF so the filter runs once on the de-duped fused list.
   excludeIds = null,
   options = {},
 }) {
-  const opts = { ...DEFAULTS, ...options };
+  // Per-tier default for rrfTopForRerank: long-term recall pulls 10 (called
+  // less frequently, distilled rows are shorter so the deeper rerank is
+  // cheap); everything else (short, null, mixed) pulls 5. Explicit
+  // options.rrfTopForRerank still wins.
+  const tierDefaultRrfTop =
+    tier === 'long' ? RRF_TOP_FOR_RERANK_LONG : RRF_TOP_FOR_RERANK_SHORT;
+  const opts = { ...DEFAULTS, rrfTopForRerank: tierDefaultRrfTop, ...options };
   const excludeSet =
     excludeIds && excludeIds.length
       ? new Set(excludeIds.map((id) => Number(id)))
@@ -95,7 +109,8 @@ export async function retrieve({
     // rerank returns null on connect-fail/timeout/malformed. Falling back to
     // 1.0-per-row keeps the result set alive (RRF-ordered for this turn)
     // instead of looking like rerank-floor abstention. A length mismatch is
-    // treated like null — `undefined >= 0.10` would silently drop the tail.
+    // treated like null — `undefined >= RERANK_FLOOR` would silently drop
+    // the tail (a stale literal here would lie if the floor is ever retuned).
     if (!Array.isArray(rerankScores) || rerankScores.length !== rows.length) {
       rerankScores = rows.map(() => 1.0);
     }

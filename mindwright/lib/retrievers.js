@@ -31,6 +31,10 @@ export function bm25Search(store, queryText, n = DEFAULT_PER_RETRIEVER_N, tier =
 // Rows whose entities overlap the query entities. Recency tiebreak is
 // COALESCE(event_ts, created_at) — rank by when it actually happened;
 // recency/relevance only, never lifecycle SQL.
+//
+// `e.pending_session_id IS NULL` keeps the live-staged short-tier rows out of
+// every retriever path, matching the same filter in store.semanticSearch /
+// bm25Search / temporalSearch.
 export function graphSearch(store, queryEntities, n = DEFAULT_PER_RETRIEVER_N, tier = null, roles = null) {
   if (!queryEntities || queryEntities.length === 0) return [];
   const placeholders = queryEntities.map(() => '?').join(',');
@@ -40,7 +44,7 @@ export function graphSearch(store, queryEntities, n = DEFAULT_PER_RETRIEVER_N, t
       FROM entries e
       JOIN entry_entities ee ON ee.entry_id = e.id
       JOIN entities ent ON ent.id = ee.entity_id
-     WHERE e.active = 1${ts.clause}
+     WHERE e.active = 1 AND e.pending_session_id IS NULL${ts.clause}
        AND ent.name IN (${placeholders})
      ORDER BY COALESCE(e.event_ts, e.created_at) DESC
      LIMIT ?

@@ -4,9 +4,8 @@
 // sanity-check state even when the model daemon is down.
 
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { dataDir, dbPath, mirrorsDir, modelCacheDir, projectRoot, embedderCached } from '../lib/paths.js';
+import { dataDir, dbPath, mirrorsDir, modelCacheDir, projectRoot, embedderCached, rerankerCached } from '../lib/paths.js';
 import { isSessionLive } from '../lib/session-liveness.js';
 import { isModelDaemonAlive } from '../lib/model-daemon-status.js';
 import { depsInstalled } from '../lib/ready.js';
@@ -78,7 +77,7 @@ async function baseStatus() {
     mirrors_dir: mirrorsDir(),
     model_cache_dir: modelCacheDir(),
     model_cached: embedderCached(),
-    reranker_cached: existsSync(join(modelCacheDir(), 'onnx-community', 'bge-reranker-v2-m3-ONNX')),
+    reranker_cached: rerankerCached(),
     // Two distinct signals: a Claude session bound to THIS project vs. the
     // machine-wide model daemon actually serving (what the daemon-down
     // warning that sent the user here is really about).

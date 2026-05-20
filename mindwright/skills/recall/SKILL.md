@@ -23,6 +23,6 @@ JSON args (stdin):
 - `exclude_ids`: optional array of fact ids to drop from the result set.
 - `bypass_session_dedup: true` — pass this on every explicit `/mindwright:recall` invocation. It tells mindwright to ignore the automatic per-session dedup set so a second call shows the same hits as the first. Without it the second call shows fewer results (the first call's hits get filtered out), which is hostile to the debugging use case.
 
-Returns `{ results: [{id, content, kind, tier, category, scope, rerank_score, rrf_score}] }`. Empty array means nothing crossed the rerank floor (0.10).
+Returns `{ results: [{id, content, kind, tier, category, scope, rerank_score, rrf_score}] }`. Empty array means nothing crossed the rerank floor (0.75).
 
 Why the bypass flag exists: the automatic PreToolUse / PostToolUse retrieval keeps `meta:injected_fact_ids:<sessionId>` (FIFO-trimmed at 200) so it doesn't re-inject the same fact twice in one session. Explicit debugging calls don't want that filter — they want the truth of what matches the query right now. `bypass_session_dedup: true` skips both the read and the post-emit append for the debug path only.

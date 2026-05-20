@@ -24,7 +24,7 @@ That's it. Mindwright is now active. The first prompt you type in any session wi
 
 #### Model supply-chain trust
 
-`/mindwright:setup` downloads two ONNX models from Hugging Face — `Xenova/bge-m3` (embedder) and `onnx-community/bge-reranker-v2-m3-ONNX` (cross-encoder). They run inside ONNX Runtime in a single **machine-wide model daemon** (one process per machine, shared by every session and project — lazy-spawned, idle-exits), so a tampered model could in principle exfiltrate query text or produce embeddings that bias retrieval. The download path goes over HTTPS to Hugging Face's CDN — the trust root is the HF infrastructure plus your system's CA bundle. If your threat model includes a CA compromise or DNS hijack on the install machine, fetch the models manually on a trusted host, copy them into the model cache (`${CLAUDE_PLUGIN_DATA}/model-cache`, overridable with `MINDWRIGHT_MODEL_CACHE_DIR`, laid out as `<org>/<name>/`), and skip `/mindwright:setup` (the model daemon picks up the on-disk cache). Mindwright does not pin model revision hashes; if upstream updates the model, the next setup picks up the new weights.
+`/mindwright:setup` downloads two ONNX models from Hugging Face — `Xenova/bge-m3` (embedder) and `Alibaba-NLP/gte-reranker-modernbert-base` (cross-encoder). They run inside ONNX Runtime in a single **machine-wide model daemon** (one process per machine, shared by every session and project — lazy-spawned, idle-exits), so a tampered model could in principle exfiltrate query text or produce embeddings that bias retrieval. The download path goes over HTTPS to Hugging Face's CDN — the trust root is the HF infrastructure plus your system's CA bundle. If your threat model includes a CA compromise or DNS hijack on the install machine, fetch the models manually on a trusted host, copy them into the model cache (`${CLAUDE_PLUGIN_DATA}/model-cache`, overridable with `MINDWRIGHT_MODEL_CACHE_DIR`, laid out as `<org>/<name>/`), and skip `/mindwright:setup` (the model daemon picks up the on-disk cache). Mindwright does not pin model revision hashes; if upstream updates the model, the next setup picks up the new weights.
 
 ## What you'll notice
 
@@ -100,7 +100,7 @@ Defaults are baked into the code (`lib/constants.js`). The knobs you're most lik
 | `cap_exchanges` | 50 | Short-term row count that surfaces the "time to dream" hint. Raise on quiet projects; lower if you want long-term hotter. |
 | `drain_pct` | 0.70 | Fraction of oldest short-term rows consumed per dream. |
 | `safety_net_days` | 3 | Surfaces the same "time to dream" nudge when any short-term row is older than this — catches quiet sessions that never cross the row-count cap. |
-| `rerank_floor` | 0.10 | Cross-encoder sigmoid score below which a retrieval candidate is dropped. Calibrated for short-term; long-term may want higher once you have enough distilled facts to recalibrate. |
+| `rerank_floor` | 0.75 | Cross-encoder sigmoid score below which a retrieval candidate is dropped. Calibrated against `gte-reranker-modernbert-base` — its score distribution is narrower than the older bge-reranker's, so the floor sits much higher than the legacy 0.10. |
 | `recency_boost_days` | 14 | Recent rows get an additive boost on the semantic path (ordering only — the abstention floor still applies). |
 
 If you want non-default values, edit `lib/constants.js` and re-run.
@@ -150,7 +150,7 @@ Models cache in the plugin's persistent data dir (`${CLAUDE_PLUGIN_DATA}/model-c
 
 Every prompt, every tool call, and every reasoning block writes a short-term row. Inbound peer messages and Discord events from wrightward are also captured. None of this writes hits the network — it's local SQLite, ~10ms per write.
 
-The prompt text and each thinking block are embedded and compared against the previous retrieval's query embedding via cosine similarity. If similarity exceeds the novelty threshold (`0.85`), the new query duplicates the one already on screen and retrieval is skipped — no fresh injection of nearly-identical context. Otherwise the embedding becomes the retrieval query, mindwright pulls top-K candidates (K scales with query length: 3 / 5 / 8) and filters against a per-session `injected_fact_ids` set so the same fact never re-injects. The cross-encoder then drops anything scoring below the `0.10` sigmoid floor; if nothing survives, you see nothing.
+The prompt text and each thinking block are embedded and compared against the previous retrieval's query embedding via cosine similarity. If similarity exceeds the novelty threshold (`0.85`), the new query duplicates the one already on screen and retrieval is skipped — no fresh injection of nearly-identical context. Otherwise the embedding becomes the retrieval query, mindwright pulls top-K candidates (K scales with query length: 3 / 5 / 8) and filters against a per-session `injected_fact_ids` set so the same fact never re-injects. The cross-encoder then drops anything scoring below the `0.75` sigmoid floor (calibrated for gte-reranker's narrower score distribution; the legacy 0.10 was for bge-reranker); if nothing survives, you see nothing.
 
 When you run `/mindwright:dream`, the calling Claude session reads the oldest 70% of short-term in batches grouped into exchanges, distills durable facts in its own context, categorizes each, marks contradictions against existing long-term, and writes the result back through deterministic helper commands (`node scripts/mindwright.mjs <tool>`, the same path every memory skill uses — there is no MCP server). The whole loop is reversible until the `finalize_drain` call that hard-deletes the consumed short-term rows.
 
@@ -168,7 +168,7 @@ The moving parts: a deterministic chunker writes short-term rows from the live t
 
 - Node.js ≥ 20, with `npm` on `PATH`.
 - Native dependencies (`better-sqlite3`, `sqlite-vec`, `@huggingface/transformers`) install automatically in the background on first use and re-heal after every plugin update — no manual `npm install`. `better-sqlite3` ships prebuilt binaries for common platforms; where one isn't available it compiles from source, which needs a C/C++ build toolchain.
-- A one-time ~5 GB local model download via `/mindwright:setup` (the `Xenova/bge-m3` embedder + `onnx-community/bge-reranker-v2-m3-ONNX` cross-encoder, cached in the plugin's persistent data dir so it survives plugin updates and resets). No API calls; all retrieval is local.
+- A one-time local model download via `/mindwright:setup` (the `Xenova/bge-m3` embedder + `Alibaba-NLP/gte-reranker-modernbert-base` cross-encoder, cached in the plugin's persistent data dir so it survives plugin updates and resets). No API calls; all retrieval is local.
 - `claude` on `PATH` is used by the auto-spawned background consolidator. Optional — without it, mindwright falls back to the manual "time to dream" nudge.
 
 ## License

@@ -175,10 +175,30 @@ export function modelCacheDir() {
 // `models--org--name` convention transformers.js never writes.
 // MINDWRIGHT_USE_STUB_MODELS=1 short-circuits to "cached" (stubs never touch
 // disk and have no lazy load, so the gate must pass).
+//
+// IMPORTANT: the literal here must match lib/models.js's EMBEDDER_MODEL_ID —
+// the load and the probe MUST agree on the cache location or setup status
+// lies (status reports "cached" while load triggers a multi-GB redownload).
 export function embedderCached() {
   if (process.env.MINDWRIGHT_USE_STUB_MODELS === '1') return true;
   try {
     return existsSync(join(modelCacheDir(), 'Xenova', 'bge-m3'));
+  } catch {
+    return false;
+  }
+}
+
+// Whether the gte-reranker-modernbert-base cross-encoder cache is present on
+// disk. Same role as embedderCached() — gates status reporting and any
+// future caller that wants to short-circuit on missing weights. The probe
+// matches the transformers.js <org>/<name> layout for RERANKER_MODEL_ID in
+// lib/models.js (Alibaba-NLP/gte-reranker-modernbert-base). Bumping the
+// reranker requires updating BOTH this probe AND models.js's load constant.
+// MINDWRIGHT_USE_STUB_MODELS=1 short-circuits to "cached" (same rationale).
+export function rerankerCached() {
+  if (process.env.MINDWRIGHT_USE_STUB_MODELS === '1') return true;
+  try {
+    return existsSync(join(modelCacheDir(), 'Alibaba-NLP', 'gte-reranker-modernbert-base'));
   } catch {
     return false;
   }

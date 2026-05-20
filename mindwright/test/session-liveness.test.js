@@ -15,7 +15,6 @@ import assert from 'node:assert/strict';
 import {
   mkdtempSync, rmSync, mkdirSync, writeFileSync,
 } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isSessionLive, isPidAlive } from '../lib/session-liveness.js';
@@ -44,9 +43,19 @@ function plantTicket(filename, { claudePid = undefined } = {}) {
   return path;
 }
 
-// A reliably-dead PID: spawn a child, let it exit, reuse its reaped pid.
+// A deterministically-dead PID: 2**31 - 1 is the max signed-32-bit int and
+// is astronomically above the largest PID any supported OS will ever hand
+// out (Linux default pid_max ~32K, Linux maximum 4M; macOS ~99K; Windows
+// PIDs are multiples of 4 and stay well below this). process.kill(pid, 0)
+// returns ESRCH on POSIX and equivalent on Windows, so isPidAlive returns
+// false deterministically. The earlier `spawnSync(...).pid` form depended
+// on the OS not reusing the just-reaped child's PID for the next short-
+// lived process — Windows in particular reuses PIDs aggressively, which
+// would flake `isPidAlive(deadPid())` returns true under parallel test
+// worker load.
+const DEAD_PID = (2 ** 31) - 1;
 function deadPid() {
-  return spawnSync(process.execPath, ['-e', 'process.exit(0)']).pid;
+  return DEAD_PID;
 }
 
 // ---------------------------------------------------------------

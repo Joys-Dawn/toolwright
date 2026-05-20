@@ -15,7 +15,7 @@ import { readdirSync, readFileSync, mkdirSync, existsSync, chmodSync } from 'nod
 import { join, dirname } from 'node:path';
 import { dbPath, migrationsDir } from './paths.js';
 import { tierScopeClause } from './scope-filter.js';
-import { UNBOUND_SESSION_ID } from './constants.js';
+import { UNBOUND_SESSION_ID, TOOL_MAP_TTL_MS } from './constants.js';
 
 const SCHEMA_VERSION_KEY = 'schema:version';
 
@@ -146,6 +146,13 @@ class Store {
   //   - tier='short': category null/'raw', scope null.
   //   - tier='long':  category in {procedural,episodic,fact}, scope in
   //                   {user,project,role:<role>}.
+  //
+  // `pendingSessionId`: short-tier staging marker. NULL = real short-term
+  // (visible to retrieval/drain/counts). Non-NULL = the row is captured live
+  // by the named session's hooks and must NOT leak into retrieval until that
+  // session's PreCompact / SessionEnd promotes it (the design that
+  // eliminates the self-echo class structurally). Long-tier rows must always
+  // pass NULL — the consolidator's output is never staged.
   insertEntry({
     tier,
     category = null,
@@ -161,13 +168,22 @@ class Store {
     supersedes = null,
     confidence = null,
     embedding = null,
+    pendingSessionId = null,
   }) {
+    if (pendingSessionId != null && tier !== 'short') {
+      // Long-tier rows produced by the consolidator MUST be visible to
+      // retrieval immediately; staging them silently would freeze the
+      // consolidator's output behind a flush that may never fire (long-tier
+      // distillation is not tied to PreCompact). Reject at the boundary so a
+      // bad caller fails loud instead of leaving phantom long-term rows.
+      throw new Error(`insertEntry: pendingSessionId is only valid for tier='short' (got tier='${tier}')`);
+    }
     const now = new Date().toISOString();
     const txn = this.db.transaction(() => {
       const info = this.db.prepare(`
-        INSERT INTO entries (tier, category, scope, kind, content, source_ref, session_id, created_at, event_ts, supersedes, confidence, active)
-        VALUES (@tier, @category, @scope, @kind, @content, @sourceRef, @sessionId, @createdAt, @eventTs, @supersedes, @confidence, 1)
-      `).run({ tier, category, scope, kind, content, sourceRef, sessionId, createdAt: now, eventTs, supersedes, confidence });
+        INSERT INTO entries (tier, category, scope, kind, content, source_ref, session_id, created_at, event_ts, supersedes, confidence, active, pending_session_id)
+        VALUES (@tier, @category, @scope, @kind, @content, @sourceRef, @sessionId, @createdAt, @eventTs, @supersedes, @confidence, 1, @pendingSessionId)
+      `).run({ tier, category, scope, kind, content, sourceRef, sessionId, createdAt: now, eventTs, supersedes, confidence, pendingSessionId });
 
       const id = info.lastInsertRowid;
       if (embedding) {
@@ -176,6 +192,83 @@ class Store {
       return id;
     });
     return txn();
+  }
+
+  // Promote every pending row owned by `sessionId` to real short-term (set
+  // pending_session_id = NULL). The shared lib/promote-pending.js handler
+  // calls this at the PreCompact / SessionEnd / orphan-sweep boundaries; the
+  // row's id, embedding, FTS5 entry, and entity links all survive untouched
+  // — the only change is that retrieval and drain queries stop filtering it
+  // out. Returns the count moved (0 ⇒ nothing was pending).
+  //
+  // `maxCreatedAt` (optional ISO string) caps the promotion to rows older
+  // than the cutoff. The orphan-sweep MUST pass this — without it, an
+  // "orphan" session that wakes up via /resume between the orphan SELECT and
+  // this UPDATE could have FRESH pending rows promoted out from under it,
+  // reintroducing the self-echo class the pending-staging design eliminates.
+  // PreCompact and SessionEnd operate on their own session and don't need a
+  // bound (the session can't race itself within the same hook).
+  promotePendingForSession(sessionId, { maxCreatedAt = null } = {}) {
+    if (typeof sessionId !== 'string' || !sessionId) return 0;
+    if (maxCreatedAt != null) {
+      if (typeof maxCreatedAt !== 'string' || !Number.isFinite(Date.parse(maxCreatedAt))) {
+        throw new Error('promotePendingForSession: maxCreatedAt must be an ISO date string');
+      }
+      const info = this.db.prepare(
+        'UPDATE entries SET pending_session_id = NULL WHERE pending_session_id = ? AND active = 1 AND created_at < ?',
+      ).run(sessionId, maxCreatedAt);
+      return info.changes;
+    }
+    const info = this.db.prepare(
+      'UPDATE entries SET pending_session_id = NULL WHERE pending_session_id = ? AND active = 1',
+    ).run(sessionId);
+    return info.changes;
+  }
+
+  // Distinct session_ids that currently own at least one pending row whose
+  // latest created_at is older than `nowMs - thresholdMs`. SessionStart's
+  // orphan sweep iterates these and promotes each — the owning session
+  // crashed before its PreCompact / SessionEnd fired, so the content would
+  // otherwise sit forever invisible to retrieval. The caller's own
+  // `currentSessionId` is always excluded so we never steal a live session's
+  // pending bucket; a /resume after lunch would otherwise lose its half-typed
+  // turn to a peer's startup. Returns `[{ session_id, last_ts, n }]` sorted
+  // oldest-first so the caller can decide whether to bound the per-pass
+  // workload.
+  orphanPendingSessions({ now = Date.now(), thresholdMs, currentSessionId = null } = {}) {
+    if (!Number.isFinite(thresholdMs) || thresholdMs <= 0) {
+      throw new Error('orphanPendingSessions: thresholdMs must be a positive finite number');
+    }
+    const cutoff = new Date(now - thresholdMs).toISOString();
+    // SQL bindings positionally: the WHERE filter (pending_session_id != ?)
+    // comes BEFORE the HAVING MAX(created_at) < ?, so bind in that order too.
+    const whereParams = [];
+    let whereExtra = '';
+    if (typeof currentSessionId === 'string' && currentSessionId) {
+      whereExtra = ' AND pending_session_id != ?';
+      whereParams.push(currentSessionId);
+    }
+    return this.db.prepare(`
+      SELECT pending_session_id AS session_id,
+             MAX(created_at) AS last_ts,
+             COUNT(*) AS n
+        FROM entries
+       WHERE pending_session_id IS NOT NULL${whereExtra}
+       GROUP BY pending_session_id
+      HAVING MAX(created_at) < ?
+       ORDER BY MAX(created_at) ASC
+    `).all(...whereParams, cutoff);
+  }
+
+  // Pending-row count for a session (any tier — pending only ever lands on
+  // short-tier rows in practice, but the count is honest about the column).
+  // Used by lib/promote-pending.js to short-circuit the cap check when
+  // nothing actually moved.
+  countPendingFor(sessionId) {
+    if (typeof sessionId !== 'string' || !sessionId) return 0;
+    return this.db.prepare(
+      'SELECT COUNT(*) AS n FROM entries WHERE pending_session_id = ? AND active = 1',
+    ).get(sessionId).n;
   }
 
   // Existence check + insert in one transaction so a concurrent
@@ -212,13 +305,17 @@ class Store {
   // NOT exactly-k for tier-filtered queries: vec_index MATCH picks the k
   // cosine-closest across ALL tiers, then the JOIN drops non-matching rows, so
   // a tier filter yields ≤ k rows. Callers needing exactly-k must over-request.
+  //
+  // `e.pending_session_id IS NULL` is what makes a pending live-staged row
+  // structurally invisible to retrieval — the self-echo class disappears
+  // before excludeIds ever runs.
   semanticSearch(queryFloat32, k, tier = null, roles = null) {
     const int8 = quantizeToInt8(queryFloat32);
     const ts = tierScopeClause(tier, roles);
     return this.db.prepare(`
       SELECT v.rowid AS id, v.distance
         FROM vec_index v
-        JOIN entries e ON e.id = v.rowid AND e.active = 1
+        JOIN entries e ON e.id = v.rowid AND e.active = 1 AND e.pending_session_id IS NULL
        WHERE v.embedding MATCH vec_int8(?)
          AND v.k = ?${ts.clause}
        ORDER BY v.distance
@@ -231,7 +328,7 @@ class Store {
     return this.db.prepare(`
       SELECT f.rowid AS id, bm25(fts) AS rank
         FROM fts f
-        JOIN entries e ON e.id = f.rowid AND e.active = 1
+        JOIN entries e ON e.id = f.rowid AND e.active = 1 AND e.pending_session_id IS NULL
        WHERE fts MATCH ?${ts.clause}
        ORDER BY rank
        LIMIT ?
@@ -244,7 +341,7 @@ class Store {
     const ts = tierScopeClause(tier, roles);
     return this.db.prepare(`
       SELECT e.id FROM entries e
-       WHERE e.active = 1${ts.clause}
+       WHERE e.active = 1 AND e.pending_session_id IS NULL${ts.clause}
        ORDER BY COALESCE(e.event_ts, e.created_at) DESC, e.id DESC
        LIMIT ?
     `).all(...ts.params, k);
@@ -377,9 +474,14 @@ class Store {
     `).run(sessionId, now, drainedCount, drainedBytes, producedCount).lastInsertRowid;
   }
 
+  // Every "short-term" count/age/byte method below filters
+  // `pending_session_id IS NULL` so pending staging rows never inflate the
+  // cap, the safety-net trigger, the mirrors, or the bytes budget. Pending
+  // rows are addressed via countPendingFor / orphanPendingSessions; mixing
+  // the two would silently cap-cross on rows nothing else can see.
   countShortTermFor(sessionId) {
     return this.db.prepare(
-      'SELECT COUNT(*) AS n FROM entries WHERE tier = ? AND session_id = ? AND active = 1',
+      'SELECT COUNT(*) AS n FROM entries WHERE tier = ? AND session_id = ? AND active = 1 AND pending_session_id IS NULL',
     ).get('short', sessionId).n;
   }
 
@@ -388,7 +490,7 @@ class Store {
   countShortTermInOtherSessions(currentSessionId) {
     return this.db.prepare(
       `SELECT COUNT(*) AS n FROM entries
-        WHERE active = 1 AND tier = 'short'
+        WHERE active = 1 AND tier = 'short' AND pending_session_id IS NULL
           AND session_id != ?
           AND session_id != ?`,
     ).get(currentSessionId, UNBOUND_SESSION_ID).n;
@@ -399,7 +501,7 @@ class Store {
   // project-wide.
   countShortTermAllSessions() {
     return this.db.prepare(
-      'SELECT COUNT(*) AS n FROM entries WHERE tier = ? AND active = 1',
+      'SELECT COUNT(*) AS n FROM entries WHERE tier = ? AND active = 1 AND pending_session_id IS NULL',
     ).get('short').n;
   }
 
@@ -410,23 +512,25 @@ class Store {
   shortTermBytes() {
     return this.db.prepare(
       `SELECT COALESCE(SUM(LENGTH(CAST(content AS BLOB))), 0) AS b
-         FROM entries WHERE tier = 'short' AND active = 1`,
+         FROM entries WHERE tier = 'short' AND active = 1 AND pending_session_id IS NULL`,
     ).get().b;
   }
 
   // Active rows parked under the synthetic UNBOUND_SESSION_ID — these land
   // when the CLI runs with no --session-id. Surfaced by mindwright_status as
-  // a warning so the user knows to drain.
+  // a warning so the user knows to drain. The filter excludes pending rows
+  // because mindwright_status describes promoted state to the user; pending
+  // rows belong to a different lifecycle and are reported separately.
   countUnboundActive() {
     return this.db.prepare(
-      'SELECT COUNT(*) AS n FROM entries WHERE session_id = ? AND active = 1',
+      'SELECT COUNT(*) AS n FROM entries WHERE session_id = ? AND active = 1 AND pending_session_id IS NULL',
     ).get(UNBOUND_SESSION_ID).n;
   }
 
   // Short-term subset of countUnboundActive.
   countUnboundShortTerm() {
     return this.db.prepare(
-      "SELECT COUNT(*) AS n FROM entries WHERE session_id = ? AND active = 1 AND tier = 'short'",
+      "SELECT COUNT(*) AS n FROM entries WHERE session_id = ? AND active = 1 AND tier = 'short' AND pending_session_id IS NULL",
     ).get(UNBOUND_SESSION_ID).n;
   }
 
@@ -435,7 +539,7 @@ class Store {
   // still drains aging content.
   oldestShortTermCreatedAt(sessionId) {
     const row = this.db.prepare(
-      'SELECT MIN(created_at) AS oldest FROM entries WHERE tier = ? AND session_id = ? AND active = 1',
+      'SELECT MIN(created_at) AS oldest FROM entries WHERE tier = ? AND session_id = ? AND active = 1 AND pending_session_id IS NULL',
     ).get('short', sessionId);
     return row && row.oldest ? row.oldest : null;
   }
@@ -444,7 +548,7 @@ class Store {
   // so a stale row in session B nudges session A on its next Stop.
   oldestShortTermAcrossAllSessions() {
     const row = this.db.prepare(
-      'SELECT MIN(created_at) AS oldest FROM entries WHERE tier = ? AND active = 1',
+      'SELECT MIN(created_at) AS oldest FROM entries WHERE tier = ? AND active = 1 AND pending_session_id IS NULL',
     ).get('short');
     return row && row.oldest ? row.oldest : null;
   }
@@ -461,8 +565,11 @@ class Store {
   }
 
   countByTier() {
+    // Pending rows are tier='short' but not yet "real" short-term; they
+    // wouldn't be visible to retrieval anyway and counting them here would
+    // make mindwright_status's `short:` number diverge from the cap counter.
     const rows = this.db.prepare(
-      'SELECT tier, COUNT(*) AS n FROM entries WHERE active = 1 GROUP BY tier',
+      'SELECT tier, COUNT(*) AS n FROM entries WHERE active = 1 AND pending_session_id IS NULL GROUP BY tier',
     ).all();
     const out = { short: 0, long: 0 };
     for (const r of rows) out[r.tier] = r.n;
@@ -487,10 +594,13 @@ class Store {
   // mirrors read like a reverse-chronological journal, not a diff-friendly
   // log. Kept on Store so raw db.prepare doesn't leak into mirrors.js.
   listShortTermRecent(limit) {
+    // The mirror renderer reads this; pending rows must NOT appear in the
+    // mirror because they correspond to live in-context content that hasn't
+    // been "saved" yet from the user's perspective.
     return this.db.prepare(
       `SELECT id, kind, content, session_id, created_at
          FROM entries
-        WHERE tier = 'short' AND active = 1
+        WHERE tier = 'short' AND active = 1 AND pending_session_id IS NULL
         ORDER BY created_at DESC, id DESC
         LIMIT ?`,
     ).all(limit);
@@ -593,16 +703,50 @@ class Store {
     this._metaSet('nudge_state', state);
   }
 
-  // Per-session tool_use_id → tool_name map for the chunker. tool_use and its
-  // matching tool_result land in different transcript records seen by
-  // different hook passes, so the map MUST persist across passes or a late
-  // tool_result can't be classified and its inbox event is silently dropped.
-  loadToolMap(sessionId) {
+  // Per-session tool_use_id → { name, input, source_ref, timestamp } map for
+  // the chunker. tool_use and its matching tool_result land in different
+  // transcript records seen by different hook passes, so the map MUST persist
+  // across passes or:
+  //   - a late inbox tool_result can't be classified (silent event drop), AND
+  //   - a paired tool_call chunk can't be emitted because the originating
+  //     tool_use's input/source_ref are no longer in memory.
+  // Stored shape is uniformly the object form. Legacy rows from before the
+  // pairing change carried `id → name` as a bare string and are migrated on
+  // read into `{ name: <string> }` — those entries lack input so they can
+  // still classify a late inbox event, but they can't emit a paired tool_call
+  // (acceptable: a one-time loss for any in-flight tool_use that spanned the
+  // upgrade).
+  loadToolMap(sessionId, { now = Date.now() } = {}) {
     const v = this._metaGet(`tool_map:${sessionId}`);
     if (v == null) return new Map();
     try {
       const obj = JSON.parse(v);
-      if (obj && typeof obj === 'object') return new Map(Object.entries(obj));
+      if (!obj || typeof obj !== 'object') return new Map();
+      const out = new Map();
+      // A tool_use older than TOOL_MAP_TTL_MS without a paired tool_result is
+      // almost certainly abandoned (user-interrupted Bash, killed Agent
+      // subtask, MCP timeout, transcript truncation between assistant turn
+      // and result). Drop it on load so the persisted blob doesn't grow
+      // unbounded across a long session. Entries without a parseable
+      // timestamp (legacy bare-string form) are kept — they pre-date the
+      // pairing schema and won't be re-inserted by current code, so they're
+      // a finite, one-time tail.
+      for (const [id, val] of Object.entries(obj)) {
+        if (typeof val === 'string') {
+          // Legacy: bare name string. Wrap so the rest of the code only sees
+          // the object shape.
+          out.set(id, { name: val });
+        } else if (val && typeof val === 'object' && typeof val.name === 'string') {
+          if (typeof val.timestamp === 'string') {
+            const t = Date.parse(val.timestamp);
+            if (Number.isFinite(t) && now - t > TOOL_MAP_TTL_MS) continue;
+          }
+          out.set(id, val);
+        }
+        // Anything else (number, null, bad shape) is silently dropped — same
+        // safety stance as the JSON.parse failure path.
+      }
+      return out;
     } catch (e) {
       // Reset recovers, but log so repeated parse failures (a real defect)
       // aren't hidden behind a quiet "next pass works".
@@ -616,6 +760,14 @@ class Store {
   saveToolMap(sessionId, map) {
     if (!(map instanceof Map)) return;
     this._metaSet(`tool_map:${sessionId}`, JSON.stringify(Object.fromEntries(map)));
+  }
+
+  // Drop the persisted tool_map blob for a session. Called by SessionEnd
+  // (clean shutdown) and by the SessionStart orphan-sweep (crashed-session
+  // cleanup) so an abandoned session's buffer doesn't sit in meta forever.
+  // No-ops if the row doesn't exist.
+  clearToolMap(sessionId) {
+    this.db.prepare('DELETE FROM meta WHERE key = ?').run(`tool_map:${sessionId}`);
   }
 
   // Per-session retrieval-injection state (injected_fact_ids + last query

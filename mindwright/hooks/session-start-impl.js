@@ -15,7 +15,8 @@ import { writeSidecar } from '../lib/role-sidecar.js';
 import { initOffsetIfUnknown } from '../lib/offset-init.js';
 import { connectPipe } from '../lib/pipe-client.js';
 import { sweepOnce } from '../lib/sweeper.js';
-import { SELF_RECALL_RULE } from '../lib/constants.js';
+import { promoteAndMaybeSpawn } from '../lib/promote-pending.js';
+import { SELF_RECALL_RULE, ORPHAN_FLUSH_THRESHOLD_MS } from '../lib/constants.js';
 
 export async function main() {
   let input;
@@ -106,6 +107,52 @@ export async function main() {
         }
       } catch (e) {
         logHookError('session-start', 'deferred-embed sweep failed', e);
+      }
+
+      // Orphan-pending sweep. Pending rows whose owning session went quiet
+      // longer than ORPHAN_FLUSH_THRESHOLD_MS are almost certainly stuck —
+      // the originating session crashed, was killed, or otherwise never
+      // fired its PreCompact/SessionEnd. Promote them (move pending →
+      // real short-term) on the dead session's behalf so the content joins
+      // long-term memory normally. Excludes our own session_id so a live
+      // /resume from lunch doesn't have its pending bucket prematurely
+      // promoted.
+      try {
+        // Pin `now` so the orphan SELECT cutoff and the per-orphan UPDATE
+        // cutoff are IDENTICAL. Without this, an "orphan" session that
+        // resurrects via /resume between the SELECT and the UPDATE could
+        // have just-written FRESH pending rows promoted out from under it,
+        // reintroducing the self-echo class the staging design eliminates.
+        const sweepNow = Date.now();
+        const sweepCutoff = new Date(sweepNow - ORPHAN_FLUSH_THRESHOLD_MS).toISOString();
+        const orphans = store.orphanPendingSessions({
+          now: sweepNow,
+          thresholdMs: ORPHAN_FLUSH_THRESHOLD_MS,
+          currentSessionId: sessionId,
+        });
+        for (const o of orphans) {
+          promoteAndMaybeSpawn({
+            store,
+            ownerSessionId: o.session_id,
+            callerSessionId: sessionId,
+            tag: 'session-start orphan-sweep',
+            // Promote only rows that were ALREADY older than the cutoff at
+            // SELECT time. Any pending row the resurrected owner writes
+            // after SELECT stays pending until that owner's own flush.
+            maxCreatedAt: sweepCutoff,
+          });
+          // An orphan session by definition won't run its own SessionEnd to
+          // clear the tool_map; do it here so its persisted buffer doesn't
+          // linger in meta indefinitely. clearToolMap is a no-op when the
+          // row doesn't exist.
+          try {
+            store.clearToolMap(o.session_id);
+          } catch (e) {
+            logHookError('session-start', 'orphan clearToolMap failed', e);
+          }
+        }
+      } catch (e) {
+        logHookError('session-start', 'orphan-pending sweep failed', e);
       }
     }
   } catch (e) {

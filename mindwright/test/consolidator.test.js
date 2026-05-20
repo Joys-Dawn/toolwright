@@ -58,6 +58,46 @@ test('drainBatch returns empty when no short-term rows', async () => {
   });
 });
 
+test('drainBatch excludes pending rows (the self-echo class is structurally invisible to /dream too)', async () => {
+  // Critical correctness gate: a session's pending rows are content that the
+  // originating session has not yet promoted via PreCompact/SessionEnd. If
+  // the consolidator drained them, the same content would land as a long-
+  // tier fact AND, separately, as a short-term row at the next promotion
+  // boundary — double-counted and possibly distilled before the originating
+  // agent has had a chance to act on it. drainBatch's SELECT MUST filter
+  // pending_session_id IS NULL.
+  await withStore((store) => {
+    // Promoted (real short-term) rows: drainable.
+    for (let i = 0; i < 3; i++) {
+      store.insertEntry({
+        tier: 'short', kind: 'thinking', content: `real ${i}`, sessionId: 's',
+      });
+    }
+    // Pending rows owned by the SAME session: not drainable until promoted.
+    for (let i = 0; i < 3; i++) {
+      store.insertEntry({
+        tier: 'short', kind: 'thinking', content: `pending ${i}`,
+        sessionId: 's', pendingSessionId: 's',
+      });
+    }
+    // Pending rows owned by another session: also not drainable, regardless
+    // of who's calling drainBatch — pending rows belong to their owner.
+    for (let i = 0; i < 2; i++) {
+      store.insertEntry({
+        tier: 'short', kind: 'thinking', content: `peer-pending ${i}`,
+        sessionId: 'peer', pendingSessionId: 'peer',
+      });
+    }
+
+    const out = drainBatch({ store, drainPct: 1.0 });
+    const drained = out.exchanges.flatMap((e) => e.rows).map((r) => r.content);
+    assert.equal(out.drained_count, 3,
+      `only the 3 promoted rows are drainable, got ${out.drained_count}: ${JSON.stringify(drained)}`);
+    assert.ok(drained.every((c) => c.startsWith('real ')),
+      `pending rows must NOT appear in drain output, got: ${JSON.stringify(drained)}`);
+  });
+});
+
 test('drainBatch picks the oldest drain_pct fraction', async () => {
   await withStore((store) => {
     for (let i = 0; i < 10; i++) {

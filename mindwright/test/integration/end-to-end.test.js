@@ -65,10 +65,12 @@ function makeStubEmbed() {
 }
 
 function makeStubRerank() {
-  // Always-relevant rerank — every candidate surpasses the 0.10 floor so the
-  // retrieval pipeline reflects fusion ordering rather than abstaining.
+  // Always-relevant rerank — every candidate surpasses the 0.75 floor so the
+  // retrieval pipeline reflects fusion ordering rather than abstaining. The
+  // (1 / (i + 2)) * 0.1 decay preserves a strict ordering across candidates
+  // so RRF-ordered position breaks ties for the recency-boost assertions.
   return async function stubRerank(_query, candidates) {
-    return candidates.map((c, i) => 0.5 + (1 / (i + 2)) * 0.1);
+    return candidates.map((c, i) => 0.85 + (1 / (i + 2)) * 0.1);
   };
 }
 
@@ -172,7 +174,7 @@ test('end-to-end: session writes → dream → recall surfaces planted fact', as
       }, sb.dir);
     }
 
-    // Stop flushes the tail.
+    // Stop flushes the tail (into PENDING under the new design).
     runHook('stop.js', {
       session_id: sessionId,
       transcript_path: transcriptPath,
@@ -180,12 +182,26 @@ test('end-to-end: session writes → dream → recall surfaces planted fact', as
       stop_hook_active: false,
     }, sb.dir);
 
-    // Sanity — short-term should have rows now.
+    // SessionEnd promotes the session's pending bucket → real short-term.
+    // Under pending-staging this is the boundary where drainBatch can see
+    // the rows; without it they sit in pending and drainBatch returns no
+    // exchanges (real short-term count = 0). Mirrors the production flow
+    // where /clear, /exit, or a logout fires SessionEnd at session-tear-down.
+    runHook('session-end.js', {
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      hook_event_name: 'SessionEnd',
+      reason: 'other',
+    }, sb.dir);
+
+    // Sanity — real short-term should have rows now (post-promotion).
     const store = openStore();
     let plantedFactId;
     try {
       const shortCount = store.countShortTermFor(sessionId);
-      assert.ok(shortCount >= 6, `expected ≥6 short-term rows after session arc, got ${shortCount}`);
+      assert.ok(shortCount >= 6, `expected ≥6 short-term rows after session arc + SessionEnd promote, got ${shortCount}`);
+      assert.equal(store.countPendingFor(sessionId), 0,
+        'SessionEnd must drain pending → real short-term');
 
       // (2) Dream cycle. Drive drainBatch → retainFact → finalizeDrain
       // directly (would normally come from the calling Claude session).
@@ -267,15 +283,20 @@ test('end-to-end: empty short-term → drainBatch returns no exchanges (no-op dr
   }
 });
 
-test('end-to-end: cap-fire path — Stop stages the dream cue, next UPS drains it', () => {
-  // Stop has no user-visible context surface (DESIGN.md:379), so the cue is
-  // staged in `meta` by Stop and surfaced as additionalContext by the next
-  // UserPromptSubmit firing — that's where the user sees it.
+test('end-to-end: cap-fire path — PreCompact stages the dream cue, next UPS drains it', () => {
+  // Under pending-staging the cap-fire trigger moved from Stop to the
+  // promotion boundary (PreCompact / SessionEnd / SessionStart orphan-sweep)
+  // because the real short-term count can only change at promotion. The
+  // hook chain has no user-visible context surface for memory work, so the
+  // cue is staged in `meta` at the promotion site and surfaced as
+  // additionalContext by the next UserPromptSubmit firing — that's where
+  // the user sees it.
   const sb = sandbox();
   const sessionId = 'capfire';
   try {
     const transcriptPath = writeTranscript(sb.dir, sessionId, [userRec('x')]);
-    // Pre-seed CAP_EXCHANGES rows so the Stop hook surfaces its cue.
+    // Pre-seed CAP_EXCHANGES rows as PENDING so PreCompact's promotion
+    // crosses the cap and fires the nudge.
     const store = openStore();
     try {
       for (let i = 0; i < CAP_EXCHANGES; i++) {
@@ -284,22 +305,23 @@ test('end-to-end: cap-fire path — Stop stages the dream cue, next UPS drains i
           kind: 'thinking',
           content: `seed-${i}`,
           sessionId,
+          pendingSessionId: sessionId,
         });
       }
     } finally {
       store.close();
     }
-    // Force the legacy nudge-staging path so this test can observe the cue.
+    // Force the fallback nudge-staging path so this test can observe the cue.
     // The default auto-spawn path is fire-and-forget; spawn() doesn't block
-    // on child failure, so without the disable flag Stop would think the
-    // consolidator launched and skip the fallback nudge.
-    const { stdout } = runHook('stop.js', {
+    // on child failure, so without the disable flag promote-pending would
+    // think the consolidator launched and skip the fallback nudge.
+    const { stdout } = runHook('pre-compact.js', {
       session_id: sessionId,
       transcript_path: transcriptPath,
-      hook_event_name: 'Stop',
-      stop_hook_active: false,
+      hook_event_name: 'PreCompact',
+      trigger: 'manual',
     }, sb.dir, { MINDWRIGHT_SPAWN_DISABLE: '1' });
-    assert.deepEqual(stdout, {}, 'Stop emits `{}`');
+    assert.deepEqual(stdout, {}, 'PreCompact emits `{}`');
 
     // The next user prompt drains the staged cue via UserPromptSubmit.
     const { stdout: upsOut } = runHook('user-prompt-submit.js', {
